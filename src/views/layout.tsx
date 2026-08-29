@@ -47,7 +47,6 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
             }}
           ></script>
         ) : null}
-        <link rel="preload" href="/fonts/fraunces.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
         <link
           rel="preload"
           href="/fonts/instrument-sans.woff2"
@@ -68,6 +67,7 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
           <header class="site-header">
             <div class="container">
               <a href="/admin" class="site-brand">
+                <img src="/jinjaw-square.png" alt="" class="brand-mark" />
                 Jin&amp;Jaw Invoices
               </a>
               <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false">

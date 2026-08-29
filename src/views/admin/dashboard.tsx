@@ -1,7 +1,17 @@
 import { Layout } from '../layout';
 import { formatCents } from '../../lib/money';
+import { formatDateHuman } from '../../lib/dates';
 import { isOverdue, type InvoiceWithClient } from '../../db/queries';
 import { Icon } from '../icons';
+
+/** Per-status delete warning — same stakes as the detail page's delete button. */
+function deleteConfirm(inv: Pick<InvoiceWithClient, 'status' | 'number'>): string {
+  if (inv.status === 'draft') return 'Delete this draft invoice? This cannot be undone.';
+  if (inv.status === 'paid') {
+    return `Delete PAID invoice ${inv.number}? Its payment records are deleted too — reports and CSV exports will change. This cannot be undone.`;
+  }
+  return `Delete invoice ${inv.number}? The public pay link will stop working and its history will be erased. This cannot be undone.`;
+}
 
 export function StatusBadge({
   invoice,
@@ -156,8 +166,11 @@ export function DashboardPage({
               <th>Client</th>
               <th>Issue date</th>
               <th>Due date</th>
-              <th class="text-right">Total</th>
               <th>Status</th>
+              <th class="text-right">Total</th>
+              <th>
+                <span class="visually-hidden">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -168,13 +181,59 @@ export function DashboardPage({
                   {inv.subject ? <span class="row-subject muted">{inv.subject}</span> : null}
                 </td>
                 <td data-label="Client">{inv.client_name}</td>
-                <td data-label="Issued">{inv.issue_date}</td>
-                <td data-label="Due">{inv.due_date ?? <span class="muted">—</span>}</td>
-                <td class="text-right" data-label="Total">
-                  {formatCents(inv.total_cents, inv.currency)}
+                <td data-label="Issued">{formatDateHuman(inv.issue_date)}</td>
+                <td data-label="Due">
+                  {inv.due_date ? formatDateHuman(inv.due_date) : <span class="muted">—</span>}
                 </td>
                 <td data-label="Status">
                   <StatusBadge invoice={inv} today={today} />
+                </td>
+                <td class="text-right" data-label="Total">
+                  {formatCents(inv.total_cents, inv.currency)}
+                </td>
+                <td class="row-actions">
+                  <details class="row-menu">
+                    <summary aria-label={`Actions for ${inv.number}`}>
+                      <Icon name="kebab" />
+                    </summary>
+                    <div class="row-menu-panel">
+                      <a href={`/admin/invoices/${inv.id}`}>
+                        <Icon name="eye" />
+                        View
+                      </a>
+                      <a href={`/admin/invoices/${inv.id}/edit`}>
+                        <Icon name="pencil" />
+                        Edit
+                      </a>
+                      <form method="post" action={`/admin/invoices/${inv.id}/duplicate`}>
+                        <button type="submit" title="Copy this invoice into a new draft dated today">
+                          <Icon name="duplicate" />
+                          Duplicate
+                        </button>
+                      </form>
+                      {inv.status === 'draft' || inv.status === 'sent' ? (
+                        <form method="post" action={`/admin/invoices/${inv.id}/status`}>
+                          <input type="hidden" name="action" value="mark_paid" />
+                          <button type="submit">
+                            <Icon name="check-circle" />
+                            Mark as paid
+                          </button>
+                        </form>
+                      ) : null}
+                      <div class="row-menu-sep"></div>
+                      <form
+                        method="post"
+                        action={`/admin/invoices/${inv.id}/status`}
+                        data-confirm={deleteConfirm(inv)}
+                      >
+                        <input type="hidden" name="action" value="delete" />
+                        <button type="submit" class="danger">
+                          <Icon name="trash" />
+                          Delete
+                        </button>
+                      </form>
+                    </div>
+                  </details>
                 </td>
               </tr>
             ))}
@@ -189,12 +248,35 @@ export function DashboardPage({
 (function () {
   document.querySelectorAll('tr[data-href]').forEach(function (row) {
     row.addEventListener('click', function (e) {
-      // Let real links, buttons, and text selection behave normally
-      if (e.target.closest('a, button, input, form')) return;
+      // Let real links, buttons, menus, and text selection behave normally
+      if (e.target.closest('a, button, input, form, details, summary')) return;
       if (window.getSelection().toString()) return;
       var href = row.getAttribute('data-href');
       if (e.metaKey || e.ctrlKey) window.open(href, '_blank');
       else location.href = href;
+    });
+  });
+
+  // Row menus: only one open at a time, and clicking elsewhere closes them
+  document.querySelectorAll('details.row-menu').forEach(function (menu) {
+    menu.addEventListener('toggle', function () {
+      if (!menu.open) return;
+      document.querySelectorAll('details.row-menu[open]').forEach(function (other) {
+        if (other !== menu) other.removeAttribute('open');
+      });
+    });
+  });
+
+  document.addEventListener('click', function (e) {
+    document.querySelectorAll('details.row-menu[open]').forEach(function (menu) {
+      if (!menu.contains(e.target)) menu.removeAttribute('open');
+    });
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    document.querySelectorAll('details.row-menu[open]').forEach(function (menu) {
+      menu.removeAttribute('open');
     });
   });
 })();

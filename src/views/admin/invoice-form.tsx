@@ -104,26 +104,51 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
         </div>
       ) : null}
 
-      <div class="card">
-        <form method="post" action={actionUrl}>
-          {!isEdit ? (
-            <div class="form-row">
-              <div class="form-group">
-                <label for="number">Invoice number</label>
-                <input
-                  type="text"
-                  id="number"
-                  name="number"
-                  value={fv?.number ?? props.suggestedNumber ?? ''}
-                />
-                <span class="muted">Edit for a custom number, or leave as-is to use the counter.</span>
+      <form method="post" action={actionUrl} class="invoice-editor">
+        <div class="card invoice-sheet">
+          <div class="sheet-head">
+            <div>
+              {settings.logo_url ? <img src={settings.logo_url} alt="" class="sheet-logo" /> : null}
+              <div class="sheet-biz-name">{settings.business_name}</div>
+              {settings.business_address ? (
+                <div class="sheet-biz-address">{settings.business_address}</div>
+              ) : null}
+            </div>
+            <div class="sheet-meta">
+              <div class="sheet-doc-title">INVOICE</div>
+              {!isEdit ? (
+                <div class="form-group">
+                  <label for="number">Number</label>
+                  <input
+                    type="text"
+                    id="number"
+                    name="number"
+                    value={fv?.number ?? props.suggestedNumber ?? ''}
+                  />
+                  <span class="muted">Edit for a custom number, or leave as-is to use the counter.</span>
+                </div>
+              ) : (
+                <div class="form-group">
+                  <label>Number</label>
+                  <div class="sheet-number-static">{invoice!.number}</div>
+                </div>
+              )}
+              <div class="sheet-meta-dates">
+                <div class="form-group">
+                  <label for="issue_date">Issue date</label>
+                  <input type="date" id="issue_date" name="issue_date" value={issueDate} required />
+                </div>
+                <div class="form-group">
+                  <label for="due_date">Due date</label>
+                  <input type="date" id="due_date" name="due_date" value={dueDate} />
+                </div>
               </div>
             </div>
-          ) : null}
+          </div>
 
-          <div class="form-row">
+          <div class="sheet-parties">
             <div class="form-group">
-              <label for="client_id">Client</label>
+              <label for="client_id">Bill to</label>
               <select id="client_id" name="client_id" required>
                 <option value="" disabled selected={!selectedClientId}>
                   Select a client
@@ -140,48 +165,19 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
                 ))}
               </select>
             </div>
-          </div>
-
-          <div class="form-row">
             <div class="form-group">
-              <label for="issue_date">Issue date</label>
-              <input type="date" id="issue_date" name="issue_date" value={issueDate} required />
+              <label for="subject">Subject</label>
+              <input
+                type="text"
+                id="subject"
+                name="subject"
+                value={subject}
+                placeholder="e.g. Website redesign — July"
+              />
+              <span class="muted">
+                Optional. Shows on the invoice, in the email subject, and on the dashboard.
+              </span>
             </div>
-            <div class="form-group">
-              <label for="due_date">Due date</label>
-              <input type="date" id="due_date" name="due_date" value={dueDate} />
-            </div>
-            <div class="form-group">
-              <label for="currency">Currency</label>
-              <select id="currency" name="currency">
-                {currencyOptions().map((c) => (
-                  <option value={c.code} selected={c.code === currency}>
-                    {c.code} — {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label for="subject">Subject</label>
-            <input
-              type="text"
-              id="subject"
-              name="subject"
-              value={subject}
-              placeholder="e.g. Website redesign — July"
-            />
-            <span class="muted">
-              Optional. Shows on the invoice, in the email subject, and on the dashboard.
-            </span>
-          </div>
-
-          <div class="form-group">
-            <label for="notes">Notes</label>
-            <textarea id="notes" name="notes">
-              {notes}
-            </textarea>
           </div>
 
           <table class="items-editor" id="items-editor">
@@ -245,7 +241,16 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
             </span>
           </div>
 
-          <div class="actions mt-2">
+          <div class="form-group mt-2">
+            <label for="notes">Notes</label>
+            <textarea id="notes" name="notes">
+              {notes}
+            </textarea>
+          </div>
+        </div>
+
+        <aside class="invoice-rail">
+          <div class="card">
             <button type="submit" class="btn btn-primary">
               {isEdit ? 'Save changes' : 'Create invoice'}
             </button>
@@ -259,8 +264,25 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
               </a>
             )}
           </div>
-        </form>
-      </div>
+          <div class="card">
+            <div class="rail-title">Invoice settings</div>
+            <div class="form-group">
+              <label for="currency">Currency</label>
+              <select id="currency" name="currency">
+                {currencyOptions().map((c) => (
+                  <option value={c.code} selected={c.code === currency}>
+                    {c.code} — {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p class="rail-hint">
+              The due date prefills from the client's payment terms when you pick a client or change
+              the issue date.
+            </p>
+          </div>
+        </aside>
+      </form>
 
       <template id="item-row-template">
         <tr class="item-row">

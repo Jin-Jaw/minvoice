@@ -12,6 +12,20 @@ export function isValidTimezone(tz: string): boolean {
   }
 }
 
+/**
+ * Render a YYYY-MM-DD date as "29 Aug 2026" for the admin UI. Anything that
+ * doesn't parse (or is empty) passes through unchanged.
+ */
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+export function formatDateHuman(date: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const d = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return date;
+  // Fixed month table, not Intl — locales disagree on short names (en-GB says "Sept")
+  return `${d.getUTCDate()} ${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
 /** Add N days to a YYYY-MM-DD date string (calendar math, DST-proof via UTC). */
 export function addDaysISO(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`);

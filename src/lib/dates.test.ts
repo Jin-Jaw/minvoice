@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addDaysISO, formatTimestamp, isValidTimezone, todayInTz } from './dates';
+import { addDaysISO, formatDateHuman, formatTimestamp, isValidTimezone, todayInTz } from './dates';
 
 describe('todayInTz', () => {
   it('returns ISO dates', () => {
@@ -31,6 +31,20 @@ describe('formatTimestamp', () => {
 
   it('leaves unparseable values as-is', () => {
     expect(formatTimestamp('not a date at all', 'UTC')).toBe('not a date at all');
+  });
+});
+
+describe('formatDateHuman', () => {
+  it('renders ISO dates as short human dates', () => {
+    expect(formatDateHuman('2026-08-29')).toBe('29 Aug 2026');
+    expect(formatDateHuman('2026-09-09')).toBe('9 Sep 2026'); // no zero-padding
+    expect(formatDateHuman('2026-01-01')).toBe('1 Jan 2026');
+  });
+
+  it('passes non-dates through unchanged', () => {
+    expect(formatDateHuman('')).toBe('');
+    expect(formatDateHuman('not a date')).toBe('not a date');
+    expect(formatDateHuman('2026-08-29 14:00')).toBe('2026-08-29 14:00');
   });
 });
 
