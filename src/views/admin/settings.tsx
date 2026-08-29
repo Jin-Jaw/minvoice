@@ -64,7 +64,7 @@ export function SettingsPage({
       <div class="page-head">
         <div>
           <h1 class="page-title">Settings — {settings.business_name}</h1>
-          <p class="muted">Business identity and numbering apply to this branch. Email configuration is shared.</p>
+          <p class="muted">These identity, numbering, logo, and payment details apply to this company. Clients and email configuration are shared.</p>
         </div>
       </div>
 
@@ -130,6 +130,7 @@ export function SettingsPage({
       ) : null}
 
       <form method="post" action="/admin/settings" enctype="multipart/form-data">
+        <input type="hidden" name="branch_id" value={String(settings.branch_id)} />
         <div class="card" id="business">
           <h2>Business</h2>
           <div class="form-group">

@@ -21,7 +21,7 @@ const NAV_LINKS = [
   { href: '/admin/clients', label: 'Clients' },
   { href: '/admin/payments', label: 'Payments' },
   { href: '/admin/reports', label: 'Reports' },
-  { href: '/admin/branches', label: 'Branches' },
+  { href: '/admin/branches', label: 'Companies' },
   { href: '/admin/settings', label: 'Settings' },
 ];
 

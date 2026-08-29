@@ -62,9 +62,6 @@ const EMPTY_MESSAGES: Record<InvoiceFilter, string> = {
 
 export function DashboardPage({
   invoices,
-  allCompanies,
-  currentBranchId,
-  currentBranchName,
   filter,
   clientId,
   today,
@@ -78,9 +75,6 @@ export function DashboardPage({
   nonce,
 }: {
   invoices: InvoiceWithClient[];
-  allCompanies: boolean;
-  currentBranchId: number;
-  currentBranchName: string;
   filter: InvoiceFilter;
   /** When set, only this client's invoices are shown (tab counts follow). */
   clientId?: number;
@@ -112,15 +106,13 @@ export function DashboardPage({
 
   const tabHref = (f: InvoiceFilter) => {
     const params = new URLSearchParams();
-    if (!allCompanies) params.set('scope', 'current');
     if (f !== 'all') params.set('status', f);
     if (clientId) params.set('client', String(clientId));
     const qs = params.toString();
     return qs ? `/admin?${qs}` : '/admin';
   };
   const returnTo = tabHref(filter);
-  const invoiceHref = (inv: InvoiceWithClient) =>
-    inv.branch_id === currentBranchId ? `/admin/invoices/${inv.id}` : `/admin/invoices/${inv.id}/open`;
+  const invoiceHref = (inv: InvoiceWithClient) => `/admin/invoices/${inv.id}`;
 
   return (
     <Layout title="Invoices" currentPath={currentPath} nonce={nonce}>
@@ -139,19 +131,7 @@ export function DashboardPage({
       {emailed ? <div class="banner banner-success">Invoice emailed to {emailed}.</div> : null}
       {emailError ? <div class="banner banner-error">Email failed to send: {emailError}</div> : null}
 
-      <div class="banner">
-        {allCompanies ? (
-          <>
-            Showing invoices from all companies. New invoices use <strong>{currentBranchName}</strong>.{' '}
-            <a href="/admin?scope=current">Show only this company</a>
-          </>
-        ) : (
-          <>
-            Showing <strong>{currentBranchName}</strong> only. <a href="/admin">Show all companies</a>
-          </>
-        )}
-        {' · '}<a href="/admin/branches">Switch company</a>
-      </div>
+      <div class="banner">Showing invoices from both companies. Choose the issuing company when creating a new invoice.</div>
 
       {warnings?.length ? (
         <div class="banner banner-warning">
@@ -179,7 +159,6 @@ export function DashboardPage({
         </nav>
         {clientOptions.length > 1 ? (
           <form method="get" action="/admin" class="client-filter">
-            {!allCompanies ? <input type="hidden" name="scope" value="current" /> : null}
             {filter !== 'all' ? <input type="hidden" name="status" value={filter} /> : null}
             <select name="client" aria-label="Filter by client" data-submit-on-change>
               <option value="">All clients</option>
@@ -203,7 +182,7 @@ export function DashboardPage({
             <tr>
               <th>Number</th>
               <th>Client</th>
-              {allCompanies ? <th>Company</th> : null}
+              <th>Company</th>
               <th>Issue date</th>
               <th>Due date</th>
               <th>Status</th>
@@ -221,7 +200,7 @@ export function DashboardPage({
                   {inv.subject ? <span class="row-subject muted">{inv.subject}</span> : null}
                 </td>
                 <td data-label="Client">{inv.client_name}</td>
-                {allCompanies ? <td data-label="Company">{inv.branch_name}</td> : null}
+                <td data-label="Company">{inv.branch_name}</td>
                 <td data-label="Issued">{formatDateHuman(inv.issue_date)}</td>
                 <td data-label="Due">
                   {inv.due_date ? formatDateHuman(inv.due_date) : <span class="muted">—</span>}
@@ -233,9 +212,6 @@ export function DashboardPage({
                   {formatCents(inv.total_cents, inv.currency)}
                 </td>
                 <td class="row-actions">
-                  {inv.branch_id !== currentBranchId ? (
-                    <a href={invoiceHref(inv)} class="btn btn-secondary btn-sm">Open</a>
-                  ) : (
                   <details class="row-menu">
                     <summary aria-label={`Actions for ${inv.number}`}>
                       <Icon name="kebab" />
@@ -296,7 +272,6 @@ export function DashboardPage({
                       </form>
                     </div>
                   </details>
-                  )}
                 </td>
               </tr>
             ))}

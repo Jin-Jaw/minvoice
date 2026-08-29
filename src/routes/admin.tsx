@@ -26,8 +26,7 @@ import {
   deleteInvoice,
   deleteViewEvent,
   getClient,
-  getInvoice,
-  getInvoiceBranchId,
+  getInvoiceById,
   getInvoiceEvents,
   getInvoiceItems,
   getInvoiceSourcePdf,
@@ -71,7 +70,6 @@ import { ReportsPage } from '../views/admin/reports';
 import { SettingsPage } from '../views/admin/settings';
 import { SetupPage } from '../views/admin/setup';
 import { BranchesPage } from '../views/admin/branches';
-import { selectBranch } from '../middleware/branch';
 
 export const admin = new Hono<AppEnv>();
 
@@ -292,9 +290,8 @@ function addListNotice(path: string, key: 'paid' | 'emailed' | 'email_error', va
 
 admin.get('/', async (c) => {
   const branchId = c.get('branchId');
-  const allCompanies = c.req.query('scope') !== 'current';
   const [invoices, settings] = await Promise.all([
-    allCompanies ? listAllInvoices(c.env.DB) : listInvoices(c.env.DB, branchId),
+    listAllInvoices(c.env.DB),
     getSettings(c.env.DB, branchId),
   ]);
   const status = c.req.query('status');
@@ -306,9 +303,6 @@ admin.get('/', async (c) => {
   return c.html(
     <DashboardPage
       invoices={invoices}
-      allCompanies={allCompanies}
-      currentBranchId={branchId}
-      currentBranchName={c.get('branchName')}
       filter={filter}
       clientId={clientId}
       deleted={c.req.query('deleted')}
@@ -326,29 +320,24 @@ admin.get('/', async (c) => {
   );
 });
 
-// Opening an invoice from the all-company history also switches the active
-// branch, so subsequent edits, downloads, and actions stay correctly scoped.
-admin.get('/invoices/:id/open', async (c) => {
-  const id = Number(c.req.param('id'));
-  if (!Number.isInteger(id)) return c.notFound();
-  const branchId = await getInvoiceBranchId(c.env.DB, id);
-  if (!branchId) return c.notFound();
-  selectBranch(c, branchId);
-  return c.redirect(`/admin/invoices/${id}`);
-});
-
 // ---------- Invoices: new ----------
 
 admin.get('/invoices/new', async (c) => {
+  const branches = await listBranches(c.env.DB);
+  const requestedBranchId = Number(c.req.query('branch'));
+  const branchId = branches.some((branch) => branch.id === requestedBranchId)
+    ? requestedBranchId
+    : c.get('branchId');
   const [clients, settings, logo] = await Promise.all([
     listClients(c.env.DB),
-    getSettings(c.env.DB, c.get('branchId')),
-    getLogo(c.env.DB, c.get('branchId')),
+    getSettings(c.env.DB, branchId),
+    getLogo(c.env.DB, branchId),
   ]);
   return c.html(
     <InvoiceFormPage
       currentPath="/admin"
       clients={clients}
+      branches={branches}
       settings={settings}
       hasLogo={!!logo}
       suggestedNumber={await suggestedInvoiceNumber(c.env.DB, settings)}
@@ -358,8 +347,10 @@ admin.get('/invoices/new', async (c) => {
 });
 
 admin.post('/invoices/new', async (c) => {
-  const branchId = c.get('branchId');
   const body = (await c.req.parseBody({ all: true })) as Record<string, string | string[]>;
+  const branches = await listBranches(c.env.DB);
+  const branchId = Number(str(body.branch_id));
+  if (!branches.some((branch) => branch.id === branchId)) return c.text('Choose a valid issuing company.', 400);
   const [clients, settings, logo] = await Promise.all([
     listClients(c.env.DB),
     getSettings(c.env.DB, branchId),
@@ -373,6 +364,7 @@ admin.post('/invoices/new', async (c) => {
       <InvoiceFormPage
         currentPath="/admin"
         clients={clients}
+        branches={branches}
         settings={settings}
         hasLogo={!!logo}
         suggestedNumber={suggested}
@@ -436,9 +428,9 @@ admin.get('/invoices/:id', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const branchId = c.get('branchId');
-  const invoice = await getInvoice(c.env.DB, branchId, id);
+  const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
+  const branchId = invoice.branch_id;
 
   const [items, payments, events, settings, hasOriginalPdf] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
@@ -480,9 +472,9 @@ admin.get('/invoices/:id/edit', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const branchId = c.get('branchId');
-  const invoice = await getInvoice(c.env.DB, branchId, id);
+  const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
+  const branchId = invoice.branch_id;
 
   if (invoice.status !== 'draft' && invoice.status !== 'sent') {
     return c.redirect(`/admin/invoices/${id}`);
@@ -512,9 +504,9 @@ admin.post('/invoices/:id/edit', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const branchId = c.get('branchId');
-  const invoice = await getInvoice(c.env.DB, branchId, id);
+  const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
+  const branchId = invoice.branch_id;
 
   if (invoice.status !== 'draft' && invoice.status !== 'sent') {
     return c.redirect(`/admin/invoices/${id}`);
@@ -575,9 +567,9 @@ admin.post('/invoices/:id/status', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const branchId = c.get('branchId');
-  const invoice = await getInvoice(c.env.DB, branchId, id);
+  const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
+  const branchId = invoice.branch_id;
 
   const body = (await c.req.parseBody()) as Record<string, string>;
   const action = body.action;
@@ -688,9 +680,9 @@ admin.post('/invoices/:id/duplicate', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const branchId = c.get('branchId');
-  const source = await getInvoice(c.env.DB, branchId, id);
+  const source = await getInvoiceById(c.env.DB, id);
   if (!source) return c.notFound();
+  const branchId = source.branch_id;
 
   const [items, settings, client] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
@@ -722,7 +714,7 @@ admin.post('/invoices/:id/payments/:pid/undo', async (c) => {
   const pid = Number(c.req.param('pid'));
   if (!Number.isInteger(id) || !Number.isInteger(pid)) return c.notFound();
 
-  const invoice = await getInvoice(c.env.DB, c.get('branchId'), id);
+  const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
 
   await undoPayment(c.env.DB, id, pid, formatCents);
@@ -733,7 +725,7 @@ admin.post('/invoices/:id/payments/:pid/note', async (c) => {
   const id = Number(c.req.param('id'));
   const pid = Number(c.req.param('pid'));
   if (!Number.isInteger(id) || !Number.isInteger(pid)) return c.notFound();
-  if (!(await getInvoice(c.env.DB, c.get('branchId'), id))) return c.notFound();
+  if (!(await getInvoiceById(c.env.DB, id))) return c.notFound();
 
   const body = (await c.req.parseBody()) as Record<string, string>;
   const note = body.note?.trim() || null;
@@ -785,7 +777,7 @@ admin.get('/clients/new', async (c) => {
 admin.post('/invoices/:id/source-pdf', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
-  const invoice = await getInvoice(c.env.DB, c.get('branchId'), id);
+  const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
 
   const body = await c.req.parseBody();
@@ -843,20 +835,10 @@ admin.get('/branches', async (c) =>
   c.html(
     <BranchesPage
       branches={await listBranches(c.env.DB)}
-      currentBranchId={c.get('branchId')}
       nonce={c.get('secureHeadersNonce')}
     />
   )
 );
-
-admin.post('/branches/switch', async (c) => {
-  const body = (await c.req.parseBody()) as Record<string, string>;
-  const branchId = Number(body.branch_id);
-  const allowed = (await listBranches(c.env.DB)).some((branch) => branch.id === branchId);
-  if (!allowed) return c.notFound();
-  selectBranch(c, branchId);
-  return c.redirect('/admin');
-});
 
 admin.post('/branches', async (c) => {
   const body = (await c.req.parseBody()) as Record<string, string>;
@@ -877,7 +859,6 @@ admin.post('/branches', async (c) => {
     return c.html(
       <BranchesPage
         branches={await listBranches(c.env.DB)}
-        currentBranchId={c.get('branchId')}
         error="Provide a valid name, address, optional email, currency, and invoice prefix."
         nonce={c.get('secureHeadersNonce')}
       />,
@@ -891,8 +872,7 @@ admin.post('/branches', async (c) => {
     currency,
     invoice_prefix: invoicePrefix,
   });
-  selectBranch(c, branchId);
-  return c.redirect('/admin/settings');
+  return c.redirect(`/admin/settings?branch=${branchId}`);
 });
 
 // ---------- CSV export ----------
@@ -974,7 +954,7 @@ admin.post('/invoices/:id/events/:eventId/delete', async (c) => {
   const id = Number(c.req.param('id'));
   const eventId = Number(c.req.param('eventId'));
   if (!Number.isInteger(id) || !Number.isInteger(eventId)) return c.notFound();
-  if (!(await getInvoice(c.env.DB, c.get('branchId'), id))) return c.notFound();
+  if (!(await getInvoiceById(c.env.DB, id))) return c.notFound();
   await deleteViewEvent(c.env.DB, id, eventId);
   return c.redirect(`/admin/invoices/${id}`);
 });
@@ -1045,7 +1025,11 @@ admin.post('/settings/appearance', async (c) => {
 });
 
 admin.get('/settings', async (c) => {
-  const branchId = c.get('branchId');
+  const branches = await listBranches(c.env.DB);
+  const requestedBranchId = Number(c.req.query('branch'));
+  const branchId = branches.some((branch) => branch.id === requestedBranchId)
+    ? requestedBranchId
+    : c.get('branchId');
   // Lazy migration: re-encrypt any plaintext stored keys once a master key exists.
   await encryptStoredSecrets(c.env.DB, c.env, await getSettings(c.env.DB, branchId));
   const settings = await getSettings(c.env.DB, branchId);
@@ -1091,9 +1075,12 @@ admin.get('/settings', async (c) => {
 });
 
 admin.post('/settings', async (c) => {
-  const branchId = c.get('branchId');
   const raw = await c.req.parseBody();
   const body = raw as Record<string, string>;
+  const branchId = Number(body.branch_id);
+  if (!(await listBranches(c.env.DB)).some((branch) => branch.id === branchId)) {
+    return c.text('Choose a valid company.', 400);
+  }
   const current = await getSettings(c.env.DB, branchId);
 
   // Logo: uploaded file (stored in D1, wins over the URL) or explicit removal.
@@ -1137,7 +1124,7 @@ admin.post('/settings', async (c) => {
   }
 
   return c.redirect(
-    `/admin/settings?saved=1${accentKept ? '&accent_kept=1' : ''}${tzValid ? '' : '&tz_kept=1'}${curValid ? '' : '&cur_kept=1'}${
+    `/admin/settings?branch=${branchId}&saved=1${accentKept ? '&accent_kept=1' : ''}${tzValid ? '' : '&tz_kept=1'}${curValid ? '' : '&cur_kept=1'}${
       numValid ? '' : '&num_kept=1'
     }`
   );

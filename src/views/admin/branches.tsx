@@ -4,28 +4,26 @@ import { Layout } from '../layout';
 
 export function BranchesPage({
   branches,
-  currentBranchId,
   error,
   nonce,
 }: {
   branches: Branch[];
-  currentBranchId: number;
   error?: string;
   nonce?: string;
 }) {
   return (
-    <Layout title="Branches" currentPath="/admin/branches" nonce={nonce}>
+    <Layout title="Companies" currentPath="/admin/branches" nonce={nonce}>
       <div class="page-head">
         <div>
-          <h1 class="page-title">Invoice branches</h1>
-          <p class="muted">Clients are shared. Branding, numbering, invoices, payments, and reports follow the selected branch.</p>
+          <h1 class="page-title">Companies</h1>
+          <p class="muted">Clients are shared. Each company keeps its own address, logo, payment details, currency, and numbering.</p>
         </div>
       </div>
 
       {error ? <div class="banner banner-error">{error}</div> : null}
 
       <div class="card">
-        <h2>Switch branch</h2>
+        <h2>Company details</h2>
         <div class="branch-list">
           {branches.map((branch) => (
             <div class="branch-row">
@@ -36,22 +34,15 @@ export function BranchesPage({
                   {branch.business_address ? ` · ${branch.business_address.split('\n')[0]}` : ''}
                 </div>
               </div>
-              {branch.id === currentBranchId ? (
-                <span class="badge badge-paid">Current</span>
-              ) : (
-                <form method="post" action="/admin/branches/switch">
-                  <input type="hidden" name="branch_id" value={String(branch.id)} />
-                  <button type="submit" class="btn btn-secondary btn-sm">Switch</button>
-                </form>
-              )}
+              <a class="btn btn-secondary btn-sm" href={`/admin/settings?branch=${branch.id}`}>Edit details</a>
             </div>
           ))}
         </div>
       </div>
 
       <div class="card">
-        <h2>Add another branch</h2>
-        <p class="muted">The new branch starts empty but immediately uses the same client list and shared app configuration.</p>
+        <h2>Add another company</h2>
+        <p class="muted">The new company immediately uses the same client list.</p>
         <form method="post" action="/admin/branches">
           <div class="form-row">
             <div class="form-group">
@@ -81,10 +72,9 @@ export function BranchesPage({
             <label for="branch_email">Business email</label>
             <input id="branch_email" name="business_email" type="email" />
           </div>
-          <button type="submit" class="btn btn-primary">Add and switch</button>
+          <button type="submit" class="btn btn-primary">Add company</button>
         </form>
       </div>
     </Layout>
   );
 }
-

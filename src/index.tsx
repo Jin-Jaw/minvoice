@@ -8,7 +8,7 @@ import { admin } from './routes/admin';
 import { pay } from './routes/pay';
 import {
   clearLoginAttempts,
-  getInvoice,
+  getInvoiceById,
   getInvoiceItems,
   getInvoiceSourcePdf,
   getLogo,
@@ -196,9 +196,9 @@ app.use('/admin/*', branchContext);
 app.get('/admin/invoices/:id/pdf', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
-  const branchId = c.get('branchId');
-  const invoice = await getInvoice(c.env.DB, branchId, id);
+  const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
+  const branchId = invoice.branch_id;
   const sourcePdf = await getInvoiceSourcePdf(c.env.DB, id);
   if (sourcePdf) return pdfResponse(sourcePdf.bytes, sourcePdf.filename);
   const [items, settings, logo] = await Promise.all([
@@ -215,9 +215,9 @@ app.get('/admin/invoices/:id/pdf', async (c) => {
 app.get('/admin/invoices/:id/print', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
-  const branchId = c.get('branchId');
-  const invoice = await getInvoice(c.env.DB, branchId, id);
+  const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
+  const branchId = invoice.branch_id;
   const [items, settings] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
     getSettings(c.env.DB, branchId),

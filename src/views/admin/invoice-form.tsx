@@ -1,12 +1,13 @@
 import { Layout } from '../layout';
 import { todayInTz } from '../../lib/dates';
 import { currencyOptions } from '../../lib/money';
-import type { Client, Invoice, InvoiceItem, Settings } from '../../db/queries';
+import type { Branch, Client, Invoice, InvoiceItem, Settings } from '../../db/queries';
 
 export type InvoiceFormProps = {
   currentPath: string;
   nonce?: string;
   clients: Client[];
+  branches?: Branch[];
   settings: Settings;
   hasLogo?: boolean;
   /** Next auto number, shown as an editable prefill on new invoices. */
@@ -107,7 +108,22 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
         </div>
       ) : null}
 
+      {!isEdit && props.branches && props.branches.length > 1 ? (
+        <form method="get" action="/admin/invoices/new" class="card">
+          <div class="form-group">
+            <label for="invoice_branch">Issuing company</label>
+            <select id="invoice_branch" name="branch" data-submit-on-change>
+              {props.branches.map((branch) => (
+                <option value={String(branch.id)} selected={branch.id === settings.branch_id}>{branch.name}</option>
+              ))}
+            </select>
+            <span class="muted">Changing this loads that company's logo, address, currency, and payment details.</span>
+          </div>
+        </form>
+      ) : null}
+
       <form method="post" action={actionUrl} class="invoice-editor">
+        {!isEdit ? <input type="hidden" name="branch_id" value={String(settings.branch_id)} /> : null}
         <div class="card invoice-sheet">
           <div class="sheet-head">
             <div class="sheet-head-left">
@@ -116,7 +132,7 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
                   <img src={logoSrc} alt="" class="sheet-logo" />
                 </div>
               ) : (
-                <a class="sheet-logo-box sheet-logo-add" href="/admin/settings">
+                <a class="sheet-logo-box sheet-logo-add" href={`/admin/settings?branch=${settings.branch_id}`}>
                   + Add your logo
                 </a>
               )}
@@ -127,8 +143,8 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
                     <div class="sheet-biz-address">{settings.business_address}</div>
                   ) : null}
                 </div>
-                <a class="sheet-from-edit muted" href="/admin/settings">
-                  Edit in settings
+                <a class="sheet-from-edit muted" href={`/admin/settings?branch=${settings.branch_id}`}>
+                  Edit company details
                 </a>
               </div>
             </div>
