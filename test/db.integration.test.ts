@@ -14,6 +14,7 @@ import {
   createClient,
   createInvoice,
   enqueueReminder,
+  getClient,
   getInvoice,
   getInvoiceItems,
   getPayments,
@@ -28,6 +29,7 @@ import {
   reportSummary,
   recordLoginAttempt,
   updateInvoice,
+  updateClient,
   type WebhookPayment,
 } from '../src/db/queries';
 import { LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MINUTES, MAX_OUTBOX_ATTEMPTS } from '../src/lib/outbox';
@@ -565,6 +567,78 @@ describe('login rate limiting', () => {
     await clearLoginAttempts(DB, ip);
 
     expect(await recordLoginAttempt(DB, ip, LOGIN_WINDOW_MINUTES)).toBe(1);
+  });
+});
+
+describe('client default rate currencies', () => {
+  it('stores and updates the currency alongside the client default rate', async () => {
+    const clientId = await createClient(DB, {
+      name: 'Currency Client',
+      email: null,
+      address: null,
+      default_rate_cents: 12500,
+      default_currency: 'USD',
+      payment_terms_days: null,
+    });
+
+    expect(await getClient(DB, clientId)).toMatchObject({
+      default_rate_cents: 12500,
+      default_currency: 'USD',
+    });
+
+    await updateClient(DB, clientId, {
+      name: 'Currency Client',
+      email: null,
+      address: null,
+      archived: 0,
+      default_rate_cents: 14000,
+      default_currency: 'EUR',
+      payment_terms_days: null,
+      locale: null,
+    });
+
+    expect(await getClient(DB, clientId)).toMatchObject({
+      default_rate_cents: 14000,
+      default_currency: 'EUR',
+    });
+  });
+
+  it('renders each client currency for the new-invoice default', async () => {
+    await createClient(DB, {
+      name: 'Euro Client',
+      email: null,
+      address: null,
+      default_rate_cents: 9900,
+      default_currency: 'EUR',
+      payment_terms_days: null,
+    });
+
+    const response = await exports.default.fetch(
+      new Request('https://invoice.test/admin/invoices/new', { headers: { cookie: await loginCookie() } })
+    );
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('data-rate="99.00"');
+    expect(html).toContain('data-currency="EUR"');
+    expect(html).toContain('applyCurrency()');
+  });
+
+  it('rejects client rate currencies outside USD, GBP, and EUR', async () => {
+    const response = await exports.default.fetch(
+      new Request('https://invoice.test/admin/clients', {
+        method: 'POST',
+        headers: {
+          cookie: await loginCookie(),
+          'content-type': 'application/x-www-form-urlencoded',
+          'sec-fetch-site': 'same-origin',
+        },
+        body: new URLSearchParams({ name: 'CAD Client', default_rate: '100', default_currency: 'CAD' }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('USD, GBP, or EUR');
+    expect(await DB.prepare('SELECT COUNT(*) FROM clients').first<number>('COUNT(*)')).toBe(0);
   });
 });
 

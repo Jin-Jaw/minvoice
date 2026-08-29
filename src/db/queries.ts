@@ -1,4 +1,4 @@
-import { computeTotals, itemAmountCents, type ItemInput } from '../lib/money';
+import { computeTotals, itemAmountCents, type ClientRateCurrency, type ItemInput } from '../lib/money';
 import { newPublicToken } from '../lib/tokens';
 import { todayInTz } from '../lib/dates';
 
@@ -61,6 +61,7 @@ export type Client = {
   address: string | null;
   archived: number;
   default_rate_cents: number | null; // NULL = inherit settings default
+  default_currency: ClientRateCurrency | null; // currency used with the client default rate
   payment_terms_days: number | null; // NULL = inherit settings terms
   locale: string | null; // NULL = inherit settings locale (customer-facing language)
   created_at: string;
@@ -421,11 +422,21 @@ export async function getClient(db: D1Database, id: number): Promise<Client | nu
 export async function createClient(
   db: D1Database,
   c: Pick<Client, 'name' | 'email' | 'address' | 'default_rate_cents' | 'payment_terms_days'> &
-    Partial<Pick<Client, 'locale'>>
+    Partial<Pick<Client, 'default_currency' | 'locale'>>
 ): Promise<number> {
   const res = await db
-    .prepare('INSERT INTO clients (name, email, address, default_rate_cents, payment_terms_days, locale) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(c.name, c.email, c.address, c.default_rate_cents, c.payment_terms_days, c.locale ?? null)
+    .prepare(
+      'INSERT INTO clients (name, email, address, default_rate_cents, default_currency, payment_terms_days, locale) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    )
+    .bind(
+      c.name,
+      c.email,
+      c.address,
+      c.default_rate_cents,
+      c.default_currency ?? null,
+      c.payment_terms_days,
+      c.locale ?? null
+    )
     .run();
   return res.meta.last_row_id;
 }
@@ -433,11 +444,26 @@ export async function createClient(
 export async function updateClient(
   db: D1Database,
   id: number,
-  c: Pick<Client, 'name' | 'email' | 'address' | 'archived' | 'default_rate_cents' | 'payment_terms_days' | 'locale'>
+  c: Pick<
+    Client,
+    'name' | 'email' | 'address' | 'archived' | 'default_rate_cents' | 'default_currency' | 'payment_terms_days' | 'locale'
+  >
 ): Promise<void> {
   await db
-    .prepare('UPDATE clients SET name = ?, email = ?, address = ?, archived = ?, default_rate_cents = ?, payment_terms_days = ?, locale = ? WHERE id = ?')
-    .bind(c.name, c.email, c.address, c.archived, c.default_rate_cents, c.payment_terms_days, c.locale, id)
+    .prepare(
+      'UPDATE clients SET name = ?, email = ?, address = ?, archived = ?, default_rate_cents = ?, default_currency = ?, payment_terms_days = ?, locale = ? WHERE id = ?'
+    )
+    .bind(
+      c.name,
+      c.email,
+      c.address,
+      c.archived,
+      c.default_rate_cents,
+      c.default_currency,
+      c.payment_terms_days,
+      c.locale,
+      id
+    )
     .run();
 }
 

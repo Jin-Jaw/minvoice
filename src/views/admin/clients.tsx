@@ -1,7 +1,25 @@
 import { Layout } from '../layout';
 import { LOCALE_OPTIONS } from '../../lib/strings';
+import {
+  CLIENT_RATE_CURRENCIES,
+  formatCents,
+  isClientRateCurrency,
+  type ClientRateCurrency,
+} from '../../lib/money';
 import { Icon } from '../icons';
 import type { Client } from '../../db/queries';
+
+function RateCurrencySelect({ selected }: { selected: ClientRateCurrency }) {
+  return (
+    <select id="default_currency" name="default_currency" required>
+      {CLIENT_RATE_CURRENCIES.map((currency) => (
+        <option value={currency} selected={currency === selected}>
+          {currency}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 export function ClientsPage({
   currentPath,
@@ -50,7 +68,7 @@ export function ClientsPage({
                 <td data-label="Email">{client.email ?? <span class="muted">—</span>}</td>
                 <td data-label="Rate">
                   {client.default_rate_cents != null ? (
-                    (client.default_rate_cents / 100).toFixed(2)
+                    formatCents(client.default_rate_cents, client.default_currency ?? 'GBP')
                   ) : (
                     <span class="muted">default</span>
                   )}
@@ -75,7 +93,15 @@ export function ClientsPage({
   );
 }
 
-export function ClientNewPage({ currentPath, nonce }: { currentPath: string; nonce?: string }) {
+export function ClientNewPage({
+  currentPath,
+  defaultCurrency,
+  nonce,
+}: {
+  currentPath: string;
+  defaultCurrency: ClientRateCurrency;
+  nonce?: string;
+}) {
   return (
     <Layout title="New client" currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
@@ -96,10 +122,17 @@ export function ClientNewPage({ currentPath, nonce }: { currentPath: string; non
             <label for="address">Address</label>
             <textarea id="address" name="address"></textarea>
           </div>
-          <div class="form-group">
-            <label for="default_rate">Default rate</label>
-            <input type="text" id="default_rate" name="default_rate" placeholder="Inherit from settings" />
-            <span class="muted">Overrides the settings default rate for this client's invoices.</span>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="default_rate">Default rate</label>
+              <input type="text" id="default_rate" name="default_rate" placeholder="Inherit from settings" />
+              <span class="muted">Overrides the settings default rate for this client's invoices.</span>
+            </div>
+            <div class="form-group">
+              <label for="default_currency">Rate currency</label>
+              <RateCurrencySelect selected={defaultCurrency} />
+              <span class="muted">Applied automatically when you select this client.</span>
+            </div>
           </div>
           <div class="form-group">
             <label for="payment_terms_days">Payment terms (days)</label>
@@ -155,6 +188,8 @@ export function ClientNewPage({ currentPath, nonce }: { currentPath: string; non
 }
 
 export function ClientEditPage({ currentPath, client, nonce }: { currentPath: string; client: Client; nonce?: string }) {
+  const selectedCurrency =
+    client.default_currency && isClientRateCurrency(client.default_currency) ? client.default_currency : 'GBP';
   return (
     <Layout title={`Edit ${client.name}`} currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
@@ -177,16 +212,23 @@ export function ClientEditPage({ currentPath, client, nonce }: { currentPath: st
               {client.address ?? ''}
             </textarea>
           </div>
-          <div class="form-group">
-            <label for="default_rate">Default rate</label>
-            <input
-              type="text"
-              id="default_rate"
-              name="default_rate"
-              value={client.default_rate_cents != null ? (client.default_rate_cents / 100).toFixed(2) : ''}
-              placeholder="Inherit from settings"
-            />
-            <span class="muted">Overrides the settings default rate for this client's invoices.</span>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="default_rate">Default rate</label>
+              <input
+                type="text"
+                id="default_rate"
+                name="default_rate"
+                value={client.default_rate_cents != null ? (client.default_rate_cents / 100).toFixed(2) : ''}
+                placeholder="Inherit from settings"
+              />
+              <span class="muted">Overrides the settings default rate for this client's invoices.</span>
+            </div>
+            <div class="form-group">
+              <label for="default_currency">Rate currency</label>
+              <RateCurrencySelect selected={selectedCurrency} />
+              <span class="muted">Applied automatically when you select this client.</span>
+            </div>
           </div>
           <div class="form-group">
             <label for="payment_terms_days">Payment terms (days)</label>

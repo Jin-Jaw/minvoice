@@ -63,9 +63,10 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
 
   const fv = props.formValues;
   const selectedClientId = fv?.client_id ?? (invoice ? String(invoice.client_id) : '');
+  const selectedClient = clients.find((client) => String(client.id) === selectedClientId);
   const issueDate = fv?.issue_date ?? invoice?.issue_date ?? todayInTz(settings.timezone);
   const dueDate = fv?.due_date ?? invoice?.due_date ?? '';
-  const currency = fv?.currency ?? invoice?.currency ?? settings.currency;
+  const currency = fv?.currency ?? invoice?.currency ?? selectedClient?.default_currency ?? settings.currency;
   const subject = fv?.subject ?? invoice?.subject ?? '';
   const notes = fv?.notes ?? invoice?.notes ?? '';
 
@@ -179,6 +180,7 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
                   <option
                     value={String(client.id)}
                     data-rate={effectiveRate(client, settings)}
+                    data-currency={client.default_currency ?? settings.currency}
                     data-terms={effectiveTerms(client, settings)}
                     selected={selectedClientId === String(client.id)}
                   >
@@ -328,10 +330,19 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
   var template = document.getElementById('item-row-template');
   var addBtn = document.getElementById('add-line-btn');
   var clientSelect = document.getElementById('client_id');
+  var currencySelect = document.getElementById('currency');
 
   function currentRate() {
     var opt = clientSelect.options[clientSelect.selectedIndex];
     return (opt && opt.getAttribute('data-rate')) || '';
+  }
+
+  function applyCurrency() {
+    var opt = clientSelect.options[clientSelect.selectedIndex];
+    var currency = (opt && opt.getAttribute('data-currency')) || '';
+    if (currency && currencySelect.querySelector('option[value="' + currency + '"]')) {
+      currencySelect.value = currency;
+    }
   }
 
   var issueInput = document.getElementById('issue_date');
@@ -355,7 +366,7 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
     var rate = currentRate();
     var wrap = document.getElementById('rate-hint-wrap');
     wrap.hidden = !rate;
-    if (rate) document.getElementById('rate-hint').textContent = rate;
+    if (rate) document.getElementById('rate-hint').textContent = currencySelect.value + ' ' + rate;
   }
 
   // Fill empty price fields with the selected client's default rate.
@@ -371,10 +382,12 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
   }
 
   clientSelect.addEventListener('change', function () {
+    applyCurrency();
     applyRate();
     updateRateHint();
     applyTerms();
   });
+  currencySelect.addEventListener('change', updateRateHint);
 
   function formatAmount(qty, price) {
     var q = parseFloat(qty);

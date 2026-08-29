@@ -7,6 +7,13 @@ const ZERO_DECIMAL = new Set([
   'BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
 ]);
 
+export const CLIENT_RATE_CURRENCIES = ['USD', 'GBP', 'EUR'] as const;
+export type ClientRateCurrency = (typeof CLIENT_RATE_CURRENCIES)[number];
+
+export function isClientRateCurrency(code: string): code is ClientRateCurrency {
+  return (CLIENT_RATE_CURRENCIES as readonly string[]).includes(code);
+}
+
 export function isSupportedCurrency(code: string): boolean {
   if (!/^[A-Z]{3}$/.test(code) || ZERO_DECIMAL.has(code)) return false;
   try {

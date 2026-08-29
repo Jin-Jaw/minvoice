@@ -1,7 +1,13 @@
 import { Hono, type Context } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import type { AppEnv } from '../env';
-import { formatCents, isSupportedCurrency, parseAmountToCents } from '../lib/money';
+import {
+  formatCents,
+  isClientRateCurrency,
+  isSupportedCurrency,
+  parseAmountToCents,
+  type ClientRateCurrency,
+} from '../lib/money';
 import { addDaysISO, isValidTimezone, todayInTz } from '../lib/dates';
 import { configWarnings, secretConfigured } from '../lib/config';
 import { accentUsable, safeAccent } from '../lib/color';
@@ -705,11 +711,14 @@ admin.get('/clients', async (c) => {
 
 admin.post('/clients', async (c) => {
   const body = (await c.req.parseBody()) as Record<string, string>;
+  const defaultCurrency = body.default_currency?.trim().toUpperCase() ?? '';
+  if (!isClientRateCurrency(defaultCurrency)) return c.text('Rate currency must be USD, GBP, or EUR.', 400);
   await createClient(c.env.DB, {
     name: body.name,
     email: body.email || null,
     address: body.address || null,
     default_rate_cents: body.default_rate ? parseAmountToCents(body.default_rate) : null,
+    default_currency: defaultCurrency,
     payment_terms_days: body.payment_terms_days?.trim() ? Math.max(0, parseInt(body.payment_terms_days, 10) || 0) : null,
     locale: validLocaleTag(submittedLocale(body)) ? submittedLocale(body)!.trim() : null,
   });
@@ -717,9 +726,17 @@ admin.post('/clients', async (c) => {
 });
 
 // Registered before /clients/:id so the static path wins.
-admin.get('/clients/new', (c) =>
-  c.html(<ClientNewPage currentPath="/admin/clients" nonce={c.get('secureHeadersNonce')} />)
-);
+admin.get('/clients/new', async (c) => {
+  const settings = await getSettings(c.env.DB, c.get('branchId'));
+  const defaultCurrency: ClientRateCurrency = isClientRateCurrency(settings.currency) ? settings.currency : 'GBP';
+  return c.html(
+    <ClientNewPage
+      currentPath="/admin/clients"
+      defaultCurrency={defaultCurrency}
+      nonce={c.get('secureHeadersNonce')}
+    />
+  );
+});
 
 admin.get('/clients/:id', async (c) => {
   const id = Number(c.req.param('id'));
@@ -741,12 +758,15 @@ admin.post('/clients/:id', async (c) => {
   if (!client) return c.notFound();
 
   const body = (await c.req.parseBody()) as Record<string, string>;
+  const defaultCurrency = body.default_currency?.trim().toUpperCase() ?? '';
+  if (!isClientRateCurrency(defaultCurrency)) return c.text('Rate currency must be USD, GBP, or EUR.', 400);
   await updateClient(c.env.DB, id, {
     name: body.name,
     email: body.email || null,
     address: body.address || null,
     archived: body.archived ? 1 : 0,
     default_rate_cents: body.default_rate ? parseAmountToCents(body.default_rate) : null,
+    default_currency: defaultCurrency,
     payment_terms_days: body.payment_terms_days?.trim() ? Math.max(0, parseInt(body.payment_terms_days, 10) || 0) : null,
     locale: validLocaleTag(submittedLocale(body)) ? submittedLocale(body)!.trim() : null,
   });
