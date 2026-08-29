@@ -118,7 +118,12 @@ export type Payment = {
   stripe_payment_intent: string | null; // pi_... for dashboard deep links
 };
 
-export type InvoiceWithClient = Invoice & { client_name: string; client_email: string | null; client_locale: string | null };
+export type InvoiceWithClient = Invoice & {
+  client_name: string;
+  client_email: string | null;
+  client_locale: string | null;
+  branch_name?: string;
+};
 
 export function isOverdue(
   inv: Pick<Invoice, 'status' | 'due_date'>,
@@ -478,14 +483,33 @@ export async function listInvoices(db: D1Database, branchId: number): Promise<In
   return (
     await db
       .prepare(
-        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale
-         FROM invoices i JOIN clients c ON c.id = i.client_id
+        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale,
+                b.name AS branch_name
+         FROM invoices i JOIN clients c ON c.id = i.client_id JOIN branches b ON b.id = i.branch_id
          WHERE i.branch_id = ?
-         ORDER BY i.issue_date DESC, i.created_at DESC, i.id DESC`
+         ORDER BY i.issue_date DESC, CAST(i.number AS INTEGER) DESC, i.created_at DESC, i.id DESC`
       )
       .bind(branchId)
       .all<InvoiceWithClient>()
   ).results;
+}
+
+export async function listAllInvoices(db: D1Database): Promise<InvoiceWithClient[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale,
+                b.name AS branch_name
+         FROM invoices i JOIN clients c ON c.id = i.client_id JOIN branches b ON b.id = i.branch_id
+         ORDER BY i.issue_date DESC, CAST(i.number AS INTEGER) DESC, i.created_at DESC, i.id DESC`
+      )
+      .all<InvoiceWithClient>()
+  ).results;
+}
+
+export async function getInvoiceBranchId(db: D1Database, invoiceId: number): Promise<number | null> {
+  const row = await db.prepare('SELECT branch_id FROM invoices WHERE id = ?').bind(invoiceId).first<{ branch_id: number }>();
+  return row?.branch_id ?? null;
 }
 
 export async function getInvoice(

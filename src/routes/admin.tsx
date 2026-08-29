@@ -27,6 +27,7 @@ import {
   deleteViewEvent,
   getClient,
   getInvoice,
+  getInvoiceBranchId,
   getInvoiceEvents,
   getInvoiceItems,
   getInvoiceSourcePdf,
@@ -35,6 +36,7 @@ import {
   logInvoiceEvent,
   invoiceNumberExists,
   listAllPayments,
+  listAllInvoices,
   listBranches,
   listClients,
   listInvoices,
@@ -259,7 +261,7 @@ function str(v: string | string[] | undefined): string {
   return v ?? '';
 }
 
-/** Only return to the invoice list and preserve its two supported filters. */
+/** Only return to the invoice list and preserve its supported filters. */
 function invoiceListReturnTo(value: string | undefined): string | null {
   if (!value) return null;
   let url: URL;
@@ -273,6 +275,7 @@ function invoiceListReturnTo(value: string | undefined): string | null {
   const params = new URLSearchParams();
   const status = url.searchParams.get('status');
   if (status && (INVOICE_FILTERS as readonly string[]).includes(status)) params.set('status', status);
+  if (url.searchParams.get('scope') === 'current') params.set('scope', 'current');
   const client = Number(url.searchParams.get('client'));
   if (Number.isInteger(client) && client > 0) params.set('client', String(client));
   const query = params.toString();
@@ -289,8 +292,9 @@ function addListNotice(path: string, key: 'paid' | 'emailed' | 'email_error', va
 
 admin.get('/', async (c) => {
   const branchId = c.get('branchId');
+  const allCompanies = c.req.query('scope') !== 'current';
   const [invoices, settings] = await Promise.all([
-    listInvoices(c.env.DB, branchId),
+    allCompanies ? listAllInvoices(c.env.DB) : listInvoices(c.env.DB, branchId),
     getSettings(c.env.DB, branchId),
   ]);
   const status = c.req.query('status');
@@ -302,6 +306,9 @@ admin.get('/', async (c) => {
   return c.html(
     <DashboardPage
       invoices={invoices}
+      allCompanies={allCompanies}
+      currentBranchId={branchId}
+      currentBranchName={c.get('branchName')}
       filter={filter}
       clientId={clientId}
       deleted={c.req.query('deleted')}
@@ -317,6 +324,17 @@ admin.get('/', async (c) => {
       nonce={c.get('secureHeadersNonce')}
     />
   );
+});
+
+// Opening an invoice from the all-company history also switches the active
+// branch, so subsequent edits, downloads, and actions stay correctly scoped.
+admin.get('/invoices/:id/open', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.notFound();
+  const branchId = await getInvoiceBranchId(c.env.DB, id);
+  if (!branchId) return c.notFound();
+  selectBranch(c, branchId);
+  return c.redirect(`/admin/invoices/${id}`);
 });
 
 // ---------- Invoices: new ----------
