@@ -9,10 +9,11 @@ import { resolve } from 'node:path';
 const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z');
 const backupDir = resolve('backups');
 const output = resolve(backupDir, `jinjaw-invoices-${stamp}.sql`);
+const wrangler = resolve('node_modules', 'wrangler', 'bin', 'wrangler.js');
 
 mkdirSync(backupDir, { recursive: true });
-execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', [
-  'wrangler',
+execFileSync(process.execPath, [
+  wrangler,
   'd1',
   'export',
   'DB',
