@@ -33,6 +33,7 @@ import {
   timingSafeEqual,
 } from './lib/admin-auth';
 import { resolveBaseUrl } from './lib/base-url';
+import { invoicePdfFilename } from './lib/invoice-filename';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { redactSensitivePath } from './lib/redact';
@@ -215,7 +216,7 @@ app.get('/admin/invoices/:id/pdf', async (c) => {
       logo,
       `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
     ),
-    `${invoice.number}.pdf`
+    invoicePdfFilename(settings.business_name, invoice.issue_date)
   );
 });
 

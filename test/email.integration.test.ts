@@ -39,7 +39,7 @@ describe('sendTestEmail', () => {
     expect(sent[0].from?.email).toBe('contact@jin-jaw.co.uk');
     // The real PDF rides along (ASCII sample -> fast WinAnsi path -> compact file)
     expect(sent[0].attachments).toHaveLength(1);
-    expect(sent[0].attachments![0].filename).toMatch(/SAMPLE\.pdf$/);
+    expect(sent[0].attachments![0].filename).toBe('Test_Biz_Invoice_August_2026.pdf');
     expect(sent[0].attachments![0].content.length).toBeGreaterThan(1000);
   });
 

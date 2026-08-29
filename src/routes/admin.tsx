@@ -15,6 +15,7 @@ import { effectiveProviderEnv, encryptStoredSecrets, keySource } from '../lib/pr
 import { sealIfKeyed, unbox, validMasterKey } from '../lib/secretbox';
 import { isLocalRequest } from '../lib/admin-auth';
 import { parseSchedule } from '../lib/reminders';
+import { invoicePdfFilename } from '../lib/invoice-filename';
 import {
   buildTimeline,
   completeSetup,
@@ -621,12 +622,13 @@ admin.post('/invoices/:id/status', async (c) => {
                 `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
               );
               if (sourcePdf) {
-                await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
+                const filename = invoicePdfFilename(settings.business_name, invoice.issue_date);
+                await setInvoiceSourcePdf(c.env.DB, id, pdf, filename, true);
                 await logInvoiceEvent(
                   c.env.DB,
                   id,
                   'source_pdf_archived',
-                  `PDF regenerated after edits and archived as ${invoice.number}.pdf`
+                  `PDF regenerated after edits and archived as ${filename}`
                 );
               }
             }
@@ -776,12 +778,13 @@ admin.post('/invoices/:id/email-copy', async (c) => {
         `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
       );
       if (sourcePdf) {
-        await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
+        const filename = invoicePdfFilename(settings.business_name, invoice.issue_date);
+        await setInvoiceSourcePdf(c.env.DB, id, pdf, filename, true);
         await logInvoiceEvent(
           c.env.DB,
           id,
           'source_pdf_archived',
-          `PDF regenerated after edits and archived as ${invoice.number}.pdf`
+          `PDF regenerated after edits and archived as ${filename}`
         );
       }
     }
@@ -820,8 +823,9 @@ admin.post('/invoices/:id/regenerate-pdf', async (c) => {
     logo,
     `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
   );
-  await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
-  await logInvoiceEvent(c.env.DB, id, 'source_pdf_archived', `PDF regenerated and archived as ${invoice.number}.pdf`);
+  const filename = invoicePdfFilename(settings.business_name, invoice.issue_date);
+  await setInvoiceSourcePdf(c.env.DB, id, pdf, filename, true);
+  await logInvoiceEvent(c.env.DB, id, 'source_pdf_archived', `PDF regenerated and archived as ${filename}`);
   return c.redirect(`/admin/invoices/${id}`);
 });
 

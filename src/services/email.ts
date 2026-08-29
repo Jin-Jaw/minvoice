@@ -6,6 +6,7 @@ import { generateInvoicePdf } from './pdf';
 import { formatCentsTag, formatDateTag, getStrings, resolveLocale } from '../lib/strings';
 import { safeAccent } from '../lib/color';
 import { effectiveProviderEnv } from '../lib/providers';
+import { invoicePdfFilename } from '../lib/invoice-filename';
 
 type Mail = {
   to: string;
@@ -208,7 +209,7 @@ export async function sendInvoiceEmail(
     attachments: [
       {
         content: pdfBytes,
-        filename: `${invoice.number}.pdf`,
+        filename: invoicePdfFilename(settings.business_name, invoice.issue_date),
         type: 'application/pdf',
       },
     ],

@@ -177,7 +177,7 @@ export function InvoiceDetailPage({
               <form
                 method="post"
                 action={`/admin/invoices/${invoice.id}/regenerate-pdf`}
-                data-confirm={`Regenerate ${invoice.number}.pdf from the current invoice data? The archived original is replaced — downloads, emails, and resends will use the new document.`}
+                data-confirm="Regenerate the invoice PDF from the current data? The archived original is replaced — downloads, emails, and resends will use the new document."
               >
                 <button type="submit" class="btn btn-secondary btn-sm">
                   Regenerate PDF
