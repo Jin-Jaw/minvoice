@@ -190,6 +190,8 @@ export async function generateInvoicePdf(
     ctx.page.drawLine({ start: { x: x1, y: ctx.y }, end: { x: x2, y: ctx.y }, thickness, color });
 
   // ---- Header: logo + identity left, INVOICE + number right ----
+  // Routes pass the uploaded full artwork here. The URL is only a fallback;
+  // the square email asset is never substituted for an available full logo.
   const logoImage = await tryEmbedLogo(doc, logo ?? settings.logo_url);
   let identityX = MARGIN;
   if (logoImage) {

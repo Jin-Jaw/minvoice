@@ -174,9 +174,12 @@ export function SettingsPage({
           </div>
 
           <div class="form-group">
-            <label for="logo_url">Logo URL (alternative)</label>
+            <label for="logo_url">Square email logo URL</label>
             <input type="text" id="logo_url" name="logo_url" value={settings.logo_url ?? ''} />
-            <span class="muted">Used only when no logo is uploaded.</span>
+            <span class="muted">
+              Optional absolute URL for the square, rounded email logo. The uploaded full logo above
+              remains on PDFs and the print view.
+            </span>
           </div>
 
           <div class="actions">

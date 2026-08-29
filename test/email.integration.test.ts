@@ -15,7 +15,8 @@ beforeEach(async () => {
   ).run();
   await DB.prepare(
     `UPDATE branches SET business_email = 'owner@example.test', name = 'Test Biz',
-     business_address = '123 Map Street\nLondon' WHERE id = 1`
+     business_address = '123 Map Street\nLondon',
+     logo_url = 'https://jin-jaw.co.uk/assets/jinjaw-square.png' WHERE id = 1`
   ).run();
 });
 
@@ -58,6 +59,8 @@ describe('sendTestEmail', () => {
     expect(sent[0].text).not.toContain('A PDF copy is attached');
     expect(sent[0].html).toContain('JinJawLTD_Invoice_August_2026.pdf attached below');
     expect(sent[0].html).not.toContain('123 Map Street');
+    expect(sent[0].html).toContain('src="https://jin-jaw.co.uk/assets/jinjaw-square.png"');
+    expect(sent[0].html).toContain('object-fit: cover; border-radius: 8px;');
   });
 
   it('no database rows are created by the sample invoice', async () => {

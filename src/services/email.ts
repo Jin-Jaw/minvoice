@@ -116,13 +116,13 @@ export async function sendInvoiceEmail(
   const attachmentFilename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
   // No due date -> no due wording at all; don't invent terms like "on receipt".
   const dueDate = invoice.due_date ? formatDateTag(invoice.due_date, tag) : null;
-  // The logo must be a public absolute URL to render in mail clients. The
-  // branch's uploaded logo (served at /logo/:branchId) wins so each company
-  // brands its own mail; then an absolute logo_url; then the site brand mark.
-  const logoUrl = opts?.hasLogo
-    ? `${env.APP_BASE_URL}/logo/${invoice.branch_id}`
-    : /^https?:\/\//i.test(settings.logo_url ?? '')
-      ? settings.logo_url!
+  // Email uses the square logo URL when configured; the uploaded full artwork
+  // remains exclusive to PDF/print. A branch without a square URL falls back
+  // to its uploaded artwork, cropped into the rounded 40px email tile.
+  const logoUrl = /^https?:\/\//i.test(settings.logo_url ?? '')
+    ? settings.logo_url!
+    : opts?.hasLogo
+      ? `${env.APP_BASE_URL}/logo/${invoice.branch_id}`
       : `${env.APP_BASE_URL}/jinjaw-square.png`;
   const footerIdentity = [
     businessName,
@@ -149,7 +149,7 @@ export async function sendInvoiceEmail(
   <div style="background: #ffffff; border: 1px solid #e4e7e9; border-radius: 8px; padding: 32px 36px;">
     <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 0 22px;">
       <tr>
-        <td style="padding-right: 12px;"><img src="${logoUrl}" alt="" width="40" height="40" style="display: block; border-radius: 8px;"></td>
+        <td style="padding-right: 12px;"><img src="${logoUrl}" alt="" width="40" height="40" style="display: block; width: 40px; height: 40px; object-fit: cover; border-radius: 8px;"></td>
         <td>
           <div style="font-size: 17px; font-weight: 700;">${escapeHtml(businessName)}</div>
           <div style="font-size: 13px; color: #5c686e;">${escapeHtml(t.invoice)} ${escapeHtml(invoice.number)}${
