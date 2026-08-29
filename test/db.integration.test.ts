@@ -10,12 +10,16 @@ import {
   awaitingPaymentReview,
   cancelOutboxRow,
   clearLoginAttempts,
+  createBranch,
   createClient,
   createInvoice,
   enqueueReminder,
   getInvoice,
   getInvoiceItems,
   getPayments,
+  getSettings,
+  listClients,
+  listInvoices,
   listDueOutbox,
   markInvoicePaidFromWebhook,
   markInvoiceSent,
@@ -89,12 +93,78 @@ beforeEach(async () => {
     DB.prepare('DELETE FROM invoice_items'),
     DB.prepare('DELETE FROM invoices'),
     DB.prepare('DELETE FROM clients'),
+    DB.prepare('DELETE FROM branch_logos WHERE branch_id != 1'),
+    DB.prepare('DELETE FROM branches WHERE id != 1'),
+    DB.prepare(
+      `UPDATE branches SET name = 'Jin&Jaw LTD', business_address = '', business_email = 'contact@jin-jaw.co.uk',
+       currency = 'GBP', invoice_prefix = 'INV-', next_invoice_number = 1, active = 1 WHERE id = 1`
+    ),
     DB.prepare(
       `UPDATE settings SET email_provider = 'cloudflare', email_from = '',
        reminders_enabled = 0, last_seen_origin = '', stripe_enabled = 1 WHERE id = 1`
     ),
   ]);
   await removeItemFailureTrigger();
+});
+
+describe('shared-client branch isolation', () => {
+  it('shares clients while isolating issuer settings, numbering, invoices, and reports', async () => {
+    const clientId = await createClient(DB, {
+      name: 'Shared Client',
+      email: 'accounts@shared.test',
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    });
+    const secondBranchId = await createBranch(DB, {
+      name: 'Second Branch',
+      business_address: '2 Branch Street',
+      business_email: 'billing@second.test',
+      currency: 'EUR',
+      invoice_prefix: 'SECOND-',
+    });
+
+    const firstInvoice = await createInvoice(
+      DB,
+      1,
+      {
+        client_id: clientId,
+        issue_date: '2026-08-01',
+        due_date: null,
+        subject: null,
+        notes: null,
+        items: [{ description: 'First branch work', quantity: 1, unit_price_cents: 10000 }],
+      },
+      'SHARED-001'
+    );
+    const secondInvoice = await createInvoice(
+      DB,
+      secondBranchId,
+      {
+        client_id: clientId,
+        issue_date: '2026-08-02',
+        due_date: null,
+        subject: null,
+        notes: null,
+        items: [{ description: 'Second branch work', quantity: 1, unit_price_cents: 20000 }],
+      },
+      'SHARED-001'
+    );
+
+    expect(await listClients(DB)).toHaveLength(1);
+    expect((await getSettings(DB, secondBranchId)).currency).toBe('EUR');
+    expect((await getSettings(DB, secondBranchId)).business_address).toBe('2 Branch Street');
+    expect((await listInvoices(DB, 1)).map((invoice) => invoice.id)).toEqual([firstInvoice]);
+    expect((await listInvoices(DB, secondBranchId)).map((invoice) => invoice.id)).toEqual([secondInvoice]);
+    expect(await getInvoice(DB, 1, secondInvoice)).toBeNull();
+    expect((await getInvoice(DB, secondBranchId, secondInvoice))?.number).toBe('SHARED-001');
+
+    await markInvoiceSent(DB, firstInvoice);
+    const firstReport = await reportSummary(DB, 1, '2026-08-29');
+    const secondReport = await reportSummary(DB, secondBranchId, '2026-08-29');
+    expect(firstReport.outstanding_count).toBe(1);
+    expect(secondReport.outstanding_count).toBe(0);
+  });
 });
 
 describe('invoice write atomicity', () => {

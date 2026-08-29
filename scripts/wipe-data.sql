@@ -5,11 +5,13 @@
 DELETE FROM invoice_events;
 DELETE FROM payments;
 DELETE FROM webhook_events;
+DELETE FROM email_outbox;
 DELETE FROM invoice_items;
 DELETE FROM invoices;
 DELETE FROM clients;
 
 -- Fresh numbering: invoice counter back to 1, AUTOINCREMENT ids restart
-UPDATE settings SET next_invoice_number = 1 WHERE id = 1;
+UPDATE branches SET next_invoice_number = 1;
+UPDATE settings SET next_invoice_number = 1 WHERE id = 1; -- legacy rollback compatibility
 DELETE FROM sqlite_sequence
-WHERE name IN ('invoice_events', 'payments', 'webhook_events', 'invoice_items', 'invoices', 'clients');
+WHERE name IN ('invoice_events', 'payments', 'webhook_events', 'email_outbox', 'invoice_items', 'invoices', 'clients');

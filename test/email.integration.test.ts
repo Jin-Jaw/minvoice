@@ -8,8 +8,11 @@ const TEST_MASTER_KEY = 'integration-test-master-key-0123456789abcdef';
 
 beforeEach(async () => {
   await DB.prepare(
-    `UPDATE settings SET business_email = 'owner@example.test', business_name = 'Test Biz',
-     email_provider = 'cloudflare', email_from = 'billing@example.test', setup_complete = 1 WHERE id = 1`
+    `UPDATE settings SET email_provider = 'cloudflare', email_from = 'billing@example.test',
+     setup_complete = 1 WHERE id = 1`
+  ).run();
+  await DB.prepare(
+    `UPDATE branches SET business_email = 'owner@example.test', name = 'Test Biz' WHERE id = 1`
   ).run();
 });
 
@@ -27,7 +30,7 @@ describe('sendTestEmail', () => {
       },
     } as unknown as SendEmail;
 
-    const to = await sendTestEmail({ ...env, EMAIL }, DB);
+    const to = await sendTestEmail({ ...env, EMAIL }, DB, 1);
     expect(to).toBe('owner@example.test');
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('owner@example.test');
@@ -42,19 +45,19 @@ describe('sendTestEmail', () => {
   it('no database rows are created by the sample invoice', async () => {
     const EMAIL = { async send() {} } as unknown as SendEmail;
     const before = await DB.prepare('SELECT COUNT(*) AS n FROM invoices').first<{ n: number }>();
-    await sendTestEmail({ ...env, EMAIL }, DB);
+    await sendTestEmail({ ...env, EMAIL }, DB, 1);
     const after = await DB.prepare('SELECT COUNT(*) AS n FROM invoices').first<{ n: number }>();
     expect(after?.n).toBe(before?.n);
   });
 
   it('throws a descriptive error when no from-address is configured', async () => {
     await DB.prepare(`UPDATE settings SET email_from = '' WHERE id = 1`).run();
-    await expect(sendTestEmail(env, DB)).rejects.toThrow(/sending address/i);
+    await expect(sendTestEmail(env, DB, 1)).rejects.toThrow(/sending address/i);
   });
 
   it('throws when no business email is set to receive the test', async () => {
-    await DB.prepare(`UPDATE settings SET business_email = NULL WHERE id = 1`).run();
-    await expect(sendTestEmail(env, DB)).rejects.toThrow(/business email/i);
+    await DB.prepare(`UPDATE branches SET business_email = NULL WHERE id = 1`).run();
+    await expect(sendTestEmail(env, DB, 1)).rejects.toThrow(/business email/i);
   });
 });
 

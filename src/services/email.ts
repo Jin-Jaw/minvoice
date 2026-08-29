@@ -1,5 +1,5 @@
 import type { Bindings } from '../env';
-import { getInvoice, getLogo, getSettings, logInvoiceEvent, type InvoiceItem, type InvoiceWithClient, type Settings } from '../db/queries';
+import { getInvoiceById, getLogo, getSettings, logInvoiceEvent, type InvoiceItem, type InvoiceWithClient, type Settings } from '../db/queries';
 import { computeTotals, formatCents } from '../lib/money';
 import { addDaysISO, todayInTz } from '../lib/dates';
 import { generateInvoicePdf } from './pdf';
@@ -231,8 +231,9 @@ export async function sendPaymentReceipt(
   invoiceId: number,
   info: PaymentEmailInfo
 ): Promise<void> {
-  const [invoice, settings] = await Promise.all([getInvoice(db, invoiceId), getSettings(db)]);
+  const invoice = await getInvoiceById(db, invoiceId);
   if (!invoice) return;
+  const settings = await getSettings(db, invoice.branch_id);
   if (settings.email_provider === 'none') return; // emails deliberately off
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
@@ -283,8 +284,9 @@ export async function sendPaidNotice(
   invoiceId: number,
   info: PaymentEmailInfo
 ): Promise<void> {
-  const [invoice, settings] = await Promise.all([getInvoice(db, invoiceId), getSettings(db)]);
+  const invoice = await getInvoiceById(db, invoiceId);
   if (!invoice) return;
+  const settings = await getSettings(db, invoice.branch_id);
   if (settings.email_provider === 'none') return;
   const accent = safeAccent(settings.accent_color);
   const amount = formatCents(info.amountCents, info.currency);
@@ -317,8 +319,8 @@ export async function sendPaidNotice(
  * the number is unmistakably fake. Throws with deliver()'s descriptive
  * errors so the settings page can show exactly what's wrong.
  */
-export async function sendTestEmail(env: Bindings, db: D1Database): Promise<string> {
-  const settings = await getSettings(db);
+export async function sendTestEmail(env: Bindings, db: D1Database, branchId: number): Promise<string> {
+  const settings = await getSettings(db, branchId);
   if (!settings.business_email) {
     throw new Error('Set a business email first — the test message is sent to it.');
   }
@@ -339,6 +341,7 @@ export async function sendTestEmail(env: Bindings, db: D1Database): Promise<stri
   const totals = computeTotals(items, settings.tax_rate_bps);
   const invoice: InvoiceWithClient = {
     id: 0,
+    branch_id: branchId,
     number: `${settings.invoice_prefix || 'INV-'}SAMPLE`,
     client_id: 0,
     status: 'sent',
@@ -365,7 +368,7 @@ export async function sendTestEmail(env: Bindings, db: D1Database): Promise<stri
     settings,
     `${env.APP_BASE_URL}/pay/sample`,
     env.ASSETS,
-    await getLogo(db)
+    await getLogo(db, branchId)
   );
   await sendInvoiceEmail(env, invoice, settings, pdf);
   return settings.business_email;
@@ -378,7 +381,7 @@ export async function sendTestEmail(env: Bindings, db: D1Database): Promise<stri
  */
 export async function sendErrorAlert(env: Bindings, db: D1Database, err: unknown, requestPath: string): Promise<void> {
   try {
-    const settings = await getSettings(db);
+    const settings = await getSettings(db, 1);
     if (!settings.business_email || settings.email_provider === 'none') return;
     const message = err instanceof Error ? `${err.message}\n\n${err.stack ?? ''}` : String(err);
     await deliver(env, settings, {

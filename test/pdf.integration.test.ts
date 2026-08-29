@@ -8,6 +8,7 @@ const DB = env.DB;
 function fakeInvoice(over: Partial<InvoiceWithClient> = {}): InvoiceWithClient {
   return {
     id: 1,
+    branch_id: 1,
     number: 'INV-0001',
     client_id: 1,
     status: 'sent',

@@ -69,9 +69,12 @@ export function SettingsPage({
   const taxRatePercent = (settings.tax_rate_bps / 100).toFixed(2);
 
   return (
-    <Layout title="Settings" currentPath={currentPath} nonce={nonce}>
+    <Layout title={`Settings — ${settings.business_name}`} currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
-        <h1 class="page-title">Settings</h1>
+        <div>
+          <h1 class="page-title">Settings — {settings.business_name}</h1>
+          <p class="muted">Business identity and numbering apply to this branch. Email and payment connections are shared.</p>
+        </div>
       </div>
 
       {saved ? <div class="banner banner-success">Settings saved.</div> : null}
@@ -163,7 +166,7 @@ export function SettingsPage({
             <label for="logo_file">Logo</label>
             {hasLogo ? (
               <div class="logo-preview">
-                <img src="/logo" alt="Current logo" />
+                <img src={`/logo/${settings.branch_id}`} alt="Current logo" />
                 <span class="muted">Current logo</span>
                 <label class="logo-remove">
                   <input type="checkbox" name="remove_logo" value="1" /> Remove on save

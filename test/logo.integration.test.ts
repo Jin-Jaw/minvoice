@@ -1,6 +1,6 @@
 import { env, exports } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { deleteLogo, getLogo, setLogo } from '../src/db/queries';
+import { createBranch, getLogo, setLogo } from '../src/db/queries';
 
 const DB = env.DB;
 
@@ -11,7 +11,7 @@ const PNG_1X1 = Uint8Array.from(
 );
 
 beforeEach(async () => {
-  await deleteLogo(DB);
+  await DB.prepare('DELETE FROM branch_logos').run();
 });
 
 describe('uploaded logo', () => {
@@ -29,6 +29,20 @@ describe('uploaded logo', () => {
     const logo = await getLogo(DB);
     expect(logo?.mime).toBe('image/jpeg');
     expect(logo?.bytes.length).toBe(20);
+  });
+
+  it('keeps uploaded logos separate for each branch', async () => {
+    const branchId = await createBranch(DB, {
+      name: 'Logo Branch',
+      business_address: '2 Branch Street',
+      business_email: null,
+      currency: 'GBP',
+      invoice_prefix: 'LOGO-',
+    });
+    await setLogo(DB, 1, PNG_1X1, 'image/png');
+    await setLogo(DB, branchId, PNG_1X1.slice(0, 20), 'image/jpeg');
+    expect((await getLogo(DB, 1))?.mime).toBe('image/png');
+    expect((await getLogo(DB, branchId))?.mime).toBe('image/jpeg');
   });
 
   it('serves /logo publicly with the right headers, 404 when absent', async () => {

@@ -15,6 +15,7 @@ import { formatCents } from '../lib/money';
 
 const baseInvoice: Invoice = {
   id: 1,
+  branch_id: 1,
   number: 'INV-0001',
   client_id: 1,
   status: 'sent',

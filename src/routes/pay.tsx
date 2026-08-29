@@ -64,7 +64,7 @@ pay.get('/:token', async (c) => {
   }
   const [items, settings, payments] = await Promise.all([
     getInvoiceItems(c.env.DB, invoice.id),
-    getSettings(c.env.DB),
+    getSettings(c.env.DB, invoice.branch_id),
     getPayments(c.env.DB, invoice.id),
   ]);
   // Keep the traffic-derived origin fresh for cron-built pay links (writes
@@ -99,7 +99,7 @@ pay.get('/:token/print', async (c) => {
   if (invoice.status === 'draft') return c.notFound();
   const [items, settings] = await Promise.all([
     getInvoiceItems(c.env.DB, invoice.id),
-    getSettings(c.env.DB),
+    getSettings(c.env.DB, invoice.branch_id),
   ]);
   return c.html(
     <PrintInvoice
@@ -122,8 +122,8 @@ pay.get('/:token/pdf', async (c) => {
   }
   const [items, settings, logo] = await Promise.all([
     getInvoiceItems(c.env.DB, invoice.id),
-    getSettings(c.env.DB),
-    getLogo(c.env.DB),
+    getSettings(c.env.DB, invoice.branch_id),
+    getLogo(c.env.DB, invoice.branch_id),
   ]);
   return pdfResponse(
     await generateInvoicePdf(invoice, items, settings, `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`, c.env.ASSETS, logo),
@@ -134,7 +134,7 @@ pay.get('/:token/pdf', async (c) => {
 pay.post('/:token/stripe', async (c) => {
   const invoice = await getInvoiceByToken(c.env.DB, c.req.param('token'));
   if (!invoice) return c.notFound();
-  const settings = await getSettings(c.env.DB);
+  const settings = await getSettings(c.env.DB, invoice.branch_id);
   if (awaitingPaymentReview(invoice, await getPayments(c.env.DB, invoice.id))) {
     return c.redirect(`/pay/${invoice.public_token}`, 303);
   }
@@ -153,7 +153,7 @@ pay.post('/:token/stripe', async (c) => {
 pay.post('/:token/paypal', async (c) => {
   const invoice = await getInvoiceByToken(c.env.DB, c.req.param('token'));
   if (!invoice) return c.notFound();
-  const settings = await getSettings(c.env.DB);
+  const settings = await getSettings(c.env.DB, invoice.branch_id);
   if (awaitingPaymentReview(invoice, await getPayments(c.env.DB, invoice.id))) {
     return c.redirect(`/pay/${invoice.public_token}`, 303);
   }
@@ -181,7 +181,7 @@ pay.get('/:token/paypal/return', async (c) => {
   if (invoice.status !== 'sent') return c.redirect(payUrl, 303);
 
   try {
-    const settings = await getSettings(c.env.DB);
+    const settings = await getSettings(c.env.DB, invoice.branch_id);
     const capture = await captureOrder(await effectiveProviderEnv(c.env, settings), orderId);
     if (capture.status === 'COMPLETED') {
       const result = await markInvoicePaidFromWebhook(c.env.DB, {

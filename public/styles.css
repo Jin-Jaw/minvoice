@@ -404,6 +404,24 @@ h2 {
   margin-bottom: 0;
 }
 
+.branch-list {
+  display: grid;
+  gap: 0;
+}
+
+.branch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.branch-row:last-child {
+  border-bottom: 0;
+}
+
 /* Entrance animation on the public pay shell only — admin views render instantly. */
 .pay-wrap > * {
   /* backwards (not both): elements end in their natural state, so finished

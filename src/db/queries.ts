@@ -6,6 +6,7 @@ import { todayInTz } from '../lib/dates';
 
 export type Settings = {
   id: 1;
+  branch_id: number;
   business_name: string;
   business_address: string;
   business_email: string | null;
@@ -39,6 +40,20 @@ export type Settings = {
   setup_complete: number; // 0 -> first-launch wizard gates /admin
 };
 
+export type Branch = {
+  id: number;
+  name: string;
+  business_address: string;
+  business_email: string | null;
+  logo_url: string | null;
+  currency: string;
+  invoice_prefix: string;
+  next_invoice_number: number;
+  accent_color: string;
+  active: number;
+  created_at: string;
+};
+
 export type Client = {
   id: number;
   name: string;
@@ -55,6 +70,7 @@ export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'void';
 
 export type Invoice = {
   id: number;
+  branch_id: number;
   number: string;
   client_id: number;
   status: InvoiceStatus;
@@ -110,17 +126,55 @@ export function isOverdue(
 
 // ---------- Settings ----------
 
-export async function getSettings(db: D1Database): Promise<Settings> {
-  const row = await db.prepare('SELECT * FROM settings WHERE id = 1').first<Settings>();
-  if (!row) throw new Error('settings row missing — migration not applied?');
-  return row;
+export async function listBranches(db: D1Database): Promise<Branch[]> {
+  return (await db.prepare('SELECT * FROM branches WHERE active = 1 ORDER BY id').all<Branch>()).results;
+}
+
+export async function getBranch(db: D1Database, branchId: number): Promise<Branch | null> {
+  return db.prepare('SELECT * FROM branches WHERE id = ? AND active = 1').bind(branchId).first<Branch>();
+}
+
+export async function createBranch(
+  db: D1Database,
+  branch: Pick<Branch, 'name' | 'business_address' | 'business_email' | 'currency' | 'invoice_prefix'>
+): Promise<number> {
+  const result = await db
+    .prepare(
+      `INSERT INTO branches (name, business_address, business_email, currency, invoice_prefix, accent_color)
+       SELECT ?, ?, ?, ?, ?, accent_color FROM branches WHERE id = 1`
+    )
+    .bind(branch.name, branch.business_address, branch.business_email, branch.currency, branch.invoice_prefix)
+    .run();
+  return result.meta.last_row_id;
+}
+
+export async function getSettings(db: D1Database, branchId = 1): Promise<Settings> {
+  const [shared, branch] = await Promise.all([
+    db.prepare('SELECT * FROM settings WHERE id = 1').first<Omit<Settings, 'branch_id'>>(),
+    getBranch(db, branchId),
+  ]);
+  if (!shared || !branch) throw new Error('settings or branch row missing — migration not applied?');
+  return {
+    ...shared,
+    branch_id: branch.id,
+    business_name: branch.name,
+    business_address: branch.business_address,
+    business_email: branch.business_email,
+    logo_url: branch.logo_url,
+    currency: branch.currency,
+    invoice_prefix: branch.invoice_prefix,
+    next_invoice_number: branch.next_invoice_number,
+    accent_color: branch.accent_color,
+  };
 }
 
 export async function updateSettings(
   db: D1Database,
+  branchId: number,
   s: Omit<
     Settings,
     | 'id'
+    | 'branch_id'
     | 'next_invoice_number'
     | 'setup_complete'
     | 'stripe_enabled'
@@ -137,30 +191,37 @@ export async function updateSettings(
     | 'last_seen_origin'
   >
 ): Promise<void> {
-  await db
-    .prepare(
-      `UPDATE settings SET business_name = ?, business_address = ?, business_email = ?,
-       logo_url = ?, currency = ?, tax_rate_bps = ?, invoice_prefix = ?, default_rate_cents = ?, timezone = ?,
-       locale = ?, accent_color = ?, email_provider = ?, email_from = ?, payment_terms_days = ?
-       WHERE id = 1`
-    )
-    .bind(
-      s.business_name,
-      s.business_address,
-      s.business_email,
-      s.logo_url,
-      s.currency,
-      s.tax_rate_bps,
-      s.invoice_prefix,
-      s.default_rate_cents,
-      s.timezone,
-      s.locale,
-      s.accent_color,
-      s.email_provider,
-      s.email_from,
-      s.payment_terms_days
-    )
-    .run();
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE branches SET name = ?, business_address = ?, business_email = ?, logo_url = ?,
+         currency = ?, invoice_prefix = ?, accent_color = ? WHERE id = ? AND active = 1`
+      )
+      .bind(
+        s.business_name,
+        s.business_address,
+        s.business_email,
+        s.logo_url,
+        s.currency,
+        s.invoice_prefix,
+        s.accent_color,
+        branchId
+      ),
+    db
+      .prepare(
+        `UPDATE settings SET tax_rate_bps = ?, default_rate_cents = ?, timezone = ?, locale = ?,
+         email_provider = ?, email_from = ?, payment_terms_days = ? WHERE id = 1`
+      )
+      .bind(
+        s.tax_rate_bps,
+        s.default_rate_cents,
+        s.timezone,
+        s.locale,
+        s.email_provider,
+        s.email_from,
+        s.payment_terms_days
+      ),
+  ]);
 }
 
 /** Provider toggles + stored credentials. Callers pass CURRENT values for
@@ -219,7 +280,11 @@ export async function updateLastSeenOrigin(db: D1Database, origin: string): Prom
 export type OverdueInvoice = InvoiceWithClient & { reminders_sent: number; last_reminder_at: string | null };
 
 /** Sent invoices past due with an emailable client, plus reminder history. */
-export async function listOverdueForReminders(db: D1Database, today: string): Promise<OverdueInvoice[]> {
+export async function listOverdueForReminders(
+  db: D1Database,
+  branchId: number,
+  today: string
+): Promise<OverdueInvoice[]> {
   return (
     await db
       .prepare(
@@ -227,10 +292,10 @@ export async function listOverdueForReminders(db: D1Database, today: string): Pr
            (SELECT COUNT(*) FROM invoice_events e WHERE e.invoice_id = i.id AND e.type = 'reminder') AS reminders_sent,
            (SELECT MAX(created_at) FROM invoice_events e WHERE e.invoice_id = i.id AND e.type = 'reminder') AS last_reminder_at
          FROM invoices i JOIN clients c ON c.id = i.client_id
-         WHERE i.status = 'sent' AND i.due_date IS NOT NULL AND i.due_date < ?
+         WHERE i.branch_id = ? AND i.status = 'sent' AND i.due_date IS NOT NULL AND i.due_date < ?
            AND c.email IS NOT NULL AND c.email != ''`
       )
-      .bind(today)
+      .bind(branchId, today)
       .all<OverdueInvoice>()
   ).results;
 }
@@ -255,8 +320,8 @@ export async function setSecretSetting(db: D1Database, column: SecretSettingsCol
   await db.prepare(`UPDATE settings SET ${column} = ? WHERE id = 1`).bind(value).run();
 }
 
-export async function setNextInvoiceNumber(db: D1Database, n: number): Promise<void> {
-  await db.prepare('UPDATE settings SET next_invoice_number = ? WHERE id = 1').bind(n).run();
+export async function setNextInvoiceNumber(db: D1Database, branchId: number, n: number): Promise<void> {
+  await db.prepare('UPDATE branches SET next_invoice_number = ? WHERE id = ?').bind(n, branchId).run();
 }
 
 export async function completeSetup(db: D1Database): Promise<void> {
@@ -286,12 +351,13 @@ export function hasDateTokens(prefix: string): boolean {
  * numbers sharing the expanded prefix, plus one, padded to 2 digits.
  * e.g. prefix "{YYYY}{MM}{DD}" -> "2026070101", "2026070102", ...
  */
-async function nextNumberForDatedPrefix(db: D1Database, expanded: string): Promise<string> {
+async function nextNumberForDatedPrefix(db: D1Database, branchId: number, expanded: string): Promise<string> {
   const row = await db
     .prepare(
-      `SELECT MAX(CAST(SUBSTR(number, ?) AS INTEGER)) AS m FROM invoices WHERE number LIKE ? || '%'`
+      `SELECT MAX(CAST(SUBSTR(number, ?) AS INTEGER)) AS m
+       FROM invoices WHERE branch_id = ? AND number LIKE ? || '%'`
     )
-    .bind(expanded.length + 1, expanded)
+    .bind(expanded.length + 1, branchId, expanded)
     .first<{ m: number | null }>();
   const next = (row?.m ?? 0) + 1;
   return `${expanded}${String(next).padStart(2, '0')}`;
@@ -303,16 +369,17 @@ async function nextNumberForDatedPrefix(db: D1Database, expanded: string): Promi
  * e.g. "INV-0042". Collisions from races surface via UNIQUE(number) and are
  * handled by the create route.
  */
-export async function claimInvoiceNumber(db: D1Database): Promise<string> {
-  const settings = await getSettings(db);
+export async function claimInvoiceNumber(db: D1Database, branchId: number): Promise<string> {
+  const settings = await getSettings(db, branchId);
   if (hasDateTokens(settings.invoice_prefix)) {
-    return nextNumberForDatedPrefix(db, expandInvoicePrefix(settings.invoice_prefix, settings.timezone));
+    return nextNumberForDatedPrefix(db, branchId, expandInvoicePrefix(settings.invoice_prefix, settings.timezone));
   }
   const row = await db
     .prepare(
-      `UPDATE settings SET next_invoice_number = next_invoice_number + 1
-       WHERE id = 1 RETURNING next_invoice_number - 1 AS n, invoice_prefix`
+      `UPDATE branches SET next_invoice_number = next_invoice_number + 1
+       WHERE id = ? AND active = 1 RETURNING next_invoice_number - 1 AS n, invoice_prefix`
     )
+    .bind(branchId)
     .first<{ n: number; invoice_prefix: string }>();
   if (!row) throw new Error('failed to claim invoice number');
   return formatInvoiceNumber(row.invoice_prefix, row.n);
@@ -321,13 +388,20 @@ export async function claimInvoiceNumber(db: D1Database): Promise<string> {
 /** What claimInvoiceNumber would return, without advancing the counter (form prefill). */
 export async function suggestedInvoiceNumber(db: D1Database, settings: Settings): Promise<string> {
   if (hasDateTokens(settings.invoice_prefix)) {
-    return nextNumberForDatedPrefix(db, expandInvoicePrefix(settings.invoice_prefix, settings.timezone));
+    return nextNumberForDatedPrefix(
+      db,
+      settings.branch_id,
+      expandInvoicePrefix(settings.invoice_prefix, settings.timezone)
+    );
   }
   return formatInvoiceNumber(settings.invoice_prefix, settings.next_invoice_number);
 }
 
-export async function invoiceNumberExists(db: D1Database, number: string): Promise<boolean> {
-  const row = await db.prepare('SELECT 1 AS x FROM invoices WHERE number = ?').bind(number).first();
+export async function invoiceNumberExists(db: D1Database, branchId: number, number: string): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT 1 AS x FROM invoices WHERE branch_id = ? AND number = ?')
+    .bind(branchId, number)
+    .first();
   return row !== null;
 }
 
@@ -369,19 +443,38 @@ export async function updateClient(
 
 // ---------- Invoices ----------
 
-export async function listInvoices(db: D1Database): Promise<InvoiceWithClient[]> {
+export async function listInvoices(db: D1Database, branchId: number): Promise<InvoiceWithClient[]> {
   return (
     await db
       .prepare(
         `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale
          FROM invoices i JOIN clients c ON c.id = i.client_id
+         WHERE i.branch_id = ?
          ORDER BY i.id DESC`
       )
+      .bind(branchId)
       .all<InvoiceWithClient>()
   ).results;
 }
 
-export async function getInvoice(db: D1Database, id: number): Promise<InvoiceWithClient | null> {
+export async function getInvoice(
+  db: D1Database,
+  branchIdOrInvoiceId: number,
+  invoiceId?: number
+): Promise<InvoiceWithClient | null> {
+  const branchId = invoiceId === undefined ? 1 : branchIdOrInvoiceId;
+  const id = invoiceId ?? branchIdOrInvoiceId;
+  return db
+    .prepare(
+      `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale
+       FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.branch_id = ? AND i.id = ?`
+    )
+    .bind(branchId, id)
+    .first<InvoiceWithClient>();
+}
+
+/** Trusted internal lookup for public capability URLs, provider callbacks, and queued work. */
+export async function getInvoiceById(db: D1Database, id: number): Promise<InvoiceWithClient | null> {
   return db
     .prepare(
       `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale
@@ -448,9 +541,24 @@ export type InvoiceDraft = {
  * Create an invoice. `customNumber` (already validated as unused) bypasses the
  * auto counter, which then stays put for the next auto-numbered invoice.
  */
-export async function createInvoice(db: D1Database, draft: InvoiceDraft, customNumber?: string): Promise<number> {
-  const settings = await getSettings(db);
-  const number = customNumber ?? (await claimInvoiceNumber(db));
+export function createInvoice(db: D1Database, draft: InvoiceDraft, customNumber?: string): Promise<number>;
+export function createInvoice(
+  db: D1Database,
+  branchId: number,
+  draft: InvoiceDraft,
+  customNumber?: string
+): Promise<number>;
+export async function createInvoice(
+  db: D1Database,
+  branchOrDraft: number | InvoiceDraft,
+  draftOrCustom?: InvoiceDraft | string,
+  explicitCustomNumber?: string
+): Promise<number> {
+  const branchId = typeof branchOrDraft === 'number' ? branchOrDraft : 1;
+  const draft = typeof branchOrDraft === 'number' ? (draftOrCustom as InvoiceDraft) : branchOrDraft;
+  const customNumber = typeof branchOrDraft === 'number' ? explicitCustomNumber : (draftOrCustom as string | undefined);
+  const settings = await getSettings(db, branchId);
+  const number = customNumber ?? (await claimInvoiceNumber(db, branchId));
   const totals = computeTotals(draft.items, settings.tax_rate_bps);
 
   // Header + items in ONE transactional batch so a failure can't strand a
@@ -459,11 +567,12 @@ export async function createInvoice(db: D1Database, draft: InvoiceDraft, customN
   const results = await db.batch([
     db
       .prepare(
-        `INSERT INTO invoices (number, client_id, currency, issue_date, due_date, subject, notes,
+        `INSERT INTO invoices (branch_id, number, client_id, currency, issue_date, due_date, subject, notes,
           tax_rate_bps, subtotal_cents, tax_cents, total_cents, public_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
+        branchId,
         number,
         draft.client_id,
         draft.currency || settings.currency,
@@ -481,21 +590,36 @@ export async function createInvoice(db: D1Database, draft: InvoiceDraft, customN
       db
         .prepare(
           `INSERT INTO invoice_items (invoice_id, position, description, quantity, unit_price_cents, amount_cents)
-           VALUES ((SELECT id FROM invoices WHERE number = ?), ?, ?, ?, ?, ?)`
+           VALUES ((SELECT id FROM invoices WHERE branch_id = ? AND number = ?), ?, ?, ?, ?, ?)`
         )
-        .bind(number, i, it.description, it.quantity, it.unit_price_cents, itemAmountCents(it))
+        .bind(branchId, number, i, it.description, it.quantity, it.unit_price_cents, itemAmountCents(it))
     ),
   ]);
   return results[0].meta.last_row_id;
 }
 
 /** Replace all line items and refresh denormalized totals (keeps the invoice's tax snapshot). */
-export async function updateInvoice(
+export function updateInvoice(
   db: D1Database,
   invoiceId: number,
   draft: Omit<InvoiceDraft, 'client_id'> & { client_id?: number }
+): Promise<void>;
+export function updateInvoice(
+  db: D1Database,
+  branchId: number,
+  invoiceId: number,
+  draft: Omit<InvoiceDraft, 'client_id'> & { client_id?: number }
+): Promise<void>;
+export async function updateInvoice(
+  db: D1Database,
+  branchOrInvoiceId: number,
+  invoiceOrDraft: number | (Omit<InvoiceDraft, 'client_id'> & { client_id?: number }),
+  explicitDraft?: Omit<InvoiceDraft, 'client_id'> & { client_id?: number }
 ): Promise<void> {
-  const inv = await getInvoice(db, invoiceId);
+  const branchId = typeof invoiceOrDraft === 'number' ? branchOrInvoiceId : 1;
+  const invoiceId = typeof invoiceOrDraft === 'number' ? invoiceOrDraft : branchOrInvoiceId;
+  const draft = typeof invoiceOrDraft === 'number' ? explicitDraft! : invoiceOrDraft;
+  const inv = await getInvoice(db, branchId, invoiceId);
   if (!inv) throw new Error(`invoice ${invoiceId} not found`);
   const totals = computeTotals(draft.items, inv.tax_rate_bps);
   // Header update + item replacement in ONE transactional batch — totals and
@@ -795,18 +919,24 @@ export type ReportSummary = {
  * Payments group by their own settled currency, not the invoice's, so any
  * processor-side mismatch stays visible.
  */
-export async function monthlyReport(db: D1Database, clientId: number | null = null): Promise<MonthlyReportRow[]> {
-  // ?1 = client filter; NULL means all clients (the OR short-circuits it)
+export async function monthlyReport(
+  db: D1Database,
+  branchId = 1,
+  clientId: number | null = null
+): Promise<MonthlyReportRow[]> {
+  // ?1 = branch, ?2 = optional shared-client filter
   const [inv, pay] = await db.batch<{ ym: string; currency: string; n: number; total: number }>([
     db.prepare(
       `SELECT strftime('%Y-%m', issue_date) AS ym, currency, COUNT(*) AS n, COALESCE(SUM(total_cents), 0) AS total
-       FROM invoices WHERE status IN ('sent', 'paid') AND (?1 IS NULL OR client_id = ?1) GROUP BY ym, currency`
-    ).bind(clientId),
+       FROM invoices WHERE branch_id = ?1 AND status IN ('sent', 'paid')
+         AND (?2 IS NULL OR client_id = ?2) GROUP BY ym, currency`
+    ).bind(branchId, clientId),
     db.prepare(
       `SELECT strftime('%Y-%m', p.created_at) AS ym, p.currency, COUNT(*) AS n, COALESCE(SUM(p.amount_cents), 0) AS total
        FROM payments p JOIN invoices i ON i.id = p.invoice_id
-       WHERE p.undone_at IS NULL AND (?1 IS NULL OR i.client_id = ?1) GROUP BY ym, p.currency`
-    ).bind(clientId),
+       WHERE i.branch_id = ?1 AND p.undone_at IS NULL
+         AND (?2 IS NULL OR i.client_id = ?2) GROUP BY ym, p.currency`
+    ).bind(branchId, clientId),
   ]);
 
   const months = new Map<string, MonthlyReportRow>();
@@ -855,6 +985,7 @@ export type PaymentListRow = {
  *  ?1 = client filter; NULL means all clients. */
 export async function listAllPayments(
   db: D1Database,
+  branchId: number,
   clientId: number | null = null
 ): Promise<PaymentListRow[]> {
   return (
@@ -864,45 +995,56 @@ export async function listAllPayments(
                 p.provider, p.provider_ref, p.stripe_payment_intent, p.amount_cents, p.currency,
                 p.note, p.created_at, p.undone_at
          FROM payments p JOIN invoices i ON i.id = p.invoice_id JOIN clients c ON c.id = i.client_id
-         WHERE (?1 IS NULL OR i.client_id = ?1)
+         WHERE i.branch_id = ?1 AND (?2 IS NULL OR i.client_id = ?2)
          ORDER BY p.created_at DESC, p.id DESC`
       )
-      .bind(clientId)
+      .bind(branchId, clientId)
       .all<PaymentListRow>()
   ).results;
 }
 
+export function reportSummary(db: D1Database, today: string, clientId?: number | null): Promise<ReportSummary>;
+export function reportSummary(
+  db: D1Database,
+  branchId: number,
+  today: string,
+  clientId?: number | null
+): Promise<ReportSummary>;
 export async function reportSummary(
   db: D1Database,
-  today: string,
-  clientId: number | null = null
+  branchOrToday: number | string,
+  todayOrClient?: string | number | null,
+  explicitClientId: number | null = null
 ): Promise<ReportSummary> {
+  const branchId = typeof branchOrToday === 'number' ? branchOrToday : 1;
+  const today = typeof branchOrToday === 'number' ? (todayOrClient as string) : branchOrToday;
+  const clientId = typeof branchOrToday === 'number' ? explicitClientId : ((todayOrClient as number | null) ?? null);
   const [counts, outstanding, received] = await db.batch([
     db
       .prepare(
         `SELECT
           (SELECT COUNT(*) FROM invoices
-            WHERE status = 'sent' AND (?2 IS NULL OR client_id = ?2)) AS outstanding_count,
+            WHERE branch_id = ?1 AND status = 'sent' AND (?3 IS NULL OR client_id = ?3)) AS outstanding_count,
           (SELECT COUNT(*) FROM invoices
-            WHERE status = 'sent' AND due_date IS NOT NULL AND due_date < ?1
-              AND (?2 IS NULL OR client_id = ?2)) AS overdue_count`
+            WHERE branch_id = ?1 AND status = 'sent' AND due_date IS NOT NULL AND due_date < ?2
+              AND (?3 IS NULL OR client_id = ?3)) AS overdue_count`
       )
-      .bind(today, clientId),
+      .bind(branchId, today, clientId),
     db
       .prepare(
         `SELECT currency, COALESCE(SUM(total_cents), 0) AS cents FROM invoices
-         WHERE status = 'sent' AND (?1 IS NULL OR client_id = ?1) GROUP BY currency`
+         WHERE branch_id = ?1 AND status = 'sent' AND (?2 IS NULL OR client_id = ?2) GROUP BY currency`
       )
-      .bind(clientId),
+      .bind(branchId, clientId),
     db
       .prepare(
         `SELECT p.currency, COALESCE(SUM(p.amount_cents), 0) AS cents
          FROM payments p JOIN invoices i ON i.id = p.invoice_id
-         WHERE p.undone_at IS NULL
-           AND strftime('%Y', p.created_at) = substr(?1, 1, 4)
-           AND (?2 IS NULL OR i.client_id = ?2) GROUP BY p.currency`
+         WHERE i.branch_id = ?1 AND p.undone_at IS NULL
+           AND strftime('%Y', p.created_at) = substr(?2, 1, 4)
+           AND (?3 IS NULL OR i.client_id = ?3) GROUP BY p.currency`
       )
-      .bind(today, clientId),
+      .bind(branchId, today, clientId),
   ]);
 
   const row = counts.results[0] as { outstanding_count: number; overdue_count: number } | undefined;
@@ -1084,9 +1226,10 @@ export async function markInvoicePaidFromWebhook(
 
 export type Logo = { bytes: Uint8Array; mime: string; updated_at: string };
 
-export async function getLogo(db: D1Database): Promise<Logo | null> {
+export async function getLogo(db: D1Database, branchId = 1): Promise<Logo | null> {
   const row = await db
-    .prepare('SELECT bytes, mime, updated_at FROM logo WHERE id = 1')
+    .prepare('SELECT bytes, mime, updated_at FROM branch_logos WHERE branch_id = ?')
+    .bind(branchId)
     .first<{ bytes: ArrayBuffer | number[]; mime: string; updated_at: string }>();
   if (!row) return null;
   // D1 returns BLOBs as ArrayBuffer (or a number[] via the JSON path) — normalize.
@@ -1094,18 +1237,33 @@ export async function getLogo(db: D1Database): Promise<Logo | null> {
   return { bytes, mime: row.mime, updated_at: row.updated_at };
 }
 
-export async function setLogo(db: D1Database, bytes: Uint8Array, mime: 'image/png' | 'image/jpeg'): Promise<void> {
+export function setLogo(db: D1Database, bytes: Uint8Array, mime: 'image/png' | 'image/jpeg'): Promise<void>;
+export function setLogo(
+  db: D1Database,
+  branchId: number,
+  bytes: Uint8Array,
+  mime: 'image/png' | 'image/jpeg'
+): Promise<void>;
+export async function setLogo(
+  db: D1Database,
+  branchOrBytes: number | Uint8Array,
+  bytesOrMime: Uint8Array | 'image/png' | 'image/jpeg',
+  explicitMime?: 'image/png' | 'image/jpeg'
+): Promise<void> {
+  const branchId = typeof branchOrBytes === 'number' ? branchOrBytes : 1;
+  const bytes = typeof branchOrBytes === 'number' ? (bytesOrMime as Uint8Array) : branchOrBytes;
+  const mime = typeof branchOrBytes === 'number' ? explicitMime! : (bytesOrMime as 'image/png' | 'image/jpeg');
   await db
     .prepare(
-      `INSERT INTO logo (id, bytes, mime, updated_at) VALUES (1, ?, ?, datetime('now'))
-       ON CONFLICT (id) DO UPDATE SET bytes = excluded.bytes, mime = excluded.mime, updated_at = datetime('now')`
+      `INSERT INTO branch_logos (branch_id, bytes, mime, updated_at) VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT (branch_id) DO UPDATE SET bytes = excluded.bytes, mime = excluded.mime, updated_at = datetime('now')`
     )
-    .bind(bytes, mime)
+    .bind(branchId, bytes, mime)
     .run();
 }
 
-export async function deleteLogo(db: D1Database): Promise<void> {
-  await db.prepare('DELETE FROM logo WHERE id = 1').run();
+export async function deleteLogo(db: D1Database, branchId = 1): Promise<void> {
+  await db.prepare('DELETE FROM branch_logos WHERE branch_id = ?').bind(branchId).run();
 }
 
 // ---------- Email outbox (durable side-effect delivery) ----------

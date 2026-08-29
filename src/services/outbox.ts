@@ -2,7 +2,7 @@ import type { Bindings } from '../env';
 import { backoffMinutes, MAX_OUTBOX_ATTEMPTS } from '../lib/outbox';
 import {
   cancelOutboxRow,
-  getInvoice,
+  getInvoiceById,
   getSettings,
   listDueOutbox,
   markOutboxFailed,
@@ -30,7 +30,7 @@ export async function processEmailOutbox(env: Bindings): Promise<void> {
   // deploys, and receipt/notice links are built from it — resolve here the
   // same way the reminder enqueuer does: configured value, else the origin
   // the pay page last saw.
-  const settings = await getSettings(env.DB);
+  const settings = await getSettings(env.DB, 1);
   const base = ((env.APP_BASE_URL ?? '').trim() || settings.last_seen_origin).replace(/\/+$/, '');
   const resolvedEnv: Bindings = base ? { ...env, APP_BASE_URL: base } : env;
 
@@ -64,12 +64,13 @@ async function deliver(env: Bindings, row: OutboxRow): Promise<void> {
   // same transaction as the sent-mark, so the invoice timeline and the
   // cadence counter never claim an email that didn't go out.
   const p = JSON.parse(row.payload) as { invoiceId: number; payUrl: string; reminderNumber: number };
-  const [invoice, settings] = await Promise.all([getInvoice(env.DB, p.invoiceId), getSettings(env.DB)]);
+  const invoice = await getInvoiceById(env.DB, p.invoiceId);
+  const settings = invoice ? await getSettings(env.DB, invoice.branch_id) : null;
   // Paid or voided since enqueue, or email turned off: a nudge would be wrong.
   // CANCEL (delete) rather than mark sent — deletion releases the dedup_key,
   // so if the payment is undone or email re-enabled, this reminder number can
   // be enqueued again instead of being blocked until the 30-day purge.
-  if (!invoice || invoice.status !== 'sent' || settings.email_provider === 'none') {
+  if (!invoice || !settings || invoice.status !== 'sent' || settings.email_provider === 'none') {
     return cancelOutboxRow(env.DB, row.id);
   }
   await sendReminderEmail(env, settings, invoice, p.payUrl, p.reminderNumber);

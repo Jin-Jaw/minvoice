@@ -12,6 +12,7 @@ import { parseSchedule } from '../lib/reminders';
 import {
   buildTimeline,
   completeSetup,
+  createBranch,
   createClient,
   deleteLogo,
   getLogo,
@@ -27,6 +28,7 @@ import {
   logInvoiceEvent,
   invoiceNumberExists,
   listAllPayments,
+  listBranches,
   listClients,
   listInvoices,
   markInvoiceSent,
@@ -58,6 +60,8 @@ import { PaymentsPage } from '../views/admin/payments';
 import { ReportsPage } from '../views/admin/reports';
 import { SettingsPage } from '../views/admin/settings';
 import { SetupPage } from '../views/admin/setup';
+import { BranchesPage } from '../views/admin/branches';
+import { selectBranch } from '../middleware/branch';
 
 export const admin = new Hono<AppEnv>();
 
@@ -66,13 +70,13 @@ export const admin = new Hono<AppEnv>();
 // Gate every admin page behind the wizard until required settings exist.
 admin.use('*', async (c, next) => {
   if (c.req.path === '/admin/setup') return next();
-  const settings = await getSettings(c.env.DB);
+  const settings = await getSettings(c.env.DB, c.get('branchId'));
   if (!settings.setup_complete) return c.redirect('/admin/setup');
   await next();
 });
 
 admin.get('/setup', async (c) => {
-  const settings = await getSettings(c.env.DB);
+  const settings = await getSettings(c.env.DB, c.get('branchId'));
   if (settings.setup_complete) return c.redirect('/admin');
   // Cloudflare geolocates the request — prefill the visitor's timezone.
   const detected = (c.req.raw.cf as { timezone?: string } | undefined)?.timezone;
@@ -101,7 +105,8 @@ admin.get('/setup', async (c) => {
 });
 
 admin.post('/setup', async (c) => {
-  const settings = await getSettings(c.env.DB);
+  const branchId = c.get('branchId');
+  const settings = await getSettings(c.env.DB, branchId);
   if (settings.setup_complete) return c.redirect('/admin');
 
   const body = (await c.req.parseBody()) as Record<string, string>;
@@ -129,7 +134,7 @@ admin.post('/setup', async (c) => {
     );
   }
 
-  await updateSettings(c.env.DB, {
+  await updateSettings(c.env.DB, branchId, {
     business_name: values.business_name,
     business_address: values.business_address,
     business_email: values.business_email,
@@ -248,7 +253,11 @@ function str(v: string | string[] | undefined): string {
 // ---------- Dashboard ----------
 
 admin.get('/', async (c) => {
-  const [invoices, settings] = await Promise.all([listInvoices(c.env.DB), getSettings(c.env.DB)]);
+  const branchId = c.get('branchId');
+  const [invoices, settings] = await Promise.all([
+    listInvoices(c.env.DB, branchId),
+    getSettings(c.env.DB, branchId),
+  ]);
   const status = c.req.query('status');
   const filter: InvoiceFilter = (INVOICE_FILTERS as readonly string[]).includes(status ?? '')
     ? (status as InvoiceFilter)
@@ -274,7 +283,10 @@ admin.get('/', async (c) => {
 // ---------- Invoices: new ----------
 
 admin.get('/invoices/new', async (c) => {
-  const [clients, settings] = await Promise.all([listClients(c.env.DB), getSettings(c.env.DB)]);
+  const [clients, settings] = await Promise.all([
+    listClients(c.env.DB),
+    getSettings(c.env.DB, c.get('branchId')),
+  ]);
   return c.html(
     <InvoiceFormPage
       currentPath="/admin"
@@ -287,8 +299,9 @@ admin.get('/invoices/new', async (c) => {
 });
 
 admin.post('/invoices/new', async (c) => {
+  const branchId = c.get('branchId');
   const body = (await c.req.parseBody({ all: true })) as Record<string, string | string[]>;
-  const [clients, settings] = await Promise.all([listClients(c.env.DB), getSettings(c.env.DB)]);
+  const [clients, settings] = await Promise.all([listClients(c.env.DB), getSettings(c.env.DB, branchId)]);
   const { items, problems: itemProblems } = parseItemDrafts(body);
   const suggested = await suggestedInvoiceNumber(c.env.DB, settings);
 
@@ -322,7 +335,7 @@ admin.post('/invoices/new', async (c) => {
   // Blank or untouched number -> auto counter; anything else is a custom number.
   const typedNumber = str(body.number).trim();
   const customNumber = typedNumber && typedNumber !== suggested ? typedNumber : undefined;
-  if (customNumber && (await invoiceNumberExists(c.env.DB, customNumber))) {
+  if (customNumber && (await invoiceNumberExists(c.env.DB, branchId, customNumber))) {
     problems.push(`Invoice number "${customNumber}" is already in use.`);
   }
   if (problems.length) return rerender(problems);
@@ -331,6 +344,7 @@ admin.post('/invoices/new', async (c) => {
   try {
     const invoiceId = await createInvoice(
       c.env.DB,
+      branchId,
       {
         client_id: clientId,
         issue_date: str(body.issue_date),
@@ -358,14 +372,15 @@ admin.get('/invoices/:id', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const invoice = await getInvoice(c.env.DB, id);
+  const branchId = c.get('branchId');
+  const invoice = await getInvoice(c.env.DB, branchId, id);
   if (!invoice) return c.notFound();
 
   const [items, payments, events, settings] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
     getPayments(c.env.DB, id),
     getInvoiceEvents(c.env.DB, id),
-    getSettings(c.env.DB),
+    getSettings(c.env.DB, branchId),
   ]);
   const payLink = `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`;
   const timeline = buildTimeline(invoice, payments, events, formatCents);
@@ -395,7 +410,8 @@ admin.get('/invoices/:id/edit', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const invoice = await getInvoice(c.env.DB, id);
+  const branchId = c.get('branchId');
+  const invoice = await getInvoice(c.env.DB, branchId, id);
   if (!invoice) return c.notFound();
 
   if (invoice.status !== 'draft' && invoice.status !== 'sent') {
@@ -405,7 +421,7 @@ admin.get('/invoices/:id/edit', async (c) => {
   const [clients, items, settings] = await Promise.all([
     listClients(c.env.DB),
     getInvoiceItems(c.env.DB, id),
-    getSettings(c.env.DB),
+    getSettings(c.env.DB, branchId),
   ]);
 
   return c.html(
@@ -424,7 +440,8 @@ admin.post('/invoices/:id/edit', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const invoice = await getInvoice(c.env.DB, id);
+  const branchId = c.get('branchId');
+  const invoice = await getInvoice(c.env.DB, branchId, id);
   if (!invoice) return c.notFound();
 
   if (invoice.status !== 'draft' && invoice.status !== 'sent') {
@@ -436,7 +453,7 @@ admin.post('/invoices/:id/edit', async (c) => {
   const problems = [...(await invoiceHeaderProblems(c.env.DB, body, { checkClient: true })), ...itemProblems];
 
   if (problems.length) {
-    const [clients, settings] = await Promise.all([listClients(c.env.DB), getSettings(c.env.DB)]);
+    const [clients, settings] = await Promise.all([listClients(c.env.DB), getSettings(c.env.DB, branchId)]);
     return c.html(
       <InvoiceFormPage
         currentPath="/admin"
@@ -461,7 +478,7 @@ admin.post('/invoices/:id/edit', async (c) => {
     );
   }
 
-  await updateInvoice(c.env.DB, id, {
+  await updateInvoice(c.env.DB, branchId, id, {
     client_id: Number(str(body.client_id)),
     issue_date: str(body.issue_date),
     due_date: str(body.due_date) || null,
@@ -481,12 +498,13 @@ admin.post('/invoices/:id/status', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const invoice = await getInvoice(c.env.DB, id);
+  const branchId = c.get('branchId');
+  const invoice = await getInvoice(c.env.DB, branchId, id);
   if (!invoice) return c.notFound();
 
   const body = (await c.req.parseBody()) as Record<string, string>;
   const action = body.action;
-  const today = todayInTz((await getSettings(c.env.DB)).timezone);
+  const today = todayInTz((await getSettings(c.env.DB, branchId)).timezone);
 
   switch (action) {
     case 'send': {
@@ -503,8 +521,18 @@ admin.post('/invoices/:id/status', async (c) => {
             return c.redirect(`/admin/invoices/${id}?email_error=${encodeURIComponent('Client has no email address.')}`);
           }
           try {
-            const [items, settings] = await Promise.all([getInvoiceItems(c.env.DB, id), getSettings(c.env.DB)]);
-            const pdf = await generateInvoicePdf(invoice, items, settings, undefined, c.env.ASSETS, await getLogo(c.env.DB));
+            const [items, settings] = await Promise.all([
+              getInvoiceItems(c.env.DB, id),
+              getSettings(c.env.DB, branchId),
+            ]);
+            const pdf = await generateInvoicePdf(
+              invoice,
+              items,
+              settings,
+              undefined,
+              c.env.ASSETS,
+              await getLogo(c.env.DB, branchId)
+            );
             await sendInvoiceEmail(c.env, invoice, settings, pdf);
           } catch (e) {
             console.error('invoice email failed', e);
@@ -571,18 +599,19 @@ admin.post('/invoices/:id/duplicate', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const source = await getInvoice(c.env.DB, id);
+  const branchId = c.get('branchId');
+  const source = await getInvoice(c.env.DB, branchId, id);
   if (!source) return c.notFound();
 
   const [items, settings, client] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
-    getSettings(c.env.DB),
+    getSettings(c.env.DB, branchId),
     getClient(c.env.DB, source.client_id),
   ]);
   const today = todayInTz(settings.timezone);
   const terms = client?.payment_terms_days ?? settings.payment_terms_days;
 
-  const newId = await createInvoice(c.env.DB, {
+  const newId = await createInvoice(c.env.DB, branchId, {
     client_id: source.client_id,
     issue_date: today,
     due_date: terms > 0 ? addDaysISO(today, terms) : null,
@@ -604,7 +633,7 @@ admin.post('/invoices/:id/payments/:pid/undo', async (c) => {
   const pid = Number(c.req.param('pid'));
   if (!Number.isInteger(id) || !Number.isInteger(pid)) return c.notFound();
 
-  const invoice = await getInvoice(c.env.DB, id);
+  const invoice = await getInvoice(c.env.DB, c.get('branchId'), id);
   if (!invoice) return c.notFound();
 
   await undoPayment(c.env.DB, id, pid, formatCents);
@@ -615,6 +644,7 @@ admin.post('/invoices/:id/payments/:pid/note', async (c) => {
   const id = Number(c.req.param('id'));
   const pid = Number(c.req.param('pid'));
   if (!Number.isInteger(id) || !Number.isInteger(pid)) return c.notFound();
+  if (!(await getInvoice(c.env.DB, c.get('branchId'), id))) return c.notFound();
 
   const body = (await c.req.parseBody()) as Record<string, string>;
   const note = body.note?.trim() || null;
@@ -685,6 +715,64 @@ admin.post('/clients/:id', async (c) => {
   return c.redirect('/admin/clients');
 });
 
+// ---------- Invoice branches (clients and provider configuration stay shared) ----------
+
+admin.get('/branches', async (c) =>
+  c.html(
+    <BranchesPage
+      branches={await listBranches(c.env.DB)}
+      currentBranchId={c.get('branchId')}
+      nonce={c.get('secureHeadersNonce')}
+    />
+  )
+);
+
+admin.post('/branches/switch', async (c) => {
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  const branchId = Number(body.branch_id);
+  const allowed = (await listBranches(c.env.DB)).some((branch) => branch.id === branchId);
+  if (!allowed) return c.notFound();
+  selectBranch(c, branchId);
+  return c.redirect('/admin');
+});
+
+admin.post('/branches', async (c) => {
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  const name = (body.name ?? '').trim();
+  const businessAddress = (body.business_address ?? '').trim();
+  const businessEmail = (body.business_email ?? '').trim();
+  const currency = (body.currency ?? '').trim().toUpperCase();
+  const invoicePrefix = (body.invoice_prefix ?? '').trim();
+  const invalid =
+    !name ||
+    name.length > 120 ||
+    !businessAddress ||
+    (businessEmail !== '' && !businessEmail.includes('@')) ||
+    !isSupportedCurrency(currency) ||
+    !invoicePrefix ||
+    invoicePrefix.length > 40;
+  if (invalid) {
+    return c.html(
+      <BranchesPage
+        branches={await listBranches(c.env.DB)}
+        currentBranchId={c.get('branchId')}
+        error="Provide a valid name, address, optional email, currency, and invoice prefix."
+        nonce={c.get('secureHeadersNonce')}
+      />,
+      400
+    );
+  }
+  const branchId = await createBranch(c.env.DB, {
+    name,
+    business_address: businessAddress,
+    business_email: businessEmail || null,
+    currency,
+    invoice_prefix: invoicePrefix,
+  });
+  selectBranch(c, branchId);
+  return c.redirect('/admin/settings');
+});
+
 // ---------- CSV export ----------
 
 function csvField(v: unknown): string {
@@ -703,7 +791,7 @@ function csvResponse(rows: unknown[][], filename: string): Response {
 }
 
 admin.get('/export/invoices.csv', async (c) => {
-  const invoices = await listInvoices(c.env.DB);
+  const invoices = await listInvoices(c.env.DB, c.get('branchId'));
   const rows: unknown[][] = [
     ['number', 'client', 'subject', 'status', 'issue_date', 'due_date', 'sent_at', 'paid_at', 'currency', 'subtotal', 'tax', 'total'],
     ...invoices.map((i) => [
@@ -729,8 +817,9 @@ admin.get('/export/payments.csv', async (c) => {
     `SELECT p.created_at AS date, i.number AS invoice, c.name AS client, p.provider, p.provider_ref,
             p.amount_cents, p.currency, p.note, p.undone_at
      FROM payments p JOIN invoices i ON i.id = p.invoice_id JOIN clients c ON c.id = i.client_id
+     WHERE i.branch_id = ?
      ORDER BY p.id`
-  ).all<{
+  ).bind(c.get('branchId')).all<{
     date: string;
     invoice: string;
     client: string;
@@ -763,6 +852,7 @@ admin.post('/invoices/:id/events/:eventId/delete', async (c) => {
   const id = Number(c.req.param('id'));
   const eventId = Number(c.req.param('eventId'));
   if (!Number.isInteger(id) || !Number.isInteger(eventId)) return c.notFound();
+  if (!(await getInvoice(c.env.DB, c.get('branchId'), id))) return c.notFound();
   await deleteViewEvent(c.env.DB, id, eventId);
   return c.redirect(`/admin/invoices/${id}`);
 });
@@ -770,10 +860,11 @@ admin.post('/invoices/:id/events/:eventId/delete', async (c) => {
 // ---------- Payments ----------
 
 admin.get('/payments', async (c) => {
+  const branchId = c.get('branchId');
   const clientId = Number(c.req.query('client')) || null;
   const [payments, settings, clients] = await Promise.all([
-    listAllPayments(c.env.DB, clientId),
-    getSettings(c.env.DB),
+    listAllPayments(c.env.DB, branchId, clientId),
+    getSettings(c.env.DB, branchId),
     listClients(c.env.DB, true),
   ]);
   return c.html(
@@ -792,11 +883,12 @@ admin.get('/payments', async (c) => {
 // ---------- Reports ----------
 
 admin.get('/reports', async (c) => {
-  const settings = await getSettings(c.env.DB);
+  const branchId = c.get('branchId');
+  const settings = await getSettings(c.env.DB, branchId);
   const clientId = Number(c.req.query('client')) || null;
   const [summary, months, clients] = await Promise.all([
-    reportSummary(c.env.DB, todayInTz(settings.timezone), clientId),
-    monthlyReport(c.env.DB, clientId),
+    reportSummary(c.env.DB, branchId, todayInTz(settings.timezone), clientId),
+    monthlyReport(c.env.DB, branchId, clientId),
     listClients(c.env.DB, true),
   ]);
   return c.html(
@@ -831,9 +923,10 @@ admin.post('/settings/appearance', async (c) => {
 });
 
 admin.get('/settings', async (c) => {
+  const branchId = c.get('branchId');
   // Lazy migration: re-encrypt any plaintext stored keys once a master key exists.
-  await encryptStoredSecrets(c.env.DB, c.env, await getSettings(c.env.DB));
-  const settings = await getSettings(c.env.DB);
+  await encryptStoredSecrets(c.env.DB, c.env, await getSettings(c.env.DB, branchId));
+  const settings = await getSettings(c.env.DB, branchId);
   const saved = c.req.query('saved') === '1';
   const tzKept = c.req.query('tz_kept') === '1';
   const curKept = c.req.query('cur_kept') === '1';
@@ -875,7 +968,7 @@ admin.get('/settings', async (c) => {
       curKept={curKept}
       numKept={numKept}
       providerMeta={providerMeta}
-      hasLogo={!!(await getLogo(c.env.DB))}
+      hasLogo={!!(await getLogo(c.env.DB, branchId))}
       emailTestOk={emailTestOk}
       emailTestErr={emailTestErr}
       resendKept={resendKept}
@@ -889,9 +982,10 @@ admin.get('/settings', async (c) => {
 });
 
 admin.post('/settings', async (c) => {
+  const branchId = c.get('branchId');
   const raw = await c.req.parseBody();
   const body = raw as Record<string, string>;
-  const current = await getSettings(c.env.DB);
+  const current = await getSettings(c.env.DB, branchId);
 
   // Logo: uploaded file (stored in D1, wins over the URL) or explicit removal.
   const logoFile = raw.logo_file;
@@ -899,9 +993,9 @@ admin.post('/settings', async (c) => {
     const mime = logoFile.type === 'image/png' ? 'image/png' : logoFile.type === 'image/jpeg' ? 'image/jpeg' : null;
     if (!mime) return c.text('Logo must be a PNG or JPEG.', 400);
     if (logoFile.size > 500 * 1024) return c.text('Logo must be under 500 KB.', 400);
-    await setLogo(c.env.DB, new Uint8Array(await logoFile.arrayBuffer()), mime);
+    await setLogo(c.env.DB, branchId, new Uint8Array(await logoFile.arrayBuffer()), mime);
   } else if (body.remove_logo) {
-    await deleteLogo(c.env.DB);
+    await deleteLogo(c.env.DB, branchId);
   }
   const taxRateBps = Math.round(parseFloat(body.tax_rate_percent) * 100);
   // A typo in the free-text timezone keeps the previous value, never resets to UTC.
@@ -911,7 +1005,7 @@ admin.post('/settings', async (c) => {
   const numValid = Number.isInteger(nextNum) && nextNum >= 1;
 
   const accentKept = !!body.accent_color && !accentUsable(body.accent_color);
-  await updateSettings(c.env.DB, {
+  await updateSettings(c.env.DB, branchId, {
     business_name: body.business_name,
     business_address: body.business_address,
     business_email: body.business_email || null,
@@ -929,7 +1023,7 @@ admin.post('/settings', async (c) => {
     payment_terms_days: Math.max(0, parseInt(body.payment_terms_days, 10) || 0),
   });
   if (numValid && nextNum !== current.next_invoice_number) {
-    await setNextInvoiceNumber(c.env.DB, nextNum);
+    await setNextInvoiceNumber(c.env.DB, branchId, nextNum);
   }
 
   return c.redirect(
@@ -941,7 +1035,7 @@ admin.post('/settings', async (c) => {
 
 admin.post('/settings/email', async (c) => {
   const body = (await c.req.parseBody()) as Record<string, string>;
-  const current = await getSettings(c.env.DB);
+  const current = await getSettings(c.env.DB, c.get('branchId'));
   const submittedKey = (body.resend_api_key ?? '').trim(); // masked field: blank = keep stored
   if (submittedKey && !validMasterKey(c.env.SETTINGS_MASTER_KEY)) {
     return c.redirect('/admin/settings?secret_key_required=1#email');
@@ -970,7 +1064,7 @@ admin.post('/settings/email', async (c) => {
 
 admin.post('/settings/test-email', async (c) => {
   try {
-    const to = await sendTestEmail(c.env, c.env.DB);
+    const to = await sendTestEmail(c.env, c.env.DB, c.get('branchId'));
     return c.redirect(`/admin/settings?email_test=${encodeURIComponent(to)}`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -980,7 +1074,7 @@ admin.post('/settings/test-email', async (c) => {
 
 admin.post('/settings/providers', async (c) => {
   const body = (await c.req.parseBody()) as Record<string, string>;
-  const cur = await getSettings(c.env.DB);
+  const cur = await getSettings(c.env.DB, c.get('branchId'));
   const submittedSecrets = [
     body.stripe_secret_key,
     body.stripe_webhook_secret,

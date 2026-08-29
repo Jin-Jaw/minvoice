@@ -80,4 +80,51 @@ describe('browser and public-route hardening', () => {
     );
     expect(response.status).toBe(413);
   });
+
+  it('creates and switches invoice branches while retaining the shared client list', async () => {
+    const authCookie = await loginCookie();
+    await createClient(DB, {
+      name: 'Shared Branch Client',
+      email: 'shared@example.test',
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    });
+
+    const response = await exports.default.fetch(
+      new Request('https://invoice.test/admin/branches', {
+        method: 'POST',
+        headers: {
+          cookie: authCookie,
+          'content-type': 'application/x-www-form-urlencoded',
+          'sec-fetch-site': 'same-origin',
+        },
+        body: new URLSearchParams({
+          name: 'Second Branch Test',
+          business_address: '2 Test Street\nLondon',
+          business_email: 'billing@example.test',
+          currency: 'EUR',
+          invoice_prefix: 'SECOND-',
+        }),
+        redirect: 'manual',
+      })
+    );
+
+    const branch = await DB.prepare(`SELECT id FROM branches WHERE name = 'Second Branch Test'`).first<{ id: number }>();
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('/admin/settings');
+    expect(response.headers.get('set-cookie')).toContain(`jj_invoice_branch=${branch!.id}`);
+
+    try {
+      const clients = await exports.default.fetch(
+        new Request('https://invoice.test/admin/clients', {
+          headers: { cookie: `${authCookie}; jj_invoice_branch=${branch!.id}` },
+        })
+      );
+      expect(clients.status).toBe(200);
+      expect(await clients.text()).toContain('Shared Branch Client');
+    } finally {
+      await DB.prepare('DELETE FROM branches WHERE id = ?').bind(branch!.id).run();
+    }
+  });
 });

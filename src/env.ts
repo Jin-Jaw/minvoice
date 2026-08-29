@@ -24,5 +24,5 @@ export type Bindings = {
 
 export type AppEnv = {
   Bindings: Bindings;
-  Variables: { secureHeadersNonce?: string };
+  Variables: { secureHeadersNonce?: string; branchId: number; branchName: string };
 };

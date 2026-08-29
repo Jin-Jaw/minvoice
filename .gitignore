@@ -3,6 +3,7 @@ node_modules/
 .dev.vars
 backups/
 worker-configuration.d.ts
+worker-startup.cpuprofile
 .DS_Store
 .claude/settings.local.json
 .playwright-mcp/

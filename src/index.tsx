@@ -1,8 +1,9 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { AppEnv, Bindings } from './env';
 import { sendOverdueReminders } from './services/reminders';
 import { accessMiddleware } from './middleware/access';
 import { csrfGuard } from './middleware/csrf';
+import { branchContext } from './middleware/branch';
 import { admin } from './routes/admin';
 import { pay } from './routes/pay';
 import { webhooks } from './routes/webhooks';
@@ -184,9 +185,9 @@ app.get('/health', async (c) => {
   }
 });
 
-// Uploaded business logo (public: appears on client-facing pages and emails).
-app.get('/logo', async (c) => {
-  const logo = await getLogo(c.env.DB);
+// Uploaded branch logo (public: appears on client-facing pages and emails).
+async function serveLogo(c: Context<AppEnv>, branchId: number) {
+  const logo = await getLogo(c.env.DB, branchId);
   if (!logo) return c.notFound();
   return new Response(logo.bytes as unknown as BodyInit, {
     headers: {
@@ -195,21 +196,28 @@ app.get('/logo', async (c) => {
       'X-Robots-Tag': 'noindex',
     },
   });
+}
+app.get('/logo', (c) => serveLogo(c, 1));
+app.get('/logo/:branchId', (c) => {
+  const branchId = Number(c.req.param('branchId'));
+  return Number.isInteger(branchId) && branchId > 0 ? serveLogo(c, branchId) : c.notFound();
 });
 
 // Admin: Cloudflare Access at the edge + JWT verification here (defense in depth).
 app.use('/admin/*', accessMiddleware);
+app.use('/admin/*', branchContext);
 
 // PDF route lives here (not in admin.tsx) so it can share the renderer with /pay/:token/pdf.
 app.get('/admin/invoices/:id/pdf', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
-  const invoice = await getInvoice(c.env.DB, id);
+  const branchId = c.get('branchId');
+  const invoice = await getInvoice(c.env.DB, branchId, id);
   if (!invoice) return c.notFound();
   const [items, settings, logo] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
-    getSettings(c.env.DB),
-    getLogo(c.env.DB),
+    getSettings(c.env.DB, branchId),
+    getLogo(c.env.DB, branchId),
   ]);
   return pdfResponse(
     await generateInvoicePdf(invoice, items, settings, `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`, c.env.ASSETS, logo),
@@ -220,9 +228,13 @@ app.get('/admin/invoices/:id/pdf', async (c) => {
 app.get('/admin/invoices/:id/print', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
-  const invoice = await getInvoice(c.env.DB, id);
+  const branchId = c.get('branchId');
+  const invoice = await getInvoice(c.env.DB, branchId, id);
   if (!invoice) return c.notFound();
-  const [items, settings] = await Promise.all([getInvoiceItems(c.env.DB, id), getSettings(c.env.DB)]);
+  const [items, settings] = await Promise.all([
+    getInvoiceItems(c.env.DB, id),
+    getSettings(c.env.DB, branchId),
+  ]);
   return c.html(
     <PrintInvoice
       invoice={invoice}
