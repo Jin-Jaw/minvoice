@@ -622,7 +622,7 @@ admin.post('/invoices/:id/status', async (c) => {
                 `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
               );
               if (sourcePdf) {
-                const filename = invoicePdfFilename(settings.business_name, invoice.issue_date);
+                const filename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
                 await setInvoiceSourcePdf(c.env.DB, id, pdf, filename, true);
                 await logInvoiceEvent(
                   c.env.DB,
@@ -778,7 +778,7 @@ admin.post('/invoices/:id/email-copy', async (c) => {
         `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
       );
       if (sourcePdf) {
-        const filename = invoicePdfFilename(settings.business_name, invoice.issue_date);
+        const filename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
         await setInvoiceSourcePdf(c.env.DB, id, pdf, filename, true);
         await logInvoiceEvent(
           c.env.DB,
@@ -823,7 +823,7 @@ admin.post('/invoices/:id/regenerate-pdf', async (c) => {
     logo,
     `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
   );
-  const filename = invoicePdfFilename(settings.business_name, invoice.issue_date);
+  const filename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
   await setInvoiceSourcePdf(c.env.DB, id, pdf, filename, true);
   await logInvoiceEvent(c.env.DB, id, 'source_pdf_archived', `PDF regenerated and archived as ${filename}`);
   return c.redirect(`/admin/invoices/${id}`);

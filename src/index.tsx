@@ -216,7 +216,7 @@ app.get('/admin/invoices/:id/pdf', async (c) => {
       logo,
       `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
     ),
-    invoicePdfFilename(settings.business_name, invoice.issue_date)
+    invoicePdfFilename(settings.branch_id, invoice.issue_date)
   );
 });
 

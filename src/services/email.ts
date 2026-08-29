@@ -209,7 +209,7 @@ export async function sendInvoiceEmail(
     attachments: [
       {
         content: pdfBytes,
-        filename: invoicePdfFilename(settings.business_name, invoice.issue_date),
+        filename: invoicePdfFilename(settings.branch_id, invoice.issue_date),
         type: 'application/pdf',
       },
     ],
