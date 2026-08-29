@@ -45,7 +45,7 @@ const item = (description: string): InvoiceItem => ({
 
 describe('PDF generation with embedded fonts', () => {
   it('German umlauts render via the FAST WinAnsi path (no font embedding)', async () => {
-    const settings = { ...(await getSettings(DB)), locale: 'de', business_name: 'Größenwahn Bücher' };
+    const settings = { ...(await getSettings(DB)), locale: 'de', business_name: 'Größenwahn Bücher', logo_url: null };
     const bytes = await generateInvoicePdf(fakeInvoice(), [item('Beratung für Änderungswünsche')], settings, undefined, env.ASSETS);
     expect(bytes.length).toBeGreaterThan(1000);
     expect(String.fromCharCode(...bytes.slice(0, 5))).toBe('%PDF-');
@@ -55,7 +55,7 @@ describe('PDF generation with embedded fonts', () => {
   });
 
   it('French Intl number formatting stays on the fast path (narrow spaces normalized)', async () => {
-    const settings = { ...(await getSettings(DB)), locale: 'fr' };
+    const settings = { ...(await getSettings(DB)), locale: 'fr', logo_url: null };
     const bytes = await generateInvoicePdf(fakeInvoice({ client_locale: 'fr' }), [item('Prestation de conseil détaillée')], settings, undefined, env.ASSETS);
     expect(bytes.length).toBeLessThan(15000);
   });
@@ -103,7 +103,7 @@ describe('PDF generation with embedded fonts', () => {
   });
 
   it('still renders without the assets binding (standard-font fallback)', async () => {
-    const settings = { ...(await getSettings(DB)), locale: 'de' };
+    const settings = { ...(await getSettings(DB)), locale: 'de', logo_url: null };
     const bytes = await generateInvoicePdf(fakeInvoice(), [item('Beratung')], settings, undefined, undefined);
     expect(String.fromCharCode(...bytes.slice(0, 5))).toBe('%PDF-');
     expect(bytes.length).toBeLessThan(15000); // no embedded fonts on this path

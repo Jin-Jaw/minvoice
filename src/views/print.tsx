@@ -2,6 +2,7 @@ import { raw } from 'hono/html';
 import type { InvoiceItem, InvoiceWithClient, Settings } from '../db/queries';
 import { formatTaxRate } from '../lib/money';
 import { formatCentsTag, formatDateTag, getStrings, resolveLocale } from '../lib/strings';
+import { accentForeground, safeAccent } from '../lib/color';
 
 /**
  * Print-optimized invoice document. Deliberately standalone — no app layout,
@@ -24,6 +25,8 @@ export function PrintInvoice({
   const t = getStrings(tag);
   const money = (cents: number) => formatCentsTag(cents, cur, tag);
   const stamp = invoice.status === 'paid' ? t.statusPaid : invoice.status === 'void' ? t.statusVoid : null;
+  const accent = safeAccent(settings.accent_color);
+  const accentFg = accentForeground(accent);
 
   return (
     <>
@@ -57,7 +60,8 @@ export function PrintInvoice({
   --ink-faint: #756e61;
   --line: #e3ded2;
   --line-strong: #cfc8b8;
-  --green: #1e5b43;
+  --green: ${accent};
+  --on-accent: ${accentFg};
   --rust: #a8402a;
 }
 * { box-sizing: border-box; }
@@ -89,7 +93,7 @@ body {
   cursor: pointer;
   text-decoration: none;
 }
-.toolbar button { background: var(--green); border-color: var(--green); color: #fdfdf9; }
+.toolbar button { background: var(--green); border-color: var(--green); color: var(--on-accent); }
 .sheet {
   max-width: 720px;
   margin: 16px auto 48px;

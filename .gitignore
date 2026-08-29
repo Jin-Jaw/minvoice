@@ -1,6 +1,7 @@
 node_modules/
 .wrangler/
 .dev.vars
+backups/
 worker-configuration.d.ts
 .DS_Store
 .claude/settings.local.json

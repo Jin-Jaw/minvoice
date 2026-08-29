@@ -43,10 +43,10 @@
   --ink-faint: light-dark(#756e61, #97907f);
   --line: light-dark(#e6e1d6, #37332a);
   --line-strong: light-dark(#cfc7b8, #4c4638);
-  --green: light-dark(#1e5b43, #82ba9c);
-  --green-deep: light-dark(#144532, #a3cfb6);
-  --green-tint: light-dark(#e9f0eb, #233830);
-  --green-line: light-dark(#cfdfd4, #35523f);
+  --green: light-dark(#c63b49, #ff98a1);
+  --green-deep: light-dark(#a92e3b, #ffc1c6);
+  --green-tint: light-dark(#fcecef, #3d2328);
+  --green-line: light-dark(#efbec5, #65343c);
   --amber: light-dark(#8a6510, #d9b05e);
   --amber-tint: light-dark(#f6eeda, #39301a);
   --amber-line: light-dark(#e8d9b4, #5a4a26);
@@ -60,7 +60,7 @@
   /* Text on solid accent fills (green buttons, overdue badge) — accents are
      dark pigments in light mode, lifted pastels in dark mode */
   --on-accent: light-dark(#fdfdf9, #17140f);
-  --focus-ring: light-dark(rgba(30, 91, 67, 0.18), rgba(130, 186, 156, 0.35));
+  --focus-ring: light-dark(rgba(198, 59, 73, 0.18), rgba(255, 152, 161, 0.35));
   --focus-ring-danger: light-dark(rgba(168, 64, 42, 0.14), rgba(224, 141, 119, 0.3));
   --radius: 8px;
   --radius-sm: 5px;

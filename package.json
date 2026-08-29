@@ -1,13 +1,13 @@
 {
-  "name": "minvoice",
+  "name": "@jin-jaw/invoices",
   "version": "0.1.0",
   "private": true,
-  "description": "Minimal single-business invoicing on Cloudflare Workers — Stripe & PayPal, PDF invoices, payment reminders. One-click deploy, no monthly fees.",
+  "description": "Jin&Jaw's private invoice archive and invoice generator on Cloudflare Workers and D1.",
   "license": "MIT",
-  "homepage": "https://minvoice.dev",
+  "homepage": "https://invoices.jin-jaw.co.uk",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ddyy/minvoice.git"
+    "url": "git+https://github.com/Jin-Jaw/minvoice.git"
   },
   "keywords": [
     "invoicing",
@@ -31,6 +31,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "test": "vitest run",
     "deploy:test": "wrangler d1 migrations apply DB --remote --env test && wrangler deploy --env test && node scripts/ensure-master-key.mjs --env test",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "db:backup:prod": "node scripts/backup.mjs",
     "db:migrate:test": "wrangler d1 migrations apply DB --remote --env test",
     "db:wipe:local": "wrangler d1 execute DB --local --file scripts/wipe-data.sql",
     "db:wipe:test": "wrangler d1 execute DB --remote --env test --file scripts/wipe-data.sql",
@@ -40,17 +42,17 @@
     "db:reset:prod": "wrangler d1 execute DB --remote --file scripts/reset-env.sql"
   },
   "dependencies": {
-    "hono": "^4.6.0",
+    "hono": "4.13.5",
     "jose": "^5.9.0",
     "pdf-lib": "^1.17.1",
     "stripe": "^17.0.0"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.18.5",
+    "@cloudflare/vitest-pool-workers": "0.22.0",
     "@pdf-lib/fontkit": "^1.1.1",
     "typescript": "^5.6.0",
-    "vitest": "^4.1.9",
-    "wrangler": "^4.0.0"
+    "vitest": "4.1.11",
+    "wrangler": "4.127.1"
   },
   "cloudflare": {
     "bindings": {

@@ -1,5 +1,9 @@
 # Minvoice
 
+> **Jin&Jaw fork:** production deployment and recovery notes live in
+> [`JINJAW_OPERATIONS.md`](JINJAW_OPERATIONS.md). The upstream project is
+> [`ddyy/minvoice`](https://github.com/ddyy/minvoice).
+
 Minvoice (**min**imal in**voice**) is single-business invoicing that runs entirely on Cloudflare —
 Workers, D1, Access, and Email Sending. Create invoices, email them with a PDF attached, get paid
 by card (Stripe Checkout) or PayPal, and keep clean books. No servers, no framework runtime, no

@@ -38,7 +38,8 @@ describe('uploaded logo', () => {
     const res = await exports.default.fetch(new Request('https://invoice.test/logo'));
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
-    expect(res.headers.get('Cache-Control')).toContain('public');
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(res.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
     expect(new Uint8Array(await res.arrayBuffer()).length).toBe(PNG_1X1.length);
   });
 });

@@ -76,7 +76,27 @@ admin.get('/setup', async (c) => {
   if (settings.setup_complete) return c.redirect('/admin');
   // Cloudflare geolocates the request — prefill the visitor's timezone.
   const detected = (c.req.raw.cf as { timezone?: string } | undefined)?.timezone;
-  return c.html(<SetupPage values={{ timezone: detected && isValidTimezone(detected) ? detected : undefined }} />);
+  return c.html(
+    <SetupPage
+      values={{
+        business_name: settings.business_name || 'Jin&Jaw LTD',
+        business_email: settings.business_email || 'contact@jin-jaw.co.uk',
+        business_address: settings.business_address,
+        currency: settings.currency || 'GBP',
+        timezone:
+          settings.timezone !== 'UTC'
+            ? settings.timezone
+            : detected && isValidTimezone(detected)
+              ? detected
+              : 'Europe/London',
+        invoice_prefix: settings.invoice_prefix || 'INV-',
+        payment_terms_days: settings.payment_terms_days ? String(settings.payment_terms_days) : '',
+        default_rate: settings.default_rate_cents
+          ? (settings.default_rate_cents / 100).toFixed(2)
+          : '',
+      }}
+    />
+  );
 });
 
 admin.post('/setup', async (c) => {
@@ -109,14 +129,14 @@ admin.post('/setup', async (c) => {
     business_name: values.business_name,
     business_address: values.business_address,
     business_email: values.business_email,
-    logo_url: null,
+    logo_url: 'https://jin-jaw.co.uk/assets/jinjaw-square.png',
     currency: values.currency,
     tax_rate_bps: 0,
     invoice_prefix: values.invoice_prefix,
     default_rate_cents: (values.default_rate && parseAmountToCents(values.default_rate)) || 0,
     timezone: values.timezone,
     locale: 'en',
-    accent_color: '#1e5b43',
+    accent_color: '#ef4958',
     // No send_email binding (zero-config deploys) -> Resend is the workable provider
     email_provider: c.env.EMAIL ? 'cloudflare' : 'resend',
     email_from: '',

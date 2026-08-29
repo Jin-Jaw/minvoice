@@ -75,7 +75,7 @@ const webhookPayload = (invoiceId: number, over: Partial<WebhookPayment> = {}): 
   invoiceId,
   providerRef: 'cs_1',
   amountCents: 10000,
-  currency: 'USD',
+  currency: 'GBP',
   ...over,
 });
 
@@ -91,7 +91,7 @@ beforeEach(async () => {
     DB.prepare('DELETE FROM clients'),
     DB.prepare(
       `UPDATE settings SET email_provider = 'cloudflare', email_from = '',
-       reminders_enabled = 0, last_seen_origin = '' WHERE id = 1`
+       reminders_enabled = 0, last_seen_origin = '', stripe_enabled = 1 WHERE id = 1`
     ),
   ]);
   await removeItemFailureTrigger();
@@ -400,7 +400,7 @@ describe('login rate limiting', () => {
 });
 
 describe('multi-currency invoices and reports', () => {
-  async function seedTwoCurrencies(): Promise<{ usd: number; eur: number }> {
+  async function seedTwoCurrencies(): Promise<{ gbp: number; eur: number }> {
     const clientId = await createClient(DB, {
       name: 'Global GmbH',
       email: 'ap@global.test',
@@ -408,7 +408,7 @@ describe('multi-currency invoices and reports', () => {
       default_rate_cents: null,
       payment_terms_days: null,
     });
-    const usd = await createInvoice(DB, {
+    const gbp = await createInvoice(DB, {
       client_id: clientId,
       issue_date: '2026-07-01',
       due_date: null,
@@ -425,28 +425,28 @@ describe('multi-currency invoices and reports', () => {
       currency: 'EUR',
       items: [{ description: 'Dev', quantity: 1, unit_price_cents: 5000 }],
     });
-    await markInvoiceSent(DB, usd);
+    await markInvoiceSent(DB, gbp);
     await markInvoiceSent(DB, eur);
-    return { usd, eur };
+    return { gbp, eur };
   }
 
   it('createInvoice takes the draft currency, defaulting to settings', async () => {
-    const { usd, eur } = await seedTwoCurrencies();
-    expect((await getInvoice(DB, usd))!.currency).toBe('USD');
+    const { gbp, eur } = await seedTwoCurrencies();
+    expect((await getInvoice(DB, gbp))!.currency).toBe('GBP');
     expect((await getInvoice(DB, eur))!.currency).toBe('EUR');
   });
 
   it('updateInvoice can change the currency and keeps it when omitted', async () => {
-    const { usd } = await seedTwoCurrencies();
+    const { gbp } = await seedTwoCurrencies();
     const items = [{ description: 'Design', quantity: 1, unit_price_cents: 10000 }];
-    await updateInvoice(DB, usd, {
+    await updateInvoice(DB, gbp, {
       issue_date: '2026-07-01', due_date: null, subject: null, notes: null, currency: 'GBP', items,
     });
-    expect((await getInvoice(DB, usd))!.currency).toBe('GBP');
-    await updateInvoice(DB, usd, {
+    expect((await getInvoice(DB, gbp))!.currency).toBe('GBP');
+    await updateInvoice(DB, gbp, {
       issue_date: '2026-07-01', due_date: null, subject: null, notes: null, items,
     });
-    expect((await getInvoice(DB, usd))!.currency).toBe('GBP');
+    expect((await getInvoice(DB, gbp))!.currency).toBe('GBP');
   });
 
   it('report sums are grouped per currency, never added together', async () => {
@@ -461,7 +461,7 @@ describe('multi-currency invoices and reports', () => {
     expect(summary.outstanding_count).toBe(1);
     expect(summary.by_currency).toEqual([
       { currency: 'EUR', outstanding_cents: 0, received_ytd_cents: 5000 },
-      { currency: 'USD', outstanding_cents: 10000, received_ytd_cents: 0 },
+      { currency: 'GBP', outstanding_cents: 10000, received_ytd_cents: 0 },
     ]);
 
     const invoiced = (await monthlyReport(DB))
@@ -469,14 +469,14 @@ describe('multi-currency invoices and reports', () => {
       .map((r) => [r.currency, r.invoiced_cents]);
     expect(invoiced).toEqual([
       ['EUR', 5000],
-      ['USD', 10000],
+      ['GBP', 10000],
     ]);
   });
 });
 
 describe('stale-currency/amount webhooks', () => {
   it('records the payment but refuses the paid transition on mismatch', async () => {
-    const id = await seedSentInvoice(10000); // USD 100.00
+    const id = await seedSentInvoice(10000); // GBP 100.00
     // Invoice edited to EUR after the checkout session was created
     await updateInvoice(DB, id, {
       issue_date: '2026-07-01', due_date: '2026-07-10', subject: 'Test', notes: null,
@@ -484,7 +484,7 @@ describe('stale-currency/amount webhooks', () => {
       items: [{ description: 'Work', quantity: 1, unit_price_cents: 10000 }],
     });
 
-    expect(await markInvoicePaidFromWebhook(DB, webhookPayload(id))).toBe('recorded'); // USD 10000
+    expect(await markInvoicePaidFromWebhook(DB, webhookPayload(id))).toBe('recorded'); // GBP 10000
     expect((await getInvoice(DB, id))?.status).toBe('sent'); // NOT paid
     expect(
       await DB.prepare('SELECT COUNT(*) FROM payments WHERE invoice_id = ?').bind(id).first<number>('COUNT(*)')

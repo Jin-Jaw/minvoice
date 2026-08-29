@@ -1,5 +1,6 @@
 import { raw } from 'hono/html';
 import type { Child } from 'hono/jsx';
+import { accentForeground, safeAccent } from '../lib/color';
 
 type LayoutProps = {
   title: string;
@@ -9,6 +10,8 @@ type LayoutProps = {
   /** 'admin' shows the nav bar; 'public' is the bare pay-page shell */
   variant?: 'admin' | 'public';
   currentPath?: string;
+  /** Optional customer-facing brand accent from business settings. */
+  accent?: string;
 };
 
 const NAV_LINKS = [
@@ -19,7 +22,9 @@ const NAV_LINKS = [
   { href: '/admin/settings', label: 'Settings' },
 ];
 
-export function Layout({ title, children, variant = 'admin', currentPath = '', lang = 'en' }: LayoutProps) {
+export function Layout({ title, children, variant = 'admin', currentPath = '', lang = 'en', accent }: LayoutProps) {
+  const brandAccent = accent ? safeAccent(accent) : undefined;
+  const brandForeground = brandAccent ? accentForeground(brandAccent) : undefined;
   return (
     <>
       {raw('<!DOCTYPE html>')}
@@ -27,7 +32,7 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{title}</title>
+        <title>{title} | Jin&amp;Jaw Invoices</title>
         {/* Admin-only theming: apply the theme cookie before the stylesheet
             paints (auto|light|dark; see :root[data-theme] in styles.css).
             Public pages never get the attribute and always render light. */}
@@ -47,14 +52,19 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
           crossorigin="anonymous"
         />
         <link rel="stylesheet" href="/styles.css" />
-        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        {brandAccent && brandForeground ? (
+          <style>
+            {raw(`:root{--green:${brandAccent};--green-deep:${brandAccent};--on-accent:${brandForeground};}`)}
+          </style>
+        ) : null}
+        <link rel="icon" type="image/png" href="/jinjaw-square.png" />
       </head>
       <body>
         {variant === 'admin' ? (
           <header class="site-header">
             <div class="container">
               <a href="/admin" class="site-brand">
-                Minvoice
+                Jin&amp;Jaw Invoices
               </a>
               <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false">
                 <span></span>
@@ -78,9 +88,13 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
         <main class={variant === 'public' ? 'pay-wrap' : 'container'}>{children}</main>
         {variant === 'admin' ? (
           <footer class="site-footer">
-            Minvoice — open source on{' '}
+            Private invoicing for Jin&amp;Jaw LTD ·{' '}
+            <a href="https://jin-jaw.co.uk" target="_blank" rel="noopener">
+              Main website
+            </a>{' '}
+            · Powered by{' '}
             <a href="https://github.com/ddyy/minvoice" target="_blank" rel="noopener">
-              GitHub
+              Minvoice
             </a>
           </footer>
         ) : null}

@@ -16,12 +16,12 @@ export type SetupFormValues = {
 export function SetupPage({ error, values }: { error?: string; values?: SetupFormValues }) {
   const v = values ?? {};
   return (
-    <Layout title="Welcome to Minvoice" variant="public">
+    <Layout title="Set up Jin&Jaw Invoices" variant="public">
       <div class="pay-card card">
         <h1 class="page-title">Welcome 👋</h1>
         <p class="muted mt-1">
-          Before the first invoice goes out, Minvoice needs a few details. Everything here can be
-          changed later in Settings.
+          Confirm the registered details that should appear on every Jin&amp;Jaw invoice. Everything
+          here can be changed later in Settings.
         </p>
 
         {error ? <div class="banner banner-error mt-2">{error}</div> : null}
@@ -29,13 +29,25 @@ export function SetupPage({ error, values }: { error?: string; values?: SetupFor
         <form method="post" action="/admin/setup" class="mt-2">
           <div class="form-group">
             <label for="business_name">Business name *</label>
-            <input type="text" id="business_name" name="business_name" value={v.business_name ?? ''} required />
+            <input
+              type="text"
+              id="business_name"
+              name="business_name"
+              value={v.business_name || 'Jin&Jaw LTD'}
+              required
+            />
             <span class="muted">Appears on invoices, emails, and the payment page.</span>
           </div>
 
           <div class="form-group">
             <label for="business_email">Business email *</label>
-            <input type="email" id="business_email" name="business_email" value={v.business_email ?? ''} required />
+            <input
+              type="email"
+              id="business_email"
+              name="business_email"
+              value={v.business_email || 'contact@jin-jaw.co.uk'}
+              required
+            />
             <span class="muted">
               Reply-to on client emails, and where payment and error notifications go.
             </span>
@@ -55,7 +67,7 @@ export function SetupPage({ error, values }: { error?: string; values?: SetupFor
                 type="text"
                 id="currency"
                 name="currency"
-                value={v.currency ?? 'USD'}
+                value={v.currency ?? 'GBP'}
                 list="currency-list"
                 autocomplete="off"
                 required
@@ -75,7 +87,7 @@ export function SetupPage({ error, values }: { error?: string; values?: SetupFor
                 value={v.timezone ?? ''}
                 list="tz-list"
                 autocomplete="off"
-                placeholder="Type to search, e.g. America/Los_Angeles"
+                placeholder="Type to search, e.g. Europe/London"
                 required
               />
               <datalist id="tz-list">

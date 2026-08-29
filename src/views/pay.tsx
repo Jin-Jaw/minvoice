@@ -26,7 +26,12 @@ export function DraftHold({ invoice, settings }: { invoice: InvoiceWithClient; s
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
   return (
-    <Layout title={`${t.invoice} ${invoice.number} — ${settings.business_name}`} variant="public" lang={tag}>
+    <Layout
+      title={`${t.invoice} ${invoice.number} — ${settings.business_name}`}
+      variant="public"
+      lang={tag}
+      accent={settings.accent_color}
+    >
       <div class="pay-card card error-card">
         <h1 class="error-title">{t.draftHoldTitle}</h1>
         <p class="error-note">{t.draftHoldBody(settings.business_name, invoice.number)}</p>
@@ -43,7 +48,12 @@ export function PublicInvoice({ invoice, items, settings, justPaid, underReview,
   // Drafts are not payable — amounts may still change before the invoice is sent.
   const payable = invoice.status === 'sent';
   return (
-    <Layout title={`${t.invoice} ${invoice.number} — ${settings.business_name}`} variant="public" lang={tag}>
+    <Layout
+      title={`${t.invoice} ${invoice.number} — ${settings.business_name}`}
+      variant="public"
+      lang={tag}
+      accent={settings.accent_color}
+    >
       {underReview ? (
         <div class="banner banner-warning">{t.paymentUnderReview}</div>
       ) : justPaid && invoice.status !== 'paid' ? (

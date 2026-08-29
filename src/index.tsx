@@ -36,6 +36,18 @@ import { bodyLimit } from 'hono/body-limit';
 
 const app = new Hono<AppEnv>();
 
+// Financial records and capability-token invoice pages should never be
+// framed, indexed, MIME-sniffed, or retained in shared browser/proxy caches.
+app.use('*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'private, no-store');
+  c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  c.header('Referrer-Policy', 'same-origin');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('X-Robots-Tag', 'noindex, nofollow');
+});
+
 // Zero-config base URL: when APP_BASE_URL isn't set (workers.dev / one-click
 // deploys), derive it per request so emails, checkout redirects, and PDF
 // links point at wherever the app is actually served.
