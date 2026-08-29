@@ -63,6 +63,10 @@ export type Strings = {
   emailInvoiceBody: (business: string, number: string, total: string, dueDate: string | null) => string;
   viewAndPay: string;
   pdfAttached: string;
+  amountDue: string;
+  paymentDetails: string;
+  emailSignoff: string;
+  emailReplyHint: string;
   viewAndPayButton: string;
   orCopyLink: string;
 

@@ -97,14 +97,18 @@ export function toBase64(bytes: Uint8Array): string {
  * Email the invoice to the client with the PDF and any payment instructions
  * stored in invoice notes. Online payment links are deliberately omitted.
  * Throws on failure — callers surface the error, they don't mark anything sent.
+ *
+ * `copyTo` reroutes the identical message to that address instead (no cc) —
+ * the "Email me a copy" action; the client is not contacted.
  */
 export async function sendInvoiceEmail(
   env: Bindings,
   invoice: InvoiceWithClient,
   settings: Settings,
-  pdfBytes: Uint8Array
+  pdfBytes: Uint8Array,
+  copyTo?: string
 ): Promise<void> {
-  if (!invoice.client_email) throw new Error('client has no email address');
+  if (!copyTo && !invoice.client_email) throw new Error('client has no email address');
 
   const businessName = settings.business_name || 'Minvoice';
   const tag = resolveLocale(settings.locale, invoice.client_locale);
@@ -113,10 +117,24 @@ export async function sendInvoiceEmail(
   const total = formatCentsTag(invoice.total_cents, invoice.currency, tag);
   // No due date -> no due wording at all; don't invent terms like "on receipt".
   const dueDate = invoice.due_date ? formatDateTag(invoice.due_date, tag) : null;
+  // The logo must be a public absolute URL to render in mail clients; the
+  // per-branch logo_url qualifies when absolute, else the served brand mark.
+  const logoUrl = /^https?:\/\//i.test(settings.logo_url ?? '')
+    ? settings.logo_url!
+    : `${env.APP_BASE_URL}/jinjaw-square.png`;
+  const footerIdentity = [
+    businessName,
+    settings.business_address ? settings.business_address.replace(/\r?\n+/g, ', ') : null,
+    settings.business_email || null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const cellLabel =
+    'font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8b969c; padding: 0 0 3px;';
 
   await deliver(env, settings, {
-    to: invoice.client_email,
-    cc: ['jad@jin-jaw.co.uk'],
+    to: copyTo ?? invoice.client_email!,
+    ...(copyTo ? {} : { cc: ['jad@jin-jaw.co.uk'] }),
     fromName: businessName,
     ...(settings.business_email ? { replyTo: settings.business_email } : {}),
     subject: t.emailInvoiceSubject(invoice.number, businessName, invoice.subject, total),
@@ -126,28 +144,67 @@ export async function sendInvoiceEmail(
       t.emailInvoiceBody(businessName, invoice.number, total, dueDate),
       ``,
       t.pdfAttached,
-      ...(invoice.notes ? [``, `${t.notes}:`, invoice.notes] : []),
+      ...(invoice.notes ? [``, `${t.paymentDetails}:`, invoice.notes] : []),
     ].join('\n'),
     html: `
-<div style="font-family: Georgia, 'Times New Roman', serif; max-width: 560px; margin: 0 auto; color: #1d1a15;">
-  <div style="border-top: 3px solid ${accent}; padding: 28px 4px 8px;">
-    <h1 style="font-size: 22px; margin: 0 0 4px;">${escapeHtml(businessName)}</h1>
-    <p style="color: #6b6459; margin: 0 0 24px; font-size: 14px;">${escapeHtml(t.invoice)} ${escapeHtml(invoice.number)}${
-      invoice.subject ? ` — ${escapeHtml(invoice.subject)}` : ''
-    }</p>
-    <p style="font-size: 15px; line-height: 1.6;">${escapeHtml(t.greeting(invoice.client_name))}</p>
-    <p style="font-size: 15px; line-height: 1.6;">
+<div style="max-width: 560px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Arial, sans-serif; color: #1f272b;">
+  <div style="background: #ffffff; border: 1px solid #e4e7e9; border-top: 3px solid ${accent}; border-radius: 8px; padding: 32px 36px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 0 22px;">
+      <tr>
+        <td style="padding-right: 12px;"><img src="${logoUrl}" alt="" width="40" height="40" style="display: block; border-radius: 8px;"></td>
+        <td>
+          <div style="font-size: 17px; font-weight: 700;">${escapeHtml(businessName)}</div>
+          <div style="font-size: 13px; color: #5c686e;">${escapeHtml(t.invoice)} ${escapeHtml(invoice.number)}${
+            invoice.subject ? ` — ${escapeHtml(invoice.subject)}` : ''
+          }</div>
+        </td>
+      </tr>
+    </table>
+    <p style="font-size: 15px; line-height: 1.6; margin: 0 0 12px;">${escapeHtml(t.greeting(invoice.client_name))}</p>
+    <p style="font-size: 15px; line-height: 1.6; margin: 0 0 22px;">
       ${escapeHtml(t.emailInvoiceBody(businessName, invoice.number, total, dueDate))}
       ${escapeHtml(t.pdfAttached)}
     </p>
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background: #f9fafb; border: 1px solid #eef1f2; border-radius: 8px; margin: 0 0 22px;">
+      <tr>
+        <td style="padding: 16px 18px;">
+          <div style="${cellLabel}">${escapeHtml(t.amountDue)}</div>
+          <div style="font-size: 18px; font-weight: 700;">${escapeHtml(total)}</div>
+        </td>
+        ${
+          dueDate
+            ? `<td style="padding: 16px 18px;">
+          <div style="${cellLabel}">${escapeHtml(t.due)}</div>
+          <div style="font-size: 15px; font-weight: 600;">${escapeHtml(dueDate)}</div>
+        </td>`
+            : ''
+        }
+        <td style="padding: 16px 18px;">
+          <div style="${cellLabel}">${escapeHtml(t.invoice)}</div>
+          <div style="font-size: 15px; font-weight: 600;">${escapeHtml(invoice.number)}</div>
+        </td>
+      </tr>
+    </table>
+    <div style="border: 1px solid #e4e7e9; border-radius: 8px; padding: 12px 14px; margin: 0 0 22px;">
+      <div style="font-size: 13.5px; font-weight: 600;">${escapeHtml(invoice.number)}.pdf</div>
+      <div style="font-size: 12px; color: #8b969c;">PDF</div>
+    </div>
     ${
       invoice.notes
-        ? `<div style="margin-top: 24px; padding: 16px; background: #f6f4ee; border-radius: 5px;">
-      <strong style="font-family: -apple-system, sans-serif; font-size: 13px;">${escapeHtml(t.notes)}</strong>
-      <div style="margin-top: 8px; color: #514b41; font-size: 13px; line-height: 1.55; white-space: pre-line;">${escapeHtml(invoice.notes)}</div>
+        ? `<div style="background: #f9fafb; border: 1px solid #eef1f2; border-radius: 8px; padding: 16px 18px; margin: 0 0 22px;">
+      <div style="${cellLabel}">${escapeHtml(t.paymentDetails)}</div>
+      <div style="font-size: 13.5px; line-height: 1.6; color: #3d474c; white-space: pre-line;">${escapeHtml(invoice.notes)}</div>
     </div>`
         : ''
     }
+    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 22px;">
+      ${escapeHtml(t.emailSignoff)}<br>
+      <strong>${escapeHtml(businessName)}</strong>
+    </p>
+    <div style="border-top: 1px solid #eef1f2; padding-top: 14px;">
+      <div style="font-size: 12px; color: #8b969c;">${escapeHtml(t.emailReplyHint)}</div>
+      <div style="font-size: 12px; color: #8b969c; margin-top: 3px;">${escapeHtml(footerIdentity)}</div>
+    </div>
   </div>
 </div>`,
     attachments: [

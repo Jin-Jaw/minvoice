@@ -51,6 +51,10 @@ export const fr: Strings = {
     `${business} vous a envoyé la facture ${number} d'un montant de ${total}${dueDate ? `, à régler avant le ${dueDate}` : ''}.`,
   viewAndPay: 'Voir et payer en ligne :',
   pdfAttached: 'Une copie PDF est jointe.',
+  amountDue: 'Montant dû',
+  paymentDetails: 'Détails de paiement',
+  emailSignoff: 'Merci,',
+  emailReplyHint: 'Des questions sur cette facture ? Répondez simplement à cet e-mail.',
   viewAndPayButton: 'Voir et payer la facture',
   orCopyLink: 'Ou copiez ce lien :',
 

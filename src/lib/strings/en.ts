@@ -49,6 +49,10 @@ export const en: Strings = {
     `${business} has sent you invoice ${number} for ${total}${dueDate ? `, due by ${dueDate}` : ''}.`,
   viewAndPay: 'View and pay online:',
   pdfAttached: 'A PDF copy is attached.',
+  amountDue: 'Amount due',
+  paymentDetails: 'Payment details',
+  emailSignoff: 'Thank you,',
+  emailReplyHint: 'Questions about this invoice? Just reply to this email.',
   viewAndPayButton: 'View & pay invoice',
   orCopyLink: 'Or copy this link:',
 

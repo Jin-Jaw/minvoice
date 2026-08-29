@@ -132,6 +132,18 @@ export function InvoiceDetailPage({
               Duplicate
             </button>
           </form>
+          {emailEnabled ? (
+            <form method="post" action={`/admin/invoices/${invoice.id}/email-copy`}>
+              <button
+                type="submit"
+                class="btn btn-secondary"
+                title="Send this invoice email (with PDF) to your business address — the client is not contacted"
+              >
+                <Icon name="send" />
+                Email me a copy
+              </button>
+            </form>
+          ) : null}
           <a
             class="btn btn-secondary"
             href={`/admin/invoices/${invoice.id}/print?auto=1`}

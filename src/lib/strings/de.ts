@@ -51,6 +51,10 @@ export const de: Strings = {
     `${business} hat Ihnen die Rechnung ${number} über ${total} gesendet${dueDate ? `, fällig am ${dueDate}` : ''}.`,
   viewAndPay: 'Online ansehen und bezahlen:',
   pdfAttached: 'Eine PDF-Kopie ist beigefügt.',
+  amountDue: 'Fälliger Betrag',
+  paymentDetails: 'Zahlungsdetails',
+  emailSignoff: 'Vielen Dank,',
+  emailReplyHint: 'Fragen zu dieser Rechnung? Antworten Sie einfach auf diese E-Mail.',
   viewAndPayButton: 'Rechnung ansehen & bezahlen',
   orCopyLink: 'Oder kopieren Sie diesen Link:',
 

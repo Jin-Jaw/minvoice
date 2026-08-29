@@ -709,6 +709,43 @@ admin.post('/invoices/:id/duplicate', async (c) => {
   return c.redirect(`/admin/invoices/${newId}`);
 });
 
+// "Email me a copy": the exact client email (with PDF) rerouted to the
+// business address. The client is never contacted and no status changes.
+admin.post('/invoices/:id/email-copy', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.notFound();
+
+  const invoice = await getInvoiceById(c.env.DB, id);
+  if (!invoice) return c.notFound();
+  const branchId = invoice.branch_id;
+
+  const settings = await getSettings(c.env.DB, branchId);
+  const to = settings.business_email;
+  if (!to) {
+    return c.redirect(
+      `/admin/invoices/${id}?email_error=${encodeURIComponent('Set a business email in Settings first — the copy is sent to it.')}`
+    );
+  }
+  try {
+    const [items, sourcePdf] = await Promise.all([
+      getInvoiceItems(c.env.DB, id),
+      getInvoiceSourcePdf(c.env.DB, id),
+    ]);
+    const pdf =
+      sourcePdf?.bytes ??
+      (await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, await getLogo(c.env.DB, branchId)));
+    await sendInvoiceEmail(c.env, invoice, settings, pdf, to);
+  } catch (e) {
+    console.error('invoice copy email failed', e);
+    const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
+    return c.redirect(
+      `/admin/invoices/${id}?email_error=${encodeURIComponent(`Email failed to send — ${reason}`)}`
+    );
+  }
+  await logInvoiceEvent(c.env.DB, id, 'emailed', `Copy emailed to ${to}`);
+  return c.redirect(`/admin/invoices/${id}?emailed=${encodeURIComponent(to)}`);
+});
+
 admin.post('/invoices/:id/payments/:pid/undo', async (c) => {
   const id = Number(c.req.param('id'));
   const pid = Number(c.req.param('pid'));
