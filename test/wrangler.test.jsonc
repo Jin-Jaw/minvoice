@@ -6,6 +6,7 @@
   "assets": { "directory": "../public", "binding": "ASSETS" },
   "vars": {
     "ADMIN_PASSWORD": "integration-test-password",
+    "SETTINGS_MASTER_KEY": "integration-test-master-key-0123456789abcdef",
     "ACCESS_TEAM_DOMAIN": "",
     "ACCESS_AUD": "",
     "APP_BASE_URL": "https://invoice.test"

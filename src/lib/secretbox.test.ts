@@ -55,13 +55,13 @@ describe('secretbox', () => {
     expect(await unbox(KEY, '')).toBe('');
   });
 
-  it('sealIfKeyed encrypts only under a VALID key', async () => {
-    expect(await sealIfKeyed(undefined, 'v')).toBe('v');
-    expect(await sealIfKeyed('', 'v')).toBe('v');
-    // placeholder/short keys must NOT encrypt — publicly known key would be
-    // worse than plaintext (and would silence the unencrypted warning)
-    expect(await sealIfKeyed('change-me', 'v')).toBe('v');
-    expect(await sealIfKeyed('short', 'v')).toBe('v');
+  it('sealIfKeyed refuses to persist secrets without a VALID key', async () => {
+    await expect(sealIfKeyed(undefined, 'v')).rejects.toThrow(/SETTINGS_MASTER_KEY/);
+    await expect(sealIfKeyed('', 'v')).rejects.toThrow(/SETTINGS_MASTER_KEY/);
+    // Placeholder/short keys must fail closed — encrypting with a known key
+    // would be worse than plaintext and would silence the configuration alert.
+    await expect(sealIfKeyed('change-me', 'v')).rejects.toThrow(/SETTINGS_MASTER_KEY/);
+    await expect(sealIfKeyed('short', 'v')).rejects.toThrow(/SETTINGS_MASTER_KEY/);
     expect(await sealIfKeyed(KEY, '')).toBe('');
     const sealed = await sealIfKeyed(KEY, 'v');
     expect(isBoxed(sealed)).toBe(true);

@@ -13,10 +13,10 @@ export type SetupFormValues = {
   default_rate?: string;
 };
 
-export function SetupPage({ error, values }: { error?: string; values?: SetupFormValues }) {
+export function SetupPage({ error, values, nonce }: { error?: string; values?: SetupFormValues; nonce?: string }) {
   const v = values ?? {};
   return (
-    <Layout title="Set up Jin&Jaw Invoices" variant="public">
+    <Layout title="Set up Jin&Jaw Invoices" variant="public" nonce={nonce}>
       <div class="pay-card card">
         <h1 class="page-title">Welcome 👋</h1>
         <p class="muted mt-1">

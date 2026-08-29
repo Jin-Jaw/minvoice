@@ -1,6 +1,10 @@
 export type Bindings = {
   DB: D1Database;
   ASSETS: Fetcher;
+  /** Production abuse controls. Optional only so local/unit environments that
+   *  do not emulate Rate Limiting bindings can still start. */
+  PDF_RATE_LIMITER?: RateLimit;
+  WEBHOOK_RATE_LIMITER?: RateLimit;
   EMAIL?: SendEmail; // optional: absent when Email Sending isn't onboarded — use Resend instead
   APP_BASE_URL?: string; // optional: falls back to the request origin per request
   ACCESS_TEAM_DOMAIN: string;
@@ -18,4 +22,7 @@ export type Bindings = {
   ADMIN_PASSWORD?: string; // fallback admin login until Cloudflare Access is configured
 };
 
-export type AppEnv = { Bindings: Bindings };
+export type AppEnv = {
+  Bindings: Bindings;
+  Variables: { secureHeadersNonce?: string };
+};

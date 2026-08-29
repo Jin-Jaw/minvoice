@@ -22,6 +22,7 @@ import { generateInvoicePdf, pdfResponse } from './services/pdf';
 import { sendErrorAlert } from './services/email';
 import { NotFoundPage } from './views/error';
 import { AuthSetupPage, LoginPage } from './views/admin/login';
+import { PrintInvoice } from './views/print';
 import {
   authMode,
   isLocalRequest,
@@ -33,8 +34,42 @@ import {
 import { resolveBaseUrl } from './lib/base-url';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
+import { redactSensitivePath } from './lib/redact';
+import { NONCE, secureHeaders } from 'hono/secure-headers';
 
 const app = new Hono<AppEnv>();
+
+// A fresh nonce on every response permits only the small, server-rendered
+// scripts/styles emitted by this app. Inline event/style attributes remain
+// forbidden, which keeps stored invoice/client text inert in the browser.
+app.use(
+  '*',
+  secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'none'"],
+      baseUri: ["'none'"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+      imgSrc: ["'self'", 'data:'],
+      objectSrc: ["'none'"],
+      scriptSrc: ["'self'", NONCE],
+      scriptSrcAttr: ["'none'"],
+      styleSrc: ["'self'", NONCE],
+      styleSrcAttr: ["'none'"],
+      workerSrc: ["'none'"],
+      upgradeInsecureRequests: [],
+    },
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: 'same-origin',
+    crossOriginResourcePolicy: 'same-origin',
+    strictTransportSecurity: 'max-age=31536000; includeSubDomains; preload',
+    xFrameOptions: 'DENY',
+    referrerPolicy: 'same-origin',
+    permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [] },
+  })
+);
 
 // Financial records and capability-token invoice pages should never be
 // framed, indexed, MIME-sniffed, or retained in shared browser/proxy caches.
@@ -62,12 +97,26 @@ app.get('/', (c) => c.redirect('/admin'));
 // Cap admin request bodies BEFORE any handler buffers them: the largest
 // legitimate admin body is the 500 KB logo upload plus multipart overhead.
 // Without this, parseBody() would buffer arbitrarily large uploads into
-// Worker memory before the size check runs. Webhooks are deliberately not
-// capped — provider payload sizes are theirs to choose.
+// Worker memory before the size check runs.
 app.use(
   '/admin/*',
   bodyLimit({ maxSize: 1024 * 1024, onError: (c) => c.text('Request body too large (1 MB limit).', 413) })
 );
+
+// Provider deliveries are small JSON documents. Bound public ingress before
+// either route materializes the body, then add a per-colo global route budget
+// to make invalid-signature floods cheap to reject.
+app.use(
+  '/webhooks/*',
+  bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.text('Webhook body too large.', 413) })
+);
+app.use('/webhooks/*', async (c, next) => {
+  const limiter = c.env.WEBHOOK_RATE_LIMITER;
+  if (limiter && !(await limiter.limit({ key: c.req.path })).success) {
+    return c.text('Too many webhook requests.', 429);
+  }
+  await next();
+});
 
 // CSRF: reject cross-site state-changing requests to any admin route (incl.
 // login). Registered before the routes below so it covers them all.
@@ -78,8 +127,8 @@ app.use('/admin/*', csrfGuard);
 app.get('/admin/login', (c) => {
   const mode = authMode(c.env);
   if (mode === 'access') return c.redirect('/admin');
-  if (mode === 'unconfigured') return c.html(<AuthSetupPage />, 403);
-  return c.html(<LoginPage loggedOut={c.req.query('out') === '1'} />);
+  if (mode === 'unconfigured') return c.html(<AuthSetupPage nonce={c.get('secureHeadersNonce')} />, 403);
+  return c.html(<LoginPage loggedOut={c.req.query('out') === '1'} nonce={c.get('secureHeadersNonce')} />);
 });
 
 app.post('/admin/login', async (c) => {
@@ -91,7 +140,7 @@ app.post('/admin/login', async (c) => {
   // observe a below-limit counter. Success clears the row.
   const ip = c.req.header('cf-connecting-ip') ?? 'local';
   if ((await recordLoginAttempt(c.env.DB, ip, LOGIN_WINDOW_MINUTES)) > LOGIN_MAX_ATTEMPTS) {
-    return c.html(<LoginPage lockedOut />, 429);
+    return c.html(<LoginPage lockedOut nonce={c.get('secureHeadersNonce')} />, 429);
   }
 
   const body = await c.req.parseBody();
@@ -111,7 +160,7 @@ app.post('/admin/login', async (c) => {
     return c.redirect('/admin');
   }
   await new Promise((r) => setTimeout(r, 800)); // per-request friction on top of the counter
-  return c.html(<LoginPage error />, 401);
+  return c.html(<LoginPage error nonce={c.get('secureHeadersNonce')} />, 401);
 });
 
 app.get('/admin/logout', (c) => {
@@ -168,6 +217,23 @@ app.get('/admin/invoices/:id/pdf', async (c) => {
   );
 });
 
+app.get('/admin/invoices/:id/print', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.notFound();
+  const invoice = await getInvoice(c.env.DB, id);
+  if (!invoice) return c.notFound();
+  const [items, settings] = await Promise.all([getInvoiceItems(c.env.DB, id), getSettings(c.env.DB)]);
+  return c.html(
+    <PrintInvoice
+      invoice={invoice}
+      items={items}
+      settings={settings}
+      payUrl={`${c.env.APP_BASE_URL}/pay/${invoice.public_token}`}
+      nonce={c.get('secureHeadersNonce')}
+    />
+  );
+});
+
 app.route('/admin', admin);
 
 // Public + provider-facing routes — deliberately outside the Access boundary.
@@ -176,13 +242,14 @@ app.route('/webhooks', webhooks);
 
 app.notFound((c) => {
   c.header('X-Robots-Tag', 'noindex');
-  return c.html(<NotFoundPage />, 404);
+  return c.html(<NotFoundPage nonce={c.get('secureHeadersNonce')} />, 404);
 });
 
 // Unhandled errors: log, alert the business email (fire-and-forget), 500.
 app.onError((err, c) => {
-  console.error('unhandled error', c.req.path, err);
-  c.executionCtx.waitUntil(sendErrorAlert(c.env, c.env.DB, err, c.req.path));
+  const safePath = redactSensitivePath(c.req.path);
+  console.error('unhandled error', safePath, err);
+  c.executionCtx.waitUntil(sendErrorAlert(c.env, c.env.DB, err, safePath));
   return c.text('Something went wrong. The error has been reported.', 500);
 });
 

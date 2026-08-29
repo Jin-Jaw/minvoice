@@ -6,7 +6,7 @@ import { addDaysISO, isValidTimezone, todayInTz } from '../lib/dates';
 import { configWarnings, secretConfigured } from '../lib/config';
 import { accentUsable, safeAccent } from '../lib/color';
 import { effectiveProviderEnv, encryptStoredSecrets, keySource } from '../lib/providers';
-import { sealIfKeyed, unbox } from '../lib/secretbox';
+import { sealIfKeyed, unbox, validMasterKey } from '../lib/secretbox';
 import { isLocalRequest } from '../lib/admin-auth';
 import { parseSchedule } from '../lib/reminders';
 import {
@@ -78,6 +78,7 @@ admin.get('/setup', async (c) => {
   const detected = (c.req.raw.cf as { timezone?: string } | undefined)?.timezone;
   return c.html(
     <SetupPage
+      nonce={c.get('secureHeadersNonce')}
       values={{
         business_name: settings.business_name || 'Jin&Jaw LTD',
         business_email: settings.business_email || 'contact@jin-jaw.co.uk',
@@ -122,7 +123,10 @@ admin.post('/setup', async (c) => {
     problems.push('currency (3-letter code; zero-decimal currencies like JPY are not supported)');
   if (!isValidTimezone(values.timezone)) problems.push('time zone');
   if (problems.length) {
-    return c.html(<SetupPage error={`Please provide a valid ${problems.join(', ')}.`} values={values} />, 400);
+    return c.html(
+      <SetupPage error={`Please provide a valid ${problems.join(', ')}.`} values={values} nonce={c.get('secureHeadersNonce')} />,
+      400
+    );
   }
 
   await updateSettings(c.env.DB, {
@@ -262,6 +266,7 @@ admin.get('/', async (c) => {
         .filter((w) => w.category !== 'auth')
         .map((w) => w.text)}
       currentPath="/admin"
+      nonce={c.get('secureHeadersNonce')}
     />
   );
 });
@@ -276,6 +281,7 @@ admin.get('/invoices/new', async (c) => {
       clients={clients}
       settings={settings}
       suggestedNumber={await suggestedInvoiceNumber(c.env.DB, settings)}
+      nonce={c.get('secureHeadersNonce')}
     />
   );
 });
@@ -293,6 +299,7 @@ admin.post('/invoices/new', async (c) => {
         clients={clients}
         settings={settings}
         suggestedNumber={suggested}
+        nonce={c.get('secureHeadersNonce')}
         errors={errors}
         formValues={{
           number: str(body.number),
@@ -377,6 +384,7 @@ admin.get('/invoices/:id', async (c) => {
       emailEnabled={settings.email_provider !== 'none'}
       notice={emailedTo ? `Invoice emailed to ${emailedTo}.` : undefined}
       error={emailError}
+      nonce={c.get('secureHeadersNonce')}
     />
   );
 });
@@ -401,7 +409,14 @@ admin.get('/invoices/:id/edit', async (c) => {
   ]);
 
   return c.html(
-    <InvoiceFormPage currentPath="/admin" clients={clients} settings={settings} invoice={invoice} items={items} />
+    <InvoiceFormPage
+      currentPath="/admin"
+      clients={clients}
+      settings={settings}
+      invoice={invoice}
+      items={items}
+      nonce={c.get('secureHeadersNonce')}
+    />
   );
 });
 
@@ -428,6 +443,7 @@ admin.post('/invoices/:id/edit', async (c) => {
         clients={clients}
         settings={settings}
         invoice={invoice}
+        nonce={c.get('secureHeadersNonce')}
         errors={problems}
         formValues={{
           client_id: str(body.client_id),
@@ -613,7 +629,9 @@ admin.post('/invoices/:id/payments/:pid/note', async (c) => {
 
 admin.get('/clients', async (c) => {
   const clients = await listClients(c.env.DB, true);
-  return c.html(<ClientsPage currentPath="/admin/clients" clients={clients} />);
+  return c.html(
+    <ClientsPage currentPath="/admin/clients" clients={clients} nonce={c.get('secureHeadersNonce')} />
+  );
 });
 
 admin.post('/clients', async (c) => {
@@ -630,7 +648,9 @@ admin.post('/clients', async (c) => {
 });
 
 // Registered before /clients/:id so the static path wins.
-admin.get('/clients/new', (c) => c.html(<ClientNewPage currentPath="/admin/clients" />));
+admin.get('/clients/new', (c) =>
+  c.html(<ClientNewPage currentPath="/admin/clients" nonce={c.get('secureHeadersNonce')} />)
+);
 
 admin.get('/clients/:id', async (c) => {
   const id = Number(c.req.param('id'));
@@ -639,7 +659,9 @@ admin.get('/clients/:id', async (c) => {
   const client = await getClient(c.env.DB, id);
   if (!client) return c.notFound();
 
-  return c.html(<ClientEditPage currentPath="/admin/clients" client={client} />);
+  return c.html(
+    <ClientEditPage currentPath="/admin/clients" client={client} nonce={c.get('secureHeadersNonce')} />
+  );
 });
 
 admin.post('/clients/:id', async (c) => {
@@ -762,6 +784,7 @@ admin.get('/payments', async (c) => {
       currency={settings.currency}
       clients={clients}
       clientId={clientId}
+      nonce={c.get('secureHeadersNonce')}
     />
   );
 });
@@ -784,6 +807,7 @@ admin.get('/reports', async (c) => {
       currency={settings.currency}
       clients={clients}
       clientId={clientId}
+      nonce={c.get('secureHeadersNonce')}
     />
   );
 });
@@ -817,6 +841,7 @@ admin.get('/settings', async (c) => {
   const emailTestOk = c.req.query('email_test') ?? null;
   const emailTestErr = c.req.query('email_test_err') ?? null;
   const resendKept = c.req.query('resend_kept') === '1';
+  const secretSaveBlocked = c.req.query('secret_key_required') === '1';
   const accentKeptQ = c.req.query('accent_kept') === '1';
   // Masked-field hints show the last 4 chars of the real key, so boxed values
   // are opened first; undecryptable ones fall back to '' (alert explains why).
@@ -854,9 +879,11 @@ admin.get('/settings', async (c) => {
       emailTestOk={emailTestOk}
       emailTestErr={emailTestErr}
       resendKept={resendKept}
+      secretSaveBlocked={secretSaveBlocked}
       accentKept={accentKeptQ}
       alerts={await configWarnings(c.env, settings, { localDev: isLocalRequest(c.req.raw) })}
       theme={themeCookie(c)}
+      nonce={c.get('secureHeadersNonce')}
     />
   );
 });
@@ -916,6 +943,9 @@ admin.post('/settings/email', async (c) => {
   const body = (await c.req.parseBody()) as Record<string, string>;
   const current = await getSettings(c.env.DB);
   const submittedKey = (body.resend_api_key ?? '').trim(); // masked field: blank = keep stored
+  if (submittedKey && !validMasterKey(c.env.SETTINGS_MASTER_KEY)) {
+    return c.redirect('/admin/settings?secret_key_required=1#email');
+  }
   let provider: 'resend' | 'none' | 'cloudflare' =
     body.email_provider === 'resend' ? 'resend' : body.email_provider === 'none' ? 'none' : 'cloudflare';
   // Resend without ANY key (submitted, stored, or env secret) would make every
@@ -951,8 +981,18 @@ admin.post('/settings/test-email', async (c) => {
 admin.post('/settings/providers', async (c) => {
   const body = (await c.req.parseBody()) as Record<string, string>;
   const cur = await getSettings(c.env.DB);
+  const submittedSecrets = [
+    body.stripe_secret_key,
+    body.stripe_webhook_secret,
+    body.paypal_client_secret,
+    body.resend_api_key,
+  ].some((value) => !!(value ?? '').trim());
+  if (submittedSecrets && !validMasterKey(c.env.SETTINGS_MASTER_KEY)) {
+    return c.redirect('/admin/settings?secret_key_required=1#payments');
+  }
   // Masked fields: blank means "keep the stored value" (already encrypted);
-  // new values are encrypted when SETTINGS_MASTER_KEY exists. Plain fields
+  // new secret values are accepted only when SETTINGS_MASTER_KEY is valid.
+  // Plain fields
   // (ids) display their value and submit it back directly, so empty clears them.
   const keep = async (input: string | undefined, current: string) => {
     const t = (input ?? '').trim();

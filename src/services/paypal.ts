@@ -121,15 +121,16 @@ export async function captureOrder(env: Bindings, orderId: string): Promise<Capt
  * PayPal has no local HMAC verification usable on Workers; the supported
  * pattern is posting the delivery back to their verify endpoint.
  */
+export const PAYPAL_WEBHOOK_REQUIRED_HEADERS = [
+  'paypal-auth-algo',
+  'paypal-cert-url',
+  'paypal-transmission-id',
+  'paypal-transmission-sig',
+  'paypal-transmission-time',
+] as const;
+
 export async function verifyWebhook(env: Bindings, headers: Headers, rawBody: string): Promise<boolean> {
-  const required = [
-    'paypal-auth-algo',
-    'paypal-cert-url',
-    'paypal-transmission-id',
-    'paypal-transmission-sig',
-    'paypal-transmission-time',
-  ];
-  if (required.some((h) => !headers.get(h))) return false;
+  if (PAYPAL_WEBHOOK_REQUIRED_HEADERS.some((h) => !headers.get(h))) return false;
   const result = (await paypalFetch(env, '/v1/notifications/verify-webhook-signature', {
     method: 'POST',
     body: JSON.stringify({

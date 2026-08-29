@@ -14,15 +14,16 @@ type Props = {
   underReview?: boolean;
   /** Which payment providers have credentials configured — unconfigured buttons are hidden. */
   providers: { stripe: boolean; paypal: boolean };
+  nonce?: string;
 };
 
 /**
  * Drafts aren't shown publicly — amounts may still change. The link "goes
  * live" when the invoice is sent; until then the client sees this holding
- * card instead of an unfinished invoice. (Print/PDF sub-routes stay open so
- * the admin's preview buttons work on drafts.)
+ * card instead of an unfinished invoice. Draft print/PDF previews are served
+ * only from authenticated admin routes.
  */
-export function DraftHold({ invoice, settings }: { invoice: InvoiceWithClient; settings: Settings }) {
+export function DraftHold({ invoice, settings, nonce }: { invoice: InvoiceWithClient; settings: Settings; nonce?: string }) {
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
   return (
@@ -31,6 +32,7 @@ export function DraftHold({ invoice, settings }: { invoice: InvoiceWithClient; s
       variant="public"
       lang={tag}
       accent={settings.accent_color}
+      nonce={nonce}
     >
       <div class="pay-card card error-card">
         <h1 class="error-title">{t.draftHoldTitle}</h1>
@@ -40,7 +42,7 @@ export function DraftHold({ invoice, settings }: { invoice: InvoiceWithClient; s
   );
 }
 
-export function PublicInvoice({ invoice, items, settings, justPaid, underReview, providers }: Props) {
+export function PublicInvoice({ invoice, items, settings, justPaid, underReview, providers, nonce }: Props) {
   const cur = invoice.currency;
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
@@ -53,6 +55,7 @@ export function PublicInvoice({ invoice, items, settings, justPaid, underReview,
       variant="public"
       lang={tag}
       accent={settings.accent_color}
+      nonce={nonce}
     >
       {underReview ? (
         <div class="banner banner-warning">{t.paymentUnderReview}</div>

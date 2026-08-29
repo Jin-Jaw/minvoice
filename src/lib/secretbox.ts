@@ -67,8 +67,12 @@ export async function unbox(masterKey: string | undefined, stored: string): Prom
   }
 }
 
-/** Encrypt when a VALID master key is configured; store plaintext otherwise (legacy path). */
+/** Encrypt a newly submitted credential or fail closed. Empty masked-form
+ * values are harmless and stay empty; plaintext legacy rows are handled only
+ * by unbox() so they can be migrated, never newly created. */
 export async function sealIfKeyed(masterKey: string | undefined, value: string): Promise<string> {
+  if (!value) return value;
   const key = validMasterKey(masterKey);
-  return key && value ? box(key, value) : value;
+  if (!key) throw new Error('A valid SETTINGS_MASTER_KEY is required before provider credentials can be stored.');
+  return box(key, value);
 }

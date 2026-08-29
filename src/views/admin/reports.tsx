@@ -52,6 +52,7 @@ export function ReportsPage({
   currency,
   clients,
   clientId,
+  nonce,
 }: {
   currentPath: string;
   summary: ReportSummary;
@@ -59,6 +60,7 @@ export function ReportsPage({
   currency: string;
   clients: Client[];
   clientId: number | null;
+  nonce?: string;
 }) {
   const years = groupByYear(months);
   // Settings currency first, then alphabetical; zero row so empty tiles still render
@@ -71,13 +73,13 @@ export function ReportsPage({
   const multiCurrency = new Set([...months.map((r) => r.currency), ...sums.map((s) => s.currency)]).size > 1;
 
   return (
-    <Layout title="Reports" currentPath={currentPath}>
+    <Layout title="Reports" currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
         <h1 class="page-title">Reports</h1>
         <div class="actions">
           {clients.length > 1 ? (
             <form method="get" action="/admin/reports" class="client-filter">
-              <select name="client" aria-label="Filter by client" onchange="this.form.submit()">
+              <select name="client" aria-label="Filter by client" data-submit-on-change>
                 <option value="">All clients</option>
                 {clients.map((cl) => (
                   <option value={String(cl.id)} selected={cl.id === clientId}>

@@ -1,8 +1,10 @@
 import { env, exports } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { sendTestEmail } from '../src/services/email';
+import { isBoxed, unbox } from '../src/lib/secretbox';
 
 const DB = env.DB;
+const TEST_MASTER_KEY = 'integration-test-master-key-0123456789abcdef';
 
 beforeEach(async () => {
   await DB.prepare(
@@ -111,6 +113,7 @@ describe('email settings guard', () => {
       resend_api_key: string;
     }>();
     expect(row?.email_provider).toBe('resend');
-    expect(row?.resend_api_key).toBe('re_live_abc123');
+    expect(isBoxed(row?.resend_api_key ?? '')).toBe(true);
+    expect(await unbox(TEST_MASTER_KEY, row?.resend_api_key ?? '')).toBe('re_live_abc123');
   });
 });

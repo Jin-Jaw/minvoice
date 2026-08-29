@@ -27,6 +27,7 @@ export function InvoiceDetailPage({
   emailEnabled,
   notice,
   error,
+  nonce,
 }: {
   currentPath: string;
   invoice: InvoiceWithClient;
@@ -39,6 +40,7 @@ export function InvoiceDetailPage({
   emailEnabled: boolean;
   notice?: string;
   error?: string;
+  nonce?: string;
 }) {
   const canEdit = invoice.status === 'draft' || invoice.status === 'sent';
   const today = todayInTz(timezone);
@@ -46,7 +48,7 @@ export function InvoiceDetailPage({
   const activePayments = payments.filter((p) => !p.undone_at);
 
   return (
-    <Layout title={`Invoice ${invoice.number}`} currentPath={currentPath}>
+    <Layout title={`Invoice ${invoice.number}`} currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
         <h1 class="page-title">
           Invoice {invoice.number} <StatusBadge invoice={invoice} today={today} />
@@ -56,9 +58,9 @@ export function InvoiceDetailPage({
             <form
               method="post"
               action={`/admin/invoices/${invoice.id}/status`}
-              onsubmit={`return confirm('Email invoice ${invoice.number} (with PDF and pay link) to ${invoice.client_email}?${
+              data-confirm={`Email invoice ${invoice.number} (with PDF and pay link) to ${invoice.client_email}?${
                 invoice.status === 'draft' ? ' It will be marked as sent.' : ''
-              }');`}
+              }`}
             >
               <input type="hidden" name="action" value="send" />
               <input type="hidden" name="email" value="1" />
@@ -93,7 +95,7 @@ export function InvoiceDetailPage({
             <form
               method="post"
               action={`/admin/invoices/${invoice.id}/status`}
-              onsubmit="return confirm('Revert this invoice to draft? The sent date will be cleared.');"
+              data-confirm="Revert this invoice to draft? The sent date will be cleared."
             >
               <input type="hidden" name="action" value="unsend" />
               <button type="submit" class="btn btn-secondary">
@@ -112,13 +114,13 @@ export function InvoiceDetailPage({
           <form
             method="post"
             action={`/admin/invoices/${invoice.id}/status`}
-            onsubmit={`return confirm(${JSON.stringify(
+            data-confirm={
               invoice.status === 'draft'
                 ? 'Delete this draft invoice? This cannot be undone.'
                 : invoice.status === 'paid'
                   ? `Delete PAID invoice ${invoice.number}? Its payment records are deleted too — reports and CSV exports will change — and nothing is refunded at Stripe/PayPal (refunds live in their dashboards). This cannot be undone.`
                   : `Delete invoice ${invoice.number}? The public pay link will stop working and its history will be erased. This cannot be undone.`
-            )});`}
+            }
           >
             <input type="hidden" name="action" value="delete" />
             <button type="submit" class="btn btn-danger">
@@ -133,7 +135,7 @@ export function InvoiceDetailPage({
           </form>
           <a
             class="btn btn-secondary"
-            href={`/pay/${invoice.public_token}/print?auto=1`}
+            href={`/admin/invoices/${invoice.id}/print?auto=1`}
             target="_blank"
             rel="noopener"
           >
@@ -181,6 +183,7 @@ export function InvoiceDetailPage({
             </div>
           </div>
           <script
+            nonce={nonce}
             dangerouslySetInnerHTML={{
               __html: `
 (function () {
@@ -427,12 +430,12 @@ export function InvoiceDetailPage({
                     <form
                       method="post"
                       action={`/admin/invoices/${invoice.id}/payments/${p.id}/undo`}
-                      onsubmit={
+                      data-confirm={
                         p.provider === 'manual'
-                          ? "return confirm('Undo this payment? The invoice will revert to unpaid.');"
-                          : "return confirm('Undo this payment? This only corrects the records here — it does NOT refund the charge at " +
+                          ? 'Undo this payment? The invoice will revert to unpaid.'
+                          : 'Undo this payment? This only corrects the records here — it does NOT refund the charge at ' +
                             p.provider +
-                            ".');"
+                            '.'
                       }
                     >
                       <button type="submit" class="btn btn-danger btn-sm">
@@ -486,7 +489,7 @@ export function InvoiceDetailPage({
                   method="post"
                   action={`/admin/invoices/${invoice.id}/events/${t.eventId}/delete`}
                   class="timeline-remove"
-                  onsubmit="return confirm('Remove this view from the history?');"
+                  data-confirm="Remove this view from the history?"
                 >
                   <button type="submit" class="timeline-remove-btn" title="Remove this view" aria-label="Remove this view">
                     ×

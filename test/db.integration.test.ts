@@ -183,6 +183,31 @@ describe('invoice write atomicity', () => {
 });
 
 describe('markInvoicePaidFromWebhook', () => {
+  it('records a provider payment against a draft without marking the draft paid', async () => {
+    const clientId = await createClient(DB, {
+      name: 'Draft Client',
+      email: 'draft@example.test',
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    });
+    const id = await createInvoice(DB, {
+      client_id: clientId,
+      issue_date: '2026-07-01',
+      due_date: '2026-07-10',
+      subject: 'Still being edited',
+      notes: null,
+      items: [{ description: 'Work', quantity: 1, unit_price_cents: 10000 }],
+    });
+
+    expect(await markInvoicePaidFromWebhook(DB, webhookPayload(id))).toBe('recorded');
+    expect((await getInvoice(DB, id))?.status).toBe('draft');
+    expect(
+      await DB.prepare('SELECT COUNT(*) FROM payments WHERE invoice_id = ?').bind(id).first<number>('COUNT(*)')
+    ).toBe(1);
+    expect(await DB.prepare('SELECT COUNT(*) FROM email_outbox').first<number>('COUNT(*)')).toBe(0);
+  });
+
   it('records payment, transitions invoice, and enqueues both emails', async () => {
     const id = await seedSentInvoice();
     expect(await markInvoicePaidFromWebhook(DB, webhookPayload(id))).toBe('paid');

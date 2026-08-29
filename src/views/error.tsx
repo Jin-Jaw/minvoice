@@ -4,9 +4,9 @@ import { Layout } from './layout';
  * Public 404 — no DB reads (bots hit this constantly) and no admin nav,
  * since most visitors are clients following a stale or mistyped pay link.
  */
-export function NotFoundPage() {
+export function NotFoundPage({ nonce }: { nonce?: string } = {}) {
   return (
-    <Layout title="Page not found" variant="public">
+    <Layout title="Page not found" variant="public" nonce={nonce}>
       <div class="pay-card card error-card">
         <p class="error-code">404</p>
         <h1 class="error-title">This page doesn't exist</h1>

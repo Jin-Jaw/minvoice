@@ -1,6 +1,5 @@
-// Jin&Jaw production invoice service. The database id is filled after
-// `npx wrangler d1 create jinjaw-invoices` and must remain stable: it identifies
-// the production books.
+// Jin&Jaw production invoice service. This database was created with the
+// explicit `eu` jurisdiction before any invoice data was entered.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "jinjaw-invoices",
@@ -11,12 +10,23 @@
     "directory": "./public",
     "binding": "ASSETS"
   },
+  "ratelimits": [
+    {
+      "name": "PDF_RATE_LIMITER",
+      "namespace_id": "73117",
+      "simple": { "limit": 12, "period": 60 }
+    },
+    {
+      "name": "WEBHOOK_RATE_LIMITER",
+      "namespace_id": "73118",
+      "simple": { "limit": 120, "period": 60 }
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "jinjaw-invoices",
-      // npx wrangler d1 create jinjaw-invoices → paste the id it prints
-      "database_id": "89506611-6707-4664-8c32-73d560c99fec"
+      "database_name": "jinjaw-invoices-eu",
+      "database_id": "59c4bd62-7519-4feb-8c85-d84f31b2d572"
     }
   ],
   "vars": {

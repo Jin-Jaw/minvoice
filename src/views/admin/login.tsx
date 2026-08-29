@@ -1,9 +1,9 @@
 import { Layout } from '../layout';
 
 /** Password-mode login. Shown only when ADMIN_PASSWORD is set and Access isn't. */
-export function LoginPage({ error, loggedOut, lockedOut }: { error?: boolean; loggedOut?: boolean; lockedOut?: boolean }) {
+export function LoginPage({ error, loggedOut, lockedOut, nonce }: { error?: boolean; loggedOut?: boolean; lockedOut?: boolean; nonce?: string }) {
   return (
-    <Layout title="Sign in" variant="public">
+    <Layout title="Sign in" variant="public" nonce={nonce}>
       <div class="pay-card card login-card">
         <h1 class="page-title">Sign in</h1>
         {loggedOut ? <div class="banner banner-success mt-2">Signed out.</div> : null}
@@ -32,9 +32,9 @@ export function LoginPage({ error, loggedOut, lockedOut }: { error?: boolean; lo
 }
 
 /** Fail-closed instructions when neither Access nor a password is configured. */
-export function AuthSetupPage() {
+export function AuthSetupPage({ nonce }: { nonce?: string } = {}) {
   return (
-    <Layout title="Admin locked" variant="public">
+    <Layout title="Admin locked" variant="public" nonce={nonce}>
       <div class="pay-card card login-card">
         <h1 class="page-title">Admin is locked</h1>
         <p class="muted mt-1">

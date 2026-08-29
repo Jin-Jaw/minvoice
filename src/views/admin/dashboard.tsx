@@ -58,6 +58,7 @@ export function DashboardPage({
   warnings,
   deleted,
   currentPath,
+  nonce,
 }: {
   invoices: InvoiceWithClient[];
   filter: InvoiceFilter;
@@ -68,6 +69,7 @@ export function DashboardPage({
   /** Invoice number just deleted — success banner. */
   deleted?: string;
   currentPath: string;
+  nonce?: string;
 }) {
   // Client dropdown options come from the invoices themselves — clients
   // without invoices would be dead filters anyway.
@@ -90,7 +92,7 @@ export function DashboardPage({
   };
 
   return (
-    <Layout title="Invoices" currentPath={currentPath}>
+    <Layout title="Invoices" currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
         <h1 class="page-title">Invoices</h1>
         <div class="actions">
@@ -130,7 +132,7 @@ export function DashboardPage({
         {clientOptions.length > 1 ? (
           <form method="get" action="/admin" class="client-filter">
             {filter !== 'all' ? <input type="hidden" name="status" value={filter} /> : null}
-            <select name="client" aria-label="Filter by client" onchange="this.form.submit()">
+            <select name="client" aria-label="Filter by client" data-submit-on-change>
               <option value="">All clients</option>
               {clientOptions.map((cl) => (
                 <option value={String(cl.id)} selected={cl.id === clientId}>
@@ -181,6 +183,7 @@ export function DashboardPage({
       )}
 
       <script
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: `
 (function () {

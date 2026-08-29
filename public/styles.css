@@ -1649,3 +1649,20 @@ html {
 .settings-alerts li:last-child {
   margin-bottom: 0;
 }
+
+/* Inline presentation attributes are intentionally avoided so the production
+   CSP can block style attributes entirely. */
+.client-archive-checkbox {
+  width: auto;
+  display: inline-block;
+  margin-right: 8px;
+}
+.rate-hint-wrap {
+  margin-left: 12px;
+}
+.accent-color-input {
+  width: 3.5rem;
+  height: 2.2rem;
+  padding: 2px;
+  vertical-align: middle;
+}

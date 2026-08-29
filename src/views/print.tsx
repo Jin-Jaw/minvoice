@@ -14,11 +14,13 @@ export function PrintInvoice({
   items,
   settings,
   payUrl,
+  nonce,
 }: {
   invoice: InvoiceWithClient;
   items: InvoiceItem[];
   settings: Settings;
   payUrl: string;
+  nonce?: string;
 }) {
   const cur = invoice.currency;
   const tag = resolveLocale(settings.locale, invoice.client_locale);
@@ -37,6 +39,7 @@ export function PrintInvoice({
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{`Invoice ${invoice.number}`}</title>
         <style
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `
 @font-face {
@@ -221,7 +224,7 @@ tr { break-inside: avoid; }
       <body>
         <div class="toolbar">
           <a href={payUrl}>{t.viewOnline}</a>
-          <button type="button" onclick="window.print()">
+          <button type="button" id="print-button">
             {t.print}
           </button>
         </div>
@@ -315,8 +318,11 @@ tr { break-inside: avoid; }
           ) : null}
         </div>
         <script
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `
+document.getElementById('print-button')?.addEventListener('click', function () { window.print(); });
+
 // ?auto=1 (the {t.print} buttons elsewhere in the app) opens the dialog
 // immediately — but only after fonts load, so the paper copy isn't Georgia.
 if (new URLSearchParams(location.search).get('auto') === '1') {

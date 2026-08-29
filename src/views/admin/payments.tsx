@@ -43,6 +43,7 @@ export function PaymentsPage({
   currency,
   clients,
   clientId,
+  nonce,
 }: {
   currentPath: string;
   payments: PaymentListRow[];
@@ -50,6 +51,7 @@ export function PaymentsPage({
   currency: string;
   clients: Client[];
   clientId: number | null;
+  nonce?: string;
 }) {
   const active = payments.filter((p) => !p.undone_at);
   // One sum per currency — amounts in different currencies are never added together
@@ -63,13 +65,13 @@ export function PaymentsPage({
     .join(' + ');
 
   return (
-    <Layout title="Payments" currentPath={currentPath}>
+    <Layout title="Payments" currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
         <h1 class="page-title">Payments</h1>
         <div class="actions">
           {clients.length > 1 ? (
             <form method="get" action="/admin/payments" class="client-filter">
-              <select name="client" aria-label="Filter by client" onchange="this.form.submit()">
+              <select name="client" aria-label="Filter by client" data-submit-on-change>
                 <option value="">All clients</option>
                 {clients.map((cl) => (
                   <option value={String(cl.id)} selected={cl.id === clientId}>

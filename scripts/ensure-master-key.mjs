@@ -2,8 +2,8 @@
 // Ensures a SETTINGS_MASTER_KEY secret exists so credentials entered in the
 // Settings dashboard are envelope-encrypted in D1 (see src/lib/secretbox.ts).
 // Runs after `wrangler deploy` — the Worker must exist before secrets can be
-// set. Best-effort: a failure warns but never fails the deploy (the app falls
-// back to plaintext storage and shows a Settings alert until the key exists).
+// set. A failure must fail the deploy command: the dashboard refuses to store
+// provider credentials without this key, so encryption can never fail open.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
@@ -24,7 +24,8 @@ try {
   });
   console.log('Generated SETTINGS_MASTER_KEY — API keys entered in Settings are now encrypted at rest.');
 } catch (e) {
-  console.warn(
-    `Could not verify/set SETTINGS_MASTER_KEY (${e?.message ?? e}) — dashboard-entered API keys stay unencrypted until it exists.`
+  console.error(
+    `Could not verify/set SETTINGS_MASTER_KEY (${e?.message ?? e}). Provider credentials cannot be saved until this is fixed.`
   );
+  process.exitCode = 1;
 }

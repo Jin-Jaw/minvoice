@@ -74,7 +74,7 @@ pay.get('/:token', async (c) => {
     c.executionCtx.waitUntil(updateLastSeenOrigin(c.env.DB, origin));
   }
   if (invoice.status === 'draft') {
-    return c.html(<DraftHold invoice={invoice} settings={settings} />);
+    return c.html(<DraftHold invoice={invoice} settings={settings} nonce={c.get('secureHeadersNonce')} />);
   }
   const underReview = awaitingPaymentReview(invoice, payments);
   return c.html(
@@ -88,6 +88,7 @@ pay.get('/:token', async (c) => {
       providers={
         underReview ? { stripe: false, paypal: false } : await providerAvailability(c.env, settings, invoice.currency)
       }
+      nonce={c.get('secureHeadersNonce')}
     />
   );
 });
@@ -95,6 +96,7 @@ pay.get('/:token', async (c) => {
 pay.get('/:token/print', async (c) => {
   const invoice = await getInvoiceByToken(c.env.DB, c.req.param('token'));
   if (!invoice) return c.notFound();
+  if (invoice.status === 'draft') return c.notFound();
   const [items, settings] = await Promise.all([
     getInvoiceItems(c.env.DB, invoice.id),
     getSettings(c.env.DB),
@@ -105,6 +107,7 @@ pay.get('/:token/print', async (c) => {
       items={items}
       settings={settings}
       payUrl={`${c.env.APP_BASE_URL}/pay/${invoice.public_token}`}
+      nonce={c.get('secureHeadersNonce')}
     />
   );
 });
@@ -112,6 +115,11 @@ pay.get('/:token/print', async (c) => {
 pay.get('/:token/pdf', async (c) => {
   const invoice = await getInvoiceByToken(c.env.DB, c.req.param('token'));
   if (!invoice) return c.notFound();
+  if (invoice.status === 'draft') return c.notFound();
+  const limiter = c.env.PDF_RATE_LIMITER;
+  if (limiter && !(await limiter.limit({ key: invoice.public_token })).success) {
+    return c.text('Too many PDF requests. Please try again in a minute.', 429);
+  }
   const [items, settings, logo] = await Promise.all([
     getInvoiceItems(c.env.DB, invoice.id),
     getSettings(c.env.DB),
@@ -131,7 +139,7 @@ pay.post('/:token/stripe', async (c) => {
     return c.redirect(`/pay/${invoice.public_token}`, 303);
   }
   if (!(await providerAvailability(c.env, settings, invoice.currency)).stripe) return c.redirect(`/pay/${invoice.public_token}`, 303);
-  if (invoice.status === 'paid' || invoice.status === 'void' || invoice.total_cents <= 0) {
+  if (invoice.status !== 'sent' || invoice.total_cents <= 0) {
     return c.redirect(`/pay/${invoice.public_token}`, 303);
   }
   const url = await createCheckoutSession(
@@ -152,7 +160,7 @@ pay.post('/:token/paypal', async (c) => {
   if (!(await providerAvailability(c.env, settings, invoice.currency)).paypal) {
     return c.redirect(`/pay/${invoice.public_token}`, 303);
   }
-  if (invoice.status === 'paid' || invoice.status === 'void' || invoice.total_cents <= 0) {
+  if (invoice.status !== 'sent' || invoice.total_cents <= 0) {
     return c.redirect(`/pay/${invoice.public_token}`, 303);
   }
   const { orderId, approveUrl } = await createOrder(await effectiveProviderEnv(c.env, settings), invoice);
@@ -170,6 +178,7 @@ pay.get('/:token/paypal/return', async (c) => {
   const payUrl = `/pay/${invoice.public_token}`;
   if (!orderId || orderId !== invoice.paypal_order_id) return c.redirect(payUrl, 303);
   if (invoice.status === 'paid') return c.redirect(`${payUrl}?paid=1`, 303);
+  if (invoice.status !== 'sent') return c.redirect(payUrl, 303);
 
   try {
     const settings = await getSettings(c.env.DB);

@@ -41,9 +41,11 @@ export function SettingsPage({
   emailTestOk,
   emailTestErr,
   resendKept,
+  secretSaveBlocked,
   accentKept,
   alerts = [],
   theme = 'auto',
+  nonce,
 }: {
   currentPath: string;
   settings: Settings;
@@ -56,21 +58,29 @@ export function SettingsPage({
   emailTestOk?: string | null;
   emailTestErr?: string | null;
   resendKept?: boolean;
+  secretSaveBlocked?: boolean;
   accentKept?: boolean;
   alerts?: ConfigWarning[];
   /** From the per-browser theme cookie, not Settings (D1) — see /settings/appearance */
   theme?: 'auto' | 'light' | 'dark';
+  nonce?: string;
 }) {
   const { sources, hints } = providerMeta;
   const taxRatePercent = (settings.tax_rate_bps / 100).toFixed(2);
 
   return (
-    <Layout title="Settings" currentPath={currentPath}>
+    <Layout title="Settings" currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
         <h1 class="page-title">Settings</h1>
       </div>
 
       {saved ? <div class="banner banner-success">Settings saved.</div> : null}
+      {secretSaveBlocked ? (
+        <div class="banner banner-error">
+          Provider credentials were not saved because SETTINGS_MASTER_KEY is unavailable or invalid. Fix the
+          Worker secret first; plaintext credentials are never stored.
+        </div>
+      ) : null}
       {curKept ? (
         <div class="banner banner-warning">
           That currency isn't supported (unknown code, or a zero-decimal currency like JPY) — the
@@ -277,7 +287,7 @@ export function SettingsPage({
               id="accent_color"
               name="accent_color"
               value={settings.accent_color}
-              style="width: 3.5rem; height: 2.2rem; padding: 2px; vertical-align: middle;"
+              class="accent-color-input"
             />
             <span class="muted">
               Used for invoice email buttons and links, and the PDF's top band and PAID stamp. Very
@@ -568,6 +578,7 @@ export function SettingsPage({
       </div>
 
       <script
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: `
 (function () {

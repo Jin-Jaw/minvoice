@@ -5,6 +5,7 @@ import type { Client, Invoice, InvoiceItem, Settings } from '../../db/queries';
 
 export type InvoiceFormProps = {
   currentPath: string;
+  nonce?: string;
   clients: Client[];
   settings: Settings;
   /** Next auto number, shown as an editable prefill on new invoices. */
@@ -48,7 +49,7 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
 
   if (!isEdit && clients.length === 0) {
     return (
-      <Layout title={title} currentPath={currentPath}>
+      <Layout title={title} currentPath={currentPath} nonce={props.nonce}>
         <div class="page-head">
           <h1 class="page-title">New invoice</h1>
         </div>
@@ -81,7 +82,7 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
   }));
 
   return (
-    <Layout title={title} currentPath={currentPath}>
+    <Layout title={title} currentPath={currentPath} nonce={props.nonce}>
       <div class="page-head">
         <h1 class="page-title">{title}</h1>
       </div>
@@ -239,7 +240,7 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
             <button type="button" class="btn btn-secondary btn-sm" id="add-line-btn">
               + Add line
             </button>
-            <span class="muted" id="rate-hint-wrap" style="margin-left: 12px" hidden>
+            <span class="muted rate-hint-wrap" id="rate-hint-wrap" hidden>
               Default unit price: <span id="rate-hint"></span>
             </span>
           </div>
@@ -282,6 +283,7 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
       </template>
 
       <script
+        nonce={props.nonce}
         dangerouslySetInnerHTML={{
           __html: `
 (function () {

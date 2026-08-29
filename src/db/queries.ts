@@ -1015,7 +1015,8 @@ export type WebhookPayment = {
  * Guards: UNIQUE(provider, event_id) on webhook_events (guard #1 — a
  * duplicate fails the whole batch and is caught below), UNIQUE(provider,
  * provider_ref) on payments (guard #2, handled inline via ON CONFLICT), and a
- * status filter on the UPDATE so a paid/void invoice never double-transitions.
+ * status filter on the UPDATE so only an invoice explicitly sent to its client
+ * can transition; draft, paid, and void invoices never provider-transition.
  * The outbox INSERTs run before the UPDATE and share its status filter, so
  * emails are enqueued exactly when this call performs the transition.
  */
@@ -1039,7 +1040,7 @@ export async function markInvoicePaidFromWebhook(
     db
       .prepare(
         `INSERT INTO email_outbox (kind, payload)
-         SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM invoices WHERE id = ?3 AND status IN ('draft', 'sent') ${matchGuard})`
+         SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM invoices WHERE id = ?3 AND status = 'sent' ${matchGuard})`
       )
       .bind(kind, emailPayload, p.invoiceId, p.amountCents, p.currency);
 
@@ -1065,7 +1066,7 @@ export async function markInvoicePaidFromWebhook(
       db
         .prepare(
           `UPDATE invoices SET status = 'paid', paid_at = datetime('now'), updated_at = datetime('now')
-           WHERE id = ?1 AND status IN ('draft', 'sent') AND total_cents = ?2 AND currency = ?3`
+           WHERE id = ?1 AND status = 'sent' AND total_cents = ?2 AND currency = ?3`
         )
         .bind(p.invoiceId, p.amountCents, p.currency),
     ]);

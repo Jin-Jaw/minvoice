@@ -4,7 +4,7 @@ import type { AppEnv } from '../env';
 import { getInvoiceByPaypalOrderId, getSettings, markInvoicePaidFromWebhook } from '../db/queries';
 import { effectiveProviderEnv } from '../lib/providers';
 import { verifyStripeEvent } from '../services/stripe';
-import { verifyWebhook as verifyPaypalWebhook } from '../services/paypal';
+import { PAYPAL_WEBHOOK_REQUIRED_HEADERS, verifyWebhook as verifyPaypalWebhook } from '../services/paypal';
 import { processEmailOutbox } from '../services/outbox';
 
 export const webhooks = new Hono<AppEnv>();
@@ -57,6 +57,11 @@ webhooks.post('/stripe', async (c) => {
 });
 
 webhooks.post('/paypal', async (c) => {
+  // PayPal verification requires a remote authenticated API call. Reject
+  // obviously forged traffic before buffering the body or spending a subrequest.
+  if (PAYPAL_WEBHOOK_REQUIRED_HEADERS.some((header) => !c.req.header(header))) {
+    return c.text('missing verification headers', 400);
+  }
   const rawBody = await c.req.text();
 
   let verified = false;

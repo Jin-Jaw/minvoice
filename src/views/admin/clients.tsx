@@ -7,13 +7,15 @@ export function ClientsPage({
   currentPath,
   clients,
   error,
+  nonce,
 }: {
   currentPath: string;
   clients: Client[];
   error?: string;
+  nonce?: string;
 }) {
   return (
-    <Layout title="Clients" currentPath={currentPath}>
+    <Layout title="Clients" currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
         <h1 class="page-title">Clients</h1>
         <div class="actions">
@@ -73,9 +75,9 @@ export function ClientsPage({
   );
 }
 
-export function ClientNewPage({ currentPath }: { currentPath: string }) {
+export function ClientNewPage({ currentPath, nonce }: { currentPath: string; nonce?: string }) {
   return (
-    <Layout title="New client" currentPath={currentPath}>
+    <Layout title="New client" currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
         <h1 class="page-title">New client</h1>
       </div>
@@ -134,6 +136,7 @@ export function ClientNewPage({ currentPath }: { currentPath: string }) {
         </form>
       </div>
       <script
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: `
 (function () {
@@ -151,9 +154,9 @@ export function ClientNewPage({ currentPath }: { currentPath: string }) {
   );
 }
 
-export function ClientEditPage({ currentPath, client }: { currentPath: string; client: Client }) {
+export function ClientEditPage({ currentPath, client, nonce }: { currentPath: string; client: Client; nonce?: string }) {
   return (
-    <Layout title={`Edit ${client.name}`} currentPath={currentPath}>
+    <Layout title={`Edit ${client.name}`} currentPath={currentPath} nonce={nonce}>
       <div class="page-head">
         <h1 class="page-title">Edit client</h1>
       </div>
@@ -232,7 +235,7 @@ export function ClientEditPage({ currentPath, client }: { currentPath: string; c
                 name="archived"
                 value="1"
                 checked={!!client.archived}
-                style="width: auto; display: inline-block; margin-right: 8px;"
+                class="client-archive-checkbox"
               />
               Archived
             </label>
@@ -248,6 +251,7 @@ export function ClientEditPage({ currentPath, client }: { currentPath: string; c
         </form>
       </div>
       <script
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: `
 (function () {
