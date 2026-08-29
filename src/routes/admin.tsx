@@ -412,7 +412,6 @@ admin.get('/invoices/:id', async (c) => {
     getInvoiceEvents(c.env.DB, id),
     getSettings(c.env.DB, branchId),
   ]);
-  const payLink = `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`;
   const timeline = buildTimeline(invoice, payments, events, formatCents);
   const emailedTo = c.req.query('emailed');
   const emailError = c.req.query('email_error');
@@ -423,7 +422,6 @@ admin.get('/invoices/:id', async (c) => {
       invoice={invoice}
       items={items}
       payments={payments}
-      payLink={payLink}
       timeline={timeline}
       timezone={settings.timezone}
       emailEnabled={settings.email_provider !== 'none'}
@@ -563,7 +561,6 @@ admin.post('/invoices/:id/status', async (c) => {
               invoice,
               items,
               settings,
-              undefined,
               c.env.ASSETS,
               await getLogo(c.env.DB, branchId)
             );

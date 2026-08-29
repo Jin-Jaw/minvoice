@@ -17,14 +17,6 @@ export async function sendOverdueReminders(env: Bindings): Promise<void> {
     const settings = await getSettings(env.DB, branch.id);
     if (!settings.reminders_enabled || settings.email_provider === 'none') continue;
 
-    // No request in cron context: configured base URL, else the origin the
-    // pay page last saw. Without either we can't build pay links — skip loudly.
-    const base = ((env.APP_BASE_URL ?? '').trim() || settings.last_seen_origin).replace(/\/+$/, '');
-    if (!base) {
-      console.warn('reminders: no APP_BASE_URL and no traffic-derived origin yet — skipping run');
-      continue;
-    }
-
     const today = todayInTz(settings.timezone);
     const schedule = parseSchedule(settings.reminder_schedule);
     const overdue = await listOverdueForReminders(env.DB, branch.id, today);
@@ -42,7 +34,6 @@ export async function sendOverdueReminders(env: Bindings): Promise<void> {
         // outbox, tomorrow's run re-derives "n is due" and this becomes a no-op.
         await enqueueReminder(env.DB, {
           invoiceId: inv.id,
-          payUrl: `${base}/pay/${inv.public_token}`,
           reminderNumber: n,
         });
       } catch (e) {

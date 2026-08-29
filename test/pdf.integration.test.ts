@@ -47,7 +47,7 @@ const item = (description: string): InvoiceItem => ({
 describe('PDF generation with embedded fonts', () => {
   it('German umlauts render via the FAST WinAnsi path (no font embedding)', async () => {
     const settings = { ...(await getSettings(DB)), locale: 'de', business_name: 'Größenwahn Bücher', logo_url: null };
-    const bytes = await generateInvoicePdf(fakeInvoice(), [item('Beratung für Änderungswünsche')], settings, undefined, env.ASSETS);
+    const bytes = await generateInvoicePdf(fakeInvoice(), [item('Beratung für Änderungswünsche')], settings, env.ASSETS);
     expect(bytes.length).toBeGreaterThan(1000);
     expect(String.fromCharCode(...bytes.slice(0, 5))).toBe('%PDF-');
     // Umlauts/€ are WinAnsi: built-in fonts suffice, keeping CPU ~3.5ms
@@ -57,7 +57,7 @@ describe('PDF generation with embedded fonts', () => {
 
   it('French Intl number formatting stays on the fast path (narrow spaces normalized)', async () => {
     const settings = { ...(await getSettings(DB)), locale: 'fr', logo_url: null };
-    const bytes = await generateInvoicePdf(fakeInvoice({ client_locale: 'fr' }), [item('Prestation de conseil détaillée')], settings, undefined, env.ASSETS);
+    const bytes = await generateInvoicePdf(fakeInvoice({ client_locale: 'fr' }), [item('Prestation de conseil détaillée')], settings, env.ASSETS);
     expect(bytes.length).toBeLessThan(15000);
   });
 
@@ -67,7 +67,6 @@ describe('PDF generation with embedded fonts', () => {
       fakeInvoice({ client_name: 'Zażółć gęślą jaźń — Дмитрий Șțigletul' }),
       [item('Wdrożenie systemu płatności — консультация — reșițean')],
       settings,
-      undefined,
       env.ASSETS
     );
     expect(String.fromCharCode(...bytes.slice(0, 5))).toBe('%PDF-');
@@ -80,7 +79,7 @@ describe('PDF generation with embedded fonts', () => {
   it('Turkish uppercasing (dotted İ) forces the Unicode fonts even for ASCII source text', async () => {
     // labels are uppercased with the locale: 'Billed to' -> 'BİLLED TO' (İ is not WinAnsi)
     const settings = { ...(await getSettings(DB)), locale: 'tr' };
-    const bytes = await generateInvoicePdf(fakeInvoice(), [item('Plain ascii item')], settings, undefined, env.ASSETS);
+    const bytes = await generateInvoicePdf(fakeInvoice(), [item('Plain ascii item')], settings, env.ASSETS);
     expect(bytes.length).toBeGreaterThan(15000); // Noto path
   });
 
@@ -90,7 +89,6 @@ describe('PDF generation with embedded fonts', () => {
       fakeInvoice({ status: 'paid', paid_at: '2026-10-18 12:00:00' }),
       [item('Plain ascii item')],
       settings,
-      undefined,
       env.ASSETS
     );
     expect(bytes.length).toBeGreaterThan(15000); // '18 paz\u0301 2026' needs Noto
@@ -99,13 +97,13 @@ describe('PDF generation with embedded fonts', () => {
   it('per-client locale override wins over the business locale', async () => {
     const settings = { ...(await getSettings(DB)), locale: 'en' };
     // French client of an English business: doc title should be French
-    const bytes = await generateInvoicePdf(fakeInvoice({ client_locale: 'fr' }), [item('Prestation')], settings, undefined, env.ASSETS);
+    const bytes = await generateInvoicePdf(fakeInvoice({ client_locale: 'fr' }), [item('Prestation')], settings, env.ASSETS);
     expect(String.fromCharCode(...bytes.slice(0, 5))).toBe('%PDF-');
   });
 
   it('still renders without the assets binding (standard-font fallback)', async () => {
     const settings = { ...(await getSettings(DB)), locale: 'de', logo_url: null };
-    const bytes = await generateInvoicePdf(fakeInvoice(), [item('Beratung')], settings, undefined, undefined);
+    const bytes = await generateInvoicePdf(fakeInvoice(), [item('Beratung')], settings);
     expect(String.fromCharCode(...bytes.slice(0, 5))).toBe('%PDF-');
     expect(bytes.length).toBeLessThan(15000); // no embedded fonts on this path
   });

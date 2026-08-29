@@ -24,7 +24,7 @@ export type Settings = {
   reminders_enabled: number;
   /** Comma-separated days-overdue thresholds, e.g. '1, 7, 14' — one reminder per entry */
   reminder_schedule: string;
-  /** Public origin observed on pay-page traffic — cron pay links when APP_BASE_URL is unset */
+  /** Public origin observed on pay-page traffic — business notification links when APP_BASE_URL is unset */
   last_seen_origin: string;
   // Provider toggles + in-app credentials (env secrets take precedence)
   stripe_enabled: number;
@@ -1312,7 +1312,7 @@ export async function markOutboxFailed(db: D1Database, id: number, error: string
  */
 export async function enqueueReminder(
   db: D1Database,
-  payload: { invoiceId: number; payUrl: string; reminderNumber: number }
+  payload: { invoiceId: number; reminderNumber: number }
 ): Promise<void> {
   await db
     .prepare(`INSERT OR IGNORE INTO email_outbox (kind, payload, dedup_key) VALUES ('reminder', ?, ?)`)

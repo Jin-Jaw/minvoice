@@ -4,7 +4,7 @@ import { computeTotals, formatCents } from '../lib/money';
 import { addDaysISO, todayInTz } from '../lib/dates';
 import { generateInvoicePdf } from './pdf';
 import { formatCentsTag, formatDateTag, getStrings, resolveLocale } from '../lib/strings';
-import { accentForeground, safeAccent } from '../lib/color';
+import { safeAccent } from '../lib/color';
 import { effectiveProviderEnv } from '../lib/providers';
 
 type Mail = {
@@ -91,7 +91,8 @@ export function toBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Email the invoice to the client: pay link in the body, PDF attached.
+ * Email the invoice to the client with the PDF and any payment instructions
+ * stored in invoice notes. Online payment links are deliberately omitted.
  * Throws on failure — callers surface the error, they don't mark anything sent.
  */
 export async function sendInvoiceEmail(
@@ -103,11 +104,9 @@ export async function sendInvoiceEmail(
   if (!invoice.client_email) throw new Error('client has no email address');
 
   const businessName = settings.business_name || 'Minvoice';
-  const payUrl = `${env.APP_BASE_URL}/pay/${invoice.public_token}`;
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
   const accent = safeAccent(settings.accent_color);
-  const accentFg = accentForeground(accent);
   const total = formatCentsTag(invoice.total_cents, invoice.currency, tag);
   // No due date -> no due wording at all; don't invent terms like "on receipt".
   const dueDate = invoice.due_date ? formatDateTag(invoice.due_date, tag) : null;
@@ -122,9 +121,8 @@ export async function sendInvoiceEmail(
       ``,
       t.emailInvoiceBody(businessName, invoice.number, total, dueDate),
       ``,
-      `${t.viewAndPay} ${payUrl}`,
-      ``,
       t.pdfAttached,
+      ...(invoice.notes ? [``, `${t.notes}:`, invoice.notes] : []),
     ].join('\n'),
     html: `
 <div style="font-family: Georgia, 'Times New Roman', serif; max-width: 560px; margin: 0 auto; color: #1d1a15;">
@@ -138,15 +136,14 @@ export async function sendInvoiceEmail(
       ${escapeHtml(t.emailInvoiceBody(businessName, invoice.number, total, dueDate))}
       ${escapeHtml(t.pdfAttached)}
     </p>
-    <p style="margin: 28px 0;">
-      <a href="${payUrl}"
-         style="background: ${accent}; color: ${accentFg}; text-decoration: none; padding: 12px 24px; border-radius: 5px; font-family: -apple-system, sans-serif; font-size: 15px;">
-        ${escapeHtml(t.viewAndPayButton)}
-      </a>
-    </p>
-    <p style="color: #756e61; font-size: 12.5px; line-height: 1.5;">
-      ${escapeHtml(t.orCopyLink)} <a href="${payUrl}" style="color: ${accent};">${payUrl}</a>
-    </p>
+    ${
+      invoice.notes
+        ? `<div style="margin-top: 24px; padding: 16px; background: #f6f4ee; border-radius: 5px;">
+      <strong style="font-family: -apple-system, sans-serif; font-size: 13px;">${escapeHtml(t.notes)}</strong>
+      <div style="margin-top: 8px; color: #514b41; font-size: 13px; line-height: 1.55; white-space: pre-line;">${escapeHtml(invoice.notes)}</div>
+    </div>`
+        : ''
+    }
   </div>
 </div>`,
     attachments: [
@@ -159,13 +156,11 @@ export async function sendInvoiceEmail(
   });
 }
 
-/** Gentle overdue nudge: number/subject, amount, due date, pay link. No PDF —
- *  the original send carried it; reminders stay light. */
+/** Gentle overdue nudge with payment instructions but no online pay link. */
 export async function sendReminderEmail(
   env: Bindings,
   settings: Settings,
   invoice: InvoiceWithClient,
-  payUrl: string,
   reminderNumber: number
 ): Promise<void> {
   if (!invoice.client_email) throw new Error('client has no email address');
@@ -173,7 +168,6 @@ export async function sendReminderEmail(
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
   const accent = safeAccent(settings.accent_color);
-  const accentFg = accentForeground(accent);
   const total = formatCentsTag(invoice.total_cents, invoice.currency, tag);
   const dueDate = formatDateTag(invoice.due_date ?? '', tag);
 
@@ -186,8 +180,7 @@ export async function sendReminderEmail(
       t.greeting(invoice.client_name),
       ``,
       t.reminderBody(invoice.number, invoice.subject, total, dueDate),
-      ``,
-      `${t.viewAndPay} ${payUrl}`,
+      ...(invoice.notes ? [``, `${t.notes}:`, invoice.notes] : []),
       ``,
       t.reminderDisregard,
     ].join('\n'),
@@ -202,12 +195,14 @@ export async function sendReminderEmail(
     <p style="font-size: 15px; line-height: 1.6;">
       ${escapeHtml(t.reminderBody(invoice.number, invoice.subject, total, dueDate))}
     </p>
-    <p style="margin: 28px 0;">
-      <a href="${payUrl}"
-         style="background: ${accent}; color: ${accentFg}; text-decoration: none; padding: 12px 24px; border-radius: 5px; font-family: -apple-system, sans-serif; font-size: 15px;">
-        ${escapeHtml(t.viewAndPayButton)}
-      </a>
-    </p>
+    ${
+      invoice.notes
+        ? `<div style="margin: 24px 0; padding: 16px; background: #f6f4ee; border-radius: 5px;">
+      <strong style="font-family: -apple-system, sans-serif; font-size: 13px;">${escapeHtml(t.notes)}</strong>
+      <div style="margin-top: 8px; color: #514b41; font-size: 13px; line-height: 1.55; white-space: pre-line;">${escapeHtml(invoice.notes)}</div>
+    </div>`
+        : ''
+    }
     <p style="color: #756e61; font-size: 12.5px; line-height: 1.5;">
       ${escapeHtml(t.reminderDisregard)}
     </p>
@@ -240,7 +235,6 @@ export async function sendPaymentReceipt(
   const accent = safeAccent(settings.accent_color);
   const amount = formatCentsTag(info.amountCents, info.currency, tag);
   const businessName = settings.business_name || 'Minvoice';
-  const payUrl = `${env.APP_BASE_URL}/pay/${invoice.public_token}`;
 
   if (invoice.client_email) {
     await deliver(env, settings, {
@@ -252,8 +246,6 @@ export async function sendPaymentReceipt(
           t.greeting(invoice.client_name),
           ``,
           t.receiptBody(amount, invoice.number),
-          ``,
-          `${t.receiptView} ${payUrl}`,
         ].join('\n'),
         html: `
 <div style="font-family: Georgia, 'Times New Roman', serif; max-width: 560px; margin: 0 auto; color: #1d1a15;">
@@ -263,9 +255,6 @@ export async function sendPaymentReceipt(
     <p style="font-size: 15px; line-height: 1.6;">${escapeHtml(t.greeting(invoice.client_name))}</p>
     <p style="font-size: 15px; line-height: 1.6;">
       ${escapeHtml(t.receiptBody(amount, invoice.number))}
-    </p>
-    <p style="color: #756e61; font-size: 12.5px; line-height: 1.5;">
-      ${escapeHtml(t.receiptView)} <a href="${payUrl}" style="color: ${accent};">${payUrl}</a>
     </p>
   </div>
 </div>`,
@@ -349,7 +338,7 @@ export async function sendTestEmail(env: Bindings, db: D1Database, branchId: num
     issue_date: today,
     due_date: settings.payment_terms_days ? addDaysISO(today, settings.payment_terms_days) : null,
     subject: 'Test email — sample invoice',
-    notes: 'This is a sample invoice sent from Settings to preview your email and PDF. The pay link is not real.',
+    notes: 'Payment details: include your bank or other payment instructions here.',
     tax_rate_bps: settings.tax_rate_bps,
     ...totals,
     public_token: 'sample',
@@ -366,7 +355,6 @@ export async function sendTestEmail(env: Bindings, db: D1Database, branchId: num
     invoice,
     items,
     settings,
-    `${env.APP_BASE_URL}/pay/sample`,
     env.ASSETS,
     await getLogo(db, branchId)
   );

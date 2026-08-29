@@ -141,7 +141,7 @@ describe('email settings guard', () => {
       issue_date: '2026-08-29',
       due_date: null,
       subject: null,
-      notes: null,
+      notes: 'Bank: Example Bank\nIBAN: GB00 TEST 0000 0000',
       tax_rate_bps: 0,
       subtotal_cents: 10000,
       tax_cents: 0,
@@ -159,7 +159,9 @@ describe('email settings guard', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('accounts@client.test');
     expect(sent[0].from?.email).toBe('contract@jin-jaw.co.uk');
-    expect(sent[0].text).toBeTruthy();
-    expect(sent[0].html).toBeTruthy();
+    expect(sent[0].text).toContain('IBAN: GB00 TEST 0000 0000');
+    expect(sent[0].html).toContain('IBAN: GB00 TEST 0000 0000');
+    expect(sent[0].text).not.toContain('/pay/');
+    expect(sent[0].html).not.toContain('/pay/');
   });
 });

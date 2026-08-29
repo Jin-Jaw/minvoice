@@ -407,7 +407,7 @@ describe('markInvoicePaidFromWebhook', () => {
 describe('reminder outbox', () => {
   it('deduplicates re-enqueue of the same invoice and reminder number', async () => {
     const id = await seedSentInvoice();
-    const payload = { invoiceId: id, payUrl: 'https://invoice.test/pay/t', reminderNumber: 1 };
+    const payload = { invoiceId: id, reminderNumber: 1 };
     await enqueueReminder(DB, payload);
     await enqueueReminder(DB, payload);
 
@@ -418,7 +418,6 @@ describe('reminder outbox', () => {
     const id = await seedSentInvoice();
     await enqueueReminder(DB, {
       invoiceId: id,
-      payUrl: 'https://invoice.test/pay/t',
       reminderNumber: 1,
     });
     const [row] = await listDueOutbox(DB, MAX_OUTBOX_ATTEMPTS);
@@ -439,7 +438,7 @@ describe('reminder outbox', () => {
 
   it('frees the dedup key when a pending reminder is cancelled', async () => {
     const id = await seedSentInvoice();
-    const payload = { invoiceId: id, payUrl: 'https://invoice.test/pay/t', reminderNumber: 1 };
+    const payload = { invoiceId: id, reminderNumber: 1 };
     await enqueueReminder(DB, payload);
     const [row] = await listDueOutbox(DB, MAX_OUTBOX_ATTEMPTS);
     await cancelOutboxRow(DB, row.id);
@@ -455,7 +454,6 @@ describe('reminder outbox', () => {
     ).run();
     await enqueueReminder(DB, {
       invoiceId: id,
-      payUrl: 'https://invoice.test/pay/t',
       reminderNumber: 1,
     });
 
@@ -485,7 +483,6 @@ describe('reminder outbox', () => {
     const id = await seedSentInvoice();
     await enqueueReminder(DB, {
       invoiceId: id,
-      payUrl: 'https://invoice.test/pay/t',
       reminderNumber: 1,
     });
     await DB.prepare(`UPDATE invoices SET status = 'paid' WHERE id = ?`).bind(id).run();

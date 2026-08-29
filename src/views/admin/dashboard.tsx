@@ -10,7 +10,7 @@ function deleteConfirm(inv: Pick<InvoiceWithClient, 'status' | 'number'>): strin
   if (inv.status === 'paid') {
     return `Delete PAID invoice ${inv.number}? Its payment records are deleted too — reports and CSV exports will change. This cannot be undone.`;
   }
-  return `Delete invoice ${inv.number}? The public pay link will stop working and its history will be erased. This cannot be undone.`;
+  return `Delete invoice ${inv.number}? Its client-facing record and history will be erased. This cannot be undone.`;
 }
 
 export function StatusBadge({
@@ -230,7 +230,7 @@ export function DashboardPage({
                         <form
                           method="post"
                           action={`/admin/invoices/${inv.id}/status`}
-                          data-confirm={`Email invoice ${inv.number} (with PDF and pay link) to ${inv.client_email}?${
+                          data-confirm={`Email invoice ${inv.number} with its PDF attachment to ${inv.client_email}?${
                             inv.status === 'draft' ? ' It will be marked as sent.' : ''
                           }`}
                         >

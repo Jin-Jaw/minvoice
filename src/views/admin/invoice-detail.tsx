@@ -4,7 +4,6 @@ import { formatTimestamp, todayInTz } from '../../lib/dates';
 import type { InvoiceItem, InvoiceWithClient, Payment, TimelineEntry } from '../../db/queries';
 import { StatusBadge } from './dashboard';
 import { Icon } from '../icons';
-import { scriptJson } from '../../lib/script-json';
 
 /** Provider refs (Stripe session ids are 66 chars) get middle-truncated; full value on hover. */
 export function ShortRef({ value }: { value: string }) {
@@ -21,7 +20,6 @@ export function InvoiceDetailPage({
   invoice,
   items,
   payments,
-  payLink,
   timeline,
   timezone,
   emailEnabled,
@@ -33,7 +31,6 @@ export function InvoiceDetailPage({
   invoice: InvoiceWithClient;
   items: InvoiceItem[];
   payments: Payment[];
-  payLink: string;
   timeline: TimelineEntry[];
   timezone: string;
   /** false when Settings → Email = none: email actions degrade to mark-sent */
@@ -58,7 +55,7 @@ export function InvoiceDetailPage({
             <form
               method="post"
               action={`/admin/invoices/${invoice.id}/status`}
-              data-confirm={`Email invoice ${invoice.number} (with PDF and pay link) to ${invoice.client_email}?${
+              data-confirm={`Email invoice ${invoice.number} with its PDF attachment to ${invoice.client_email}?${
                 invoice.status === 'draft' ? ' It will be marked as sent.' : ''
               }`}
             >
@@ -119,7 +116,7 @@ export function InvoiceDetailPage({
                 ? 'Delete this draft invoice? This cannot be undone.'
                 : invoice.status === 'paid'
                   ? `Delete PAID invoice ${invoice.number}? Its payment records are deleted too — reports and CSV exports will change — and nothing is refunded at Stripe/PayPal (refunds live in their dashboards). This cannot be undone.`
-                  : `Delete invoice ${invoice.number}? The public pay link will stop working and its history will be erased. This cannot be undone.`
+                  : `Delete invoice ${invoice.number}? Its client-facing record and history will be erased. This cannot be undone.`
             }
           >
             <input type="hidden" name="action" value="delete" />
@@ -153,111 +150,6 @@ export function InvoiceDetailPage({
 
       {notice ? <div class="banner banner-success">{notice}</div> : null}
       {error ? <div class="banner banner-error">{error}</div> : null}
-
-      {
-        <div class="card">
-          <h2>Pay link</h2>
-          {invoice.status === 'draft' ? (
-            <p class="pay-link-note muted">
-              Not active yet — copying, opening, or sharing will offer to mark the invoice as sent
-              (no email), which activates the link.
-            </p>
-          ) : null}
-          <div class="form-row pay-link-row">
-            <div class="form-group">
-              <input type="text" id="pay-link-input" aria-label="Public pay link" value={payLink} readonly />
-            </div>
-            <div class="pay-link-actions">
-              <button type="button" class="btn btn-secondary" id="copy-pay-link-btn">
-                <Icon name="clipboard" />
-                <span class="btn-label">Copy</span>
-              </button>
-              <a class="btn btn-secondary" href={payLink} id="open-pay-link-btn" target="_blank" rel="noopener">
-                <Icon name="external-link" />
-                Open
-              </a>
-              <button type="button" class="btn btn-secondary" id="share-pay-link-btn" hidden>
-                <Icon name="share" />
-                Share
-              </button>
-            </div>
-          </div>
-          <script
-            nonce={nonce}
-            dangerouslySetInnerHTML={{
-              __html: `
-(function () {
-  var isDraft = ${scriptJson(invoice.status === 'draft')};
-  var confirmMsg = ${scriptJson(
-    `The pay link only works once the invoice is sent. Mark ${invoice.number} as sent now? (No email will be sent — use "Send & email" for that.)`
-  )};
-  var statusUrl = ${scriptJson(`/admin/invoices/${invoice.id}/status`)};
-  var btn = document.getElementById('copy-pay-link-btn');
-  var label = btn.querySelector('.btn-label');
-  var input = document.getElementById('pay-link-input');
-  var open = document.getElementById('open-pay-link-btn');
-
-  // Sharing a draft's link IS the intent to send — offer to mark it sent so
-  // the link the admin just shared actually works.
-  function ensureSent() {
-    if (!isDraft) return Promise.resolve(true);
-    if (!confirm(confirmMsg)) return Promise.resolve(false);
-    return fetch(statusUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'action=send',
-    }).then(function (r) { return r.ok; }).catch(function () { return false; });
-  }
-
-  btn.addEventListener('click', function () {
-    ensureSent().then(function (ok) {
-      if (!ok) return;
-      navigator.clipboard.writeText(input.value).then(function () {
-        // Swap only the label span — btn.textContent would wipe the icon
-        label.textContent = isDraft ? 'Copied — marked sent' : 'Copied!';
-        if (isDraft) { setTimeout(function () { location.reload(); }, 900); return; }
-        setTimeout(function () { label.textContent = 'Copy'; }, 1500);
-      });
-    });
-  });
-
-  open.addEventListener('click', function (e) {
-    if (!isDraft) return; // native new-tab behavior
-    e.preventDefault();
-    if (!confirm(confirmMsg)) return;
-    // Pre-open synchronously so the popup blocker allows it, then point it
-    // at the (now active) link once the status flip lands.
-    var w = window.open('', '_blank');
-    fetch(statusUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'action=send',
-    }).then(function (r) {
-      if (r.ok) { w.location = input.value; location.reload(); }
-      else { w.close(); alert('Could not mark the invoice as sent — try again.'); }
-    }).catch(function () { w.close(); alert('Could not mark the invoice as sent — try again.'); });
-  });
-
-  // Native share sheet — phones only (progressively enhanced)
-  var share = document.getElementById('share-pay-link-btn');
-  if (navigator.share) {
-    share.hidden = false;
-    share.addEventListener('click', function () {
-      ensureSent().then(function (ok) {
-        if (!ok) return;
-        var reloadAfter = isDraft;
-        navigator.share({ title: document.title, url: input.value })
-          .catch(function () {})
-          .finally(function () { if (reloadAfter) location.reload(); });
-      });
-    });
-  }
-})();
-`,
-            }}
-          ></script>
-        </div>
-      }
 
       <div class="card">
         <h2>Client</h2>

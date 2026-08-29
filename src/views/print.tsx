@@ -311,11 +311,6 @@ tr { break-inside: avoid; }
             </div>
           ) : null}
 
-          {invoice.status === 'sent' ? (
-            <div class="pay-footer">
-              {t.payOnline} <a href={payUrl}>{payUrl}</a>
-            </div>
-          ) : null}
         </div>
         <script
           nonce={nonce}

@@ -242,10 +242,11 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
           </div>
 
           <div class="form-group mt-2">
-            <label for="notes">Notes</label>
+            <label for="notes">Payment details / notes</label>
             <textarea id="notes" name="notes">
               {notes}
             </textarea>
+            <span class="muted">Included in the PDF and client email. Add the bank or payment instructions for this invoice here.</span>
           </div>
         </div>
 

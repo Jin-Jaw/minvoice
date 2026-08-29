@@ -26,19 +26,14 @@ export async function processEmailOutbox(env: Bindings): Promise<void> {
   const due = await listDueOutbox(env.DB, MAX_OUTBOX_ATTEMPTS);
   if (due.length === 0) return;
 
-  // Cron has no request middleware to resolve APP_BASE_URL on zero-config
-  // deploys, and receipt/notice links are built from it — resolve here the
-  // same way the reminder enqueuer does: configured value, else the origin
-  // the pay page last saw.
+  // Paid notices to the business include an admin link, so resolve the app
+  // origin for that one outbox kind. Client receipts/reminders have no links.
   const settings = await getSettings(env.DB, 1);
   const base = ((env.APP_BASE_URL ?? '').trim() || settings.last_seen_origin).replace(/\/+$/, '');
   const resolvedEnv: Bindings = base ? { ...env, APP_BASE_URL: base } : env;
 
   for (const row of due) {
-    // Reminder payloads carry their pay URL from enqueue time; receipts and
-    // notices need a live base URL — without one, leave them pending (no
-    // attempt consumed) rather than sending emails with broken links.
-    if (!base && row.kind !== 'reminder') {
+    if (!base && row.kind === 'paid_notice') {
       console.warn(`outbox ${row.kind}#${row.id}: no APP_BASE_URL and no traffic-derived origin yet — leaving pending`);
       continue;
     }
@@ -63,7 +58,7 @@ async function deliver(env: Bindings, row: OutboxRow): Promise<void> {
   // reminder — the history event is written only on ACTUAL delivery, in the
   // same transaction as the sent-mark, so the invoice timeline and the
   // cadence counter never claim an email that didn't go out.
-  const p = JSON.parse(row.payload) as { invoiceId: number; payUrl: string; reminderNumber: number };
+  const p = JSON.parse(row.payload) as { invoiceId: number; reminderNumber: number };
   const invoice = await getInvoiceById(env.DB, p.invoiceId);
   const settings = invoice ? await getSettings(env.DB, invoice.branch_id) : null;
   // Paid or voided since enqueue, or email turned off: a nudge would be wrong.
@@ -73,7 +68,7 @@ async function deliver(env: Bindings, row: OutboxRow): Promise<void> {
   if (!invoice || !settings || invoice.status !== 'sent' || settings.email_provider === 'none') {
     return cancelOutboxRow(env.DB, row.id);
   }
-  await sendReminderEmail(env, settings, invoice, p.payUrl, p.reminderNumber);
+  await sendReminderEmail(env, settings, invoice, p.reminderNumber);
   await markReminderSent(
     env.DB,
     row.id,

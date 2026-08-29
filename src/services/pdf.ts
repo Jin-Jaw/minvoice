@@ -87,7 +87,6 @@ export async function generateInvoicePdf(
   invoice: InvoiceWithClient,
   items: InvoiceItem[],
   settings: Settings,
-  payUrl?: string,
   assets?: Fetcher,
   logo?: Logo | null
 ): Promise<Uint8Array> {
@@ -113,7 +112,7 @@ export async function generateInvoicePdf(
   const documentText = [
     t.invoice, upper(t.invoice),
     ...[t.billedTo, t.subject, t.description, t.qty, t.unitPrice, t.amount, t.notes].map(upper),
-    t.issued, t.due, t.subtotal, t.tax, t.total, t.payOnline,
+    t.issued, t.due, t.subtotal, t.tax, t.total,
     t.statusPaid, t.statusVoid,
     t.footerThanks(settings.business_name || null),
     settings.business_name, settings.business_address, settings.business_email ?? '',
@@ -329,18 +328,17 @@ export async function generateInvoicePdf(
     }
   }
 
-  // ---- Footer: pay link on every page ----
+  // ---- Footer ----
   const pages = doc.getPages();
   for (const p of pages) {
     ctx.page = p;
     ctx.y = 46;
     hr();
     ctx.y = 32;
-    const paying = payUrl && invoice.status === 'sent';
-    const msg = paying ? `${t.payOnline} ${payUrl}` : t.footerThanks(settings.business_name || null);
+    const msg = t.footerThanks(settings.business_name || null);
     text(msg, 0, {
       size: 8.5,
-      color: paying ? SOFT : FAINT,
+      color: FAINT,
       rightAlignTo: PAGE.width / 2 + ctx.regular.widthOfTextAtSize(sanitize(msg, ctx.regular), 8.5) / 2,
     });
   }

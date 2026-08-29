@@ -220,7 +220,7 @@ app.get('/admin/invoices/:id/pdf', async (c) => {
     getLogo(c.env.DB, branchId),
   ]);
   return pdfResponse(
-    await generateInvoicePdf(invoice, items, settings, `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`, c.env.ASSETS, logo),
+    await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo),
     `${invoice.number}.pdf`
   );
 });
