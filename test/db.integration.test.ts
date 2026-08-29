@@ -642,6 +642,45 @@ describe('client default rate currencies', () => {
   });
 });
 
+describe('written payment instructions only', () => {
+  it('removes online payment configuration from Settings', async () => {
+    const response = await exports.default.fetch(
+      new Request('https://invoice.test/admin/settings', { headers: { cookie: await loginCookie() } })
+    );
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).not.toContain('<h2>Payments</h2>');
+    expect(html).not.toContain('Stripe secret key');
+    expect(html).not.toContain('PayPal client ID');
+    expect(html).not.toContain('No payment methods are enabled');
+  });
+
+  it('shows written instructions and exposes no checkout endpoints', async () => {
+    const id = await seedSentInvoice();
+    await DB.prepare('UPDATE invoices SET notes = ? WHERE id = ?')
+      .bind('Bank transfer: use invoice number as the reference.', id)
+      .run();
+    const invoice = (await getInvoice(DB, id))!;
+
+    const page = await exports.default.fetch(
+      new Request(`https://invoice.test/pay/${invoice.public_token}`, { headers: { 'user-agent': 'Mozilla/5.0' } })
+    );
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('Bank transfer: use invoice number as the reference.');
+    expect(html).toContain('Please use the payment details provided on this invoice.');
+    expect(html).not.toContain(`/pay/${invoice.public_token}/stripe`);
+    expect(html).not.toContain(`/pay/${invoice.public_token}/paypal`);
+
+    for (const suffix of ['/stripe', '/paypal', '/paypal/return']) {
+      const response = await exports.default.fetch(
+        new Request(`https://invoice.test/pay/${invoice.public_token}${suffix}`, { method: 'POST' })
+      );
+      expect(response.status).toBe(404);
+    }
+  });
+});
+
 describe('multi-currency invoices and reports', () => {
   async function seedTwoCurrencies(): Promise<{ gbp: number; eur: number }> {
     const clientId = await createClient(DB, {

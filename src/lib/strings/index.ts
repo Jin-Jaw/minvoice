@@ -55,6 +55,7 @@ export type Strings = {
   trustCardsPrefix: string; // "Cards are processed by" (Stripe name follows)
   trustPaypal: string;
   noOnlinePayment: (contactEmail: string | null) => string;
+  paymentInstructions: string;
 
   // Invoice email
   emailInvoiceSubject: (number: string, business: string, subject: string | null, total: string) => string;

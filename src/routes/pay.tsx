@@ -8,17 +8,11 @@ import {
   getLogo,
   getPayments,
   getSettings,
-  markInvoicePaidFromWebhook,
   recordInvoiceView,
-  setPaypalOrderId,
   updateLastSeenOrigin,
 } from '../db/queries';
 import { isLocalRequest } from '../lib/admin-auth';
-import { createCheckoutSession } from '../services/stripe';
-import { captureOrder, createOrder } from '../services/paypal';
 import { generateInvoicePdf, pdfResponse } from '../services/pdf';
-import { processEmailOutbox } from '../services/outbox';
-import { effectiveProviderEnv, providerAvailability } from '../lib/providers';
 import { DraftHold, PublicInvoice } from '../views/pay';
 import { PrintInvoice } from '../views/print';
 
@@ -82,12 +76,7 @@ pay.get('/:token', async (c) => {
       invoice={invoice}
       items={items}
       settings={settings}
-      justPaid={c.req.query('paid') === '1'}
-      canceled={c.req.query('canceled') === '1'}
       underReview={underReview}
-      providers={
-        underReview ? { stripe: false, paypal: false } : await providerAvailability(c.env, settings, invoice.currency)
-      }
       nonce={c.get('secureHeadersNonce')}
     />
   );
@@ -129,80 +118,4 @@ pay.get('/:token/pdf', async (c) => {
     await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo),
     `${invoice.number}.pdf`
   );
-});
-
-pay.post('/:token/stripe', async (c) => {
-  const invoice = await getInvoiceByToken(c.env.DB, c.req.param('token'));
-  if (!invoice) return c.notFound();
-  const settings = await getSettings(c.env.DB, invoice.branch_id);
-  if (awaitingPaymentReview(invoice, await getPayments(c.env.DB, invoice.id))) {
-    return c.redirect(`/pay/${invoice.public_token}`, 303);
-  }
-  if (!(await providerAvailability(c.env, settings, invoice.currency)).stripe) return c.redirect(`/pay/${invoice.public_token}`, 303);
-  if (invoice.status !== 'sent' || invoice.total_cents <= 0) {
-    return c.redirect(`/pay/${invoice.public_token}`, 303);
-  }
-  const url = await createCheckoutSession(
-    await effectiveProviderEnv(c.env, settings),
-    invoice,
-    settings.business_name || undefined
-  );
-  return c.redirect(url, 303);
-});
-
-pay.post('/:token/paypal', async (c) => {
-  const invoice = await getInvoiceByToken(c.env.DB, c.req.param('token'));
-  if (!invoice) return c.notFound();
-  const settings = await getSettings(c.env.DB, invoice.branch_id);
-  if (awaitingPaymentReview(invoice, await getPayments(c.env.DB, invoice.id))) {
-    return c.redirect(`/pay/${invoice.public_token}`, 303);
-  }
-  if (!(await providerAvailability(c.env, settings, invoice.currency)).paypal) {
-    return c.redirect(`/pay/${invoice.public_token}`, 303);
-  }
-  if (invoice.status !== 'sent' || invoice.total_cents <= 0) {
-    return c.redirect(`/pay/${invoice.public_token}`, 303);
-  }
-  const { orderId, approveUrl } = await createOrder(await effectiveProviderEnv(c.env, settings), invoice);
-  await setPaypalOrderId(c.env.DB, invoice.id, orderId);
-  return c.redirect(approveUrl, 303);
-});
-
-// PayPal sends the payer back with ?token=<orderId>. Capture here for a snappy
-// confirmation; the webhook remains the source of truth, and the UNIQUE
-// (provider, provider_ref) constraint dedupes whichever lands second.
-pay.get('/:token/paypal/return', async (c) => {
-  const invoice = await getInvoiceByToken(c.env.DB, c.req.param('token'));
-  if (!invoice) return c.notFound();
-  const orderId = c.req.query('token');
-  const payUrl = `/pay/${invoice.public_token}`;
-  if (!orderId || orderId !== invoice.paypal_order_id) return c.redirect(payUrl, 303);
-  if (invoice.status === 'paid') return c.redirect(`${payUrl}?paid=1`, 303);
-  if (invoice.status !== 'sent') return c.redirect(payUrl, 303);
-
-  try {
-    const settings = await getSettings(c.env.DB, invoice.branch_id);
-    const capture = await captureOrder(await effectiveProviderEnv(c.env, settings), orderId);
-    if (capture.status === 'COMPLETED') {
-      const result = await markInvoicePaidFromWebhook(c.env.DB, {
-        provider: 'paypal',
-        eventId: `capture-return-${capture.captureId}`,
-        eventType: 'capture.on_return',
-        payload: JSON.stringify(capture),
-        invoiceId: invoice.id,
-        providerRef: capture.captureId,
-        amountCents: capture.amountCents,
-        currency: capture.currency,
-      });
-      // 'paid' fires here or on the webhook, never both — the status guard
-      // means only one path performs the transition.
-      if (result === 'paid') {
-        c.executionCtx.waitUntil(processEmailOutbox(c.env).catch((e) => console.error('outbox drain failed', e)));
-      }
-      return c.redirect(`${payUrl}?paid=1`, 303);
-    }
-  } catch (e) {
-    console.error('paypal capture on return failed', e);
-  }
-  return c.redirect(payUrl, 303);
 });

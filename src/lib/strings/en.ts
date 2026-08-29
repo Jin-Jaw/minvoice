@@ -38,6 +38,7 @@ export const en: Strings = {
   trustPaypal: 'PayPal payments redirect to paypal.com to complete.',
   noOnlinePayment: (email) =>
     `Online payment isn't available for this invoice${email ? ` — please contact ${email}` : ''}.`,
+  paymentInstructions: 'Please use the payment details provided on this invoice.',
 
   emailInvoiceSubject: (number, business, subject, total) =>
     subject

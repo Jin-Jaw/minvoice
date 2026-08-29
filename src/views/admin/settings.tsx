@@ -5,19 +5,10 @@ import type { Settings } from '../../db/queries';
 import type { ConfigWarning } from '../../lib/config';
 import type { KeySource } from '../../lib/providers';
 
-export type ProviderFieldMeta = {
-  sources: {
-    stripeKey: KeySource;
-    stripeWebhook: KeySource;
-    paypalId: KeySource;
-    paypalSecret: KeySource;
-    paypalWebhook: KeySource;
-    resend: KeySource;
-  };
+export type SecretFieldMeta = {
+  sources: { resend: KeySource };
   /** last-4 of STORED values only — env secret values are never surfaced */
-  hints: { stripeKey: string; stripeWebhook: string; paypalSecret: string; resend: string };
-  /** PAYPAL_API_BASE var set in wrangler config — the selector is inert then */
-  paypalEnvManaged: boolean;
+  hints: { resend: string };
 };
 
 export function timezoneOptions(): string[] {
@@ -36,7 +27,7 @@ export function SettingsPage({
   tzKept,
   curKept,
   numKept,
-  providerMeta,
+  secretMeta,
   hasLogo,
   emailTestOk,
   emailTestErr,
@@ -53,7 +44,7 @@ export function SettingsPage({
   tzKept?: boolean;
   curKept?: boolean;
   numKept?: boolean;
-  providerMeta: ProviderFieldMeta;
+  secretMeta: SecretFieldMeta;
   hasLogo?: boolean;
   emailTestOk?: string | null;
   emailTestErr?: string | null;
@@ -65,7 +56,7 @@ export function SettingsPage({
   theme?: 'auto' | 'light' | 'dark';
   nonce?: string;
 }) {
-  const { sources, hints } = providerMeta;
+  const { sources, hints } = secretMeta;
   const taxRatePercent = (settings.tax_rate_bps / 100).toFixed(2);
 
   return (
@@ -73,14 +64,14 @@ export function SettingsPage({
       <div class="page-head">
         <div>
           <h1 class="page-title">Settings — {settings.business_name}</h1>
-          <p class="muted">Business identity and numbering apply to this branch. Email and payment connections are shared.</p>
+          <p class="muted">Business identity and numbering apply to this branch. Email configuration is shared.</p>
         </div>
       </div>
 
       {saved ? <div class="banner banner-success">Settings saved.</div> : null}
       {secretSaveBlocked ? (
         <div class="banner banner-error">
-          Provider credentials were not saved because SETTINGS_MASTER_KEY is unavailable or invalid. Fix the
+          The email credential was not saved because SETTINGS_MASTER_KEY is unavailable or invalid. Fix the
           Worker secret first; plaintext credentials are never stored.
         </div>
       ) : null}
@@ -469,89 +460,6 @@ export function SettingsPage({
         </form>
       </div>
 
-      <div class="card" id="payments">
-        <h2>Payments</h2>
-        <p class="muted">
-          Keys entered here are stored in the database and used only when no{' '}
-          <code>wrangler secret</code> exists for the same key — secrets always win and are the
-          hardened option (encrypted at rest, excluded from database exports).
-        </p>
-        <form method="post" action="/admin/settings/providers">
-          <div class="provider-toggle">
-            <label>
-              <input type="checkbox" id="stripe_enabled" name="stripe_enabled" checked={!!settings.stripe_enabled} />
-              <span class="provider-toggle-name">Card payments (Stripe)</span>
-            </label>
-          </div>
-          <div class="form-row" id="stripe-fields" hidden={!settings.stripe_enabled}>
-            <SecretField
-              name="stripe_secret_key"
-              label="Stripe secret key"
-              source={sources.stripeKey}
-              hint={hints.stripeKey}
-            />
-            <SecretField
-              name="stripe_webhook_secret"
-              label="Stripe webhook signing secret"
-              source={sources.stripeWebhook}
-              hint={hints.stripeWebhook}
-            />
-          </div>
-
-          <div class="provider-toggle">
-            <label>
-              <input type="checkbox" id="paypal_enabled" name="paypal_enabled" checked={!!settings.paypal_enabled} />
-              <span class="provider-toggle-name">PayPal</span>
-            </label>
-          </div>
-          <div id="paypal-fields" hidden={!settings.paypal_enabled}>
-            <div class="form-row">
-              <PlainCredField
-                name="paypal_client_id"
-                label="PayPal client ID"
-                source={sources.paypalId}
-                value={settings.paypal_client_id}
-              />
-              <SecretField
-                name="paypal_client_secret"
-                label="PayPal client secret"
-                source={sources.paypalSecret}
-                hint={hints.paypalSecret}
-              />
-            </div>
-            <div class="form-row">
-              <PlainCredField
-                name="paypal_webhook_id"
-                label="PayPal webhook ID"
-                source={sources.paypalWebhook}
-                value={settings.paypal_webhook_id}
-              />
-              <div class="form-group">
-                <label for="paypal_environment">PayPal environment</label>
-                {providerMeta.paypalEnvManaged ? (
-                  <input type="text" id="paypal_environment" disabled placeholder="Managed via wrangler config (PAYPAL_API_BASE)" />
-                ) : (
-                  <select id="paypal_environment" name="paypal_environment">
-                    <option value="live" selected={settings.paypal_environment !== 'sandbox'}>
-                      Live
-                    </option>
-                    <option value="sandbox" selected={settings.paypal_environment === 'sandbox'}>
-                      Sandbox (testing)
-                    </option>
-                  </select>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div class="actions">
-            <button type="submit" class="btn btn-primary">
-              Save payment settings
-            </button>
-          </div>
-        </form>
-      </div>
-
       <div class="card" id="appearance">
         <h2>Appearance</h2>
         <form method="post" action="/admin/settings/appearance">
@@ -589,8 +497,6 @@ export function SettingsPage({
     var t = document.getElementById(toggleId), f = document.getElementById(fieldsId);
     t.addEventListener('change', function () { f.hidden = !t.checked; });
   }
-  wire('stripe_enabled', 'stripe-fields');
-  wire('paypal_enabled', 'paypal-fields');
   wire('reminders_enabled', 'reminder-schedule-wrap');
 
   var provider = document.getElementById('email_provider');
@@ -692,30 +598,6 @@ function SecretField({
           autocomplete="off"
           placeholder={source === 'settings' ? `Configured — ends in ${hint}. Blank keeps it.` : 'Not set'}
         />
-      )}
-    </div>
-  );
-}
-
-/** Non-secret credential (ids): value visible and directly editable. */
-function PlainCredField({
-  name,
-  label,
-  source,
-  value,
-}: {
-  name: string;
-  label: string;
-  source: KeySource;
-  value: string;
-}) {
-  return (
-    <div class="form-group">
-      <label for={name}>{label}</label>
-      {source === 'secret' ? (
-        <input type="text" id={name} disabled placeholder="Managed via wrangler secret" />
-      ) : (
-        <input type="text" id={name} name={name} autocomplete="off" value={value} />
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 import type { Bindings } from '../env';
 import type { Settings } from '../db/queries';
-import { setSecretSetting, SECRET_SETTINGS_COLUMNS } from '../db/queries';
+import { setSecretSetting, SECRET_SETTINGS_COLUMNS, type SecretSettingsColumn } from '../db/queries';
 import { secretConfigured } from './config';
 import { box, isBoxed, unbox, validMasterKey } from './secretbox';
 
@@ -122,9 +122,13 @@ export function keySource(secret: string | undefined, stored: string | undefined
 export type StoredSecretsHealth = { plaintextStored: boolean; undecryptable: boolean };
 
 /** Encryption state of the stored (D1) secret columns — drives config warnings. */
-export async function storedSecretsHealth(env: Bindings, settings: Settings): Promise<StoredSecretsHealth> {
+export async function storedSecretsHealth(
+  env: Bindings,
+  settings: Settings,
+  columns: readonly SecretSettingsColumn[] = SECRET_SETTINGS_COLUMNS
+): Promise<StoredSecretsHealth> {
   const health: StoredSecretsHealth = { plaintextStored: false, undecryptable: false };
-  for (const col of SECRET_SETTINGS_COLUMNS) {
+  for (const col of columns) {
     const v = (settings[col] ?? '').trim();
     if (!v) continue;
     if (!isBoxed(v)) health.plaintextStored = true;

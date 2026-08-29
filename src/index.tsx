@@ -6,7 +6,6 @@ import { csrfGuard } from './middleware/csrf';
 import { branchContext } from './middleware/branch';
 import { admin } from './routes/admin';
 import { pay } from './routes/pay';
-import { webhooks } from './routes/webhooks';
 import {
   clearLoginAttempts,
   getInvoice,
@@ -103,21 +102,6 @@ app.use(
   '/admin/*',
   bodyLimit({ maxSize: 1024 * 1024, onError: (c) => c.text('Request body too large (1 MB limit).', 413) })
 );
-
-// Provider deliveries are small JSON documents. Bound public ingress before
-// either route materializes the body, then add a per-colo global route budget
-// to make invalid-signature floods cheap to reject.
-app.use(
-  '/webhooks/*',
-  bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.text('Webhook body too large.', 413) })
-);
-app.use('/webhooks/*', async (c, next) => {
-  const limiter = c.env.WEBHOOK_RATE_LIMITER;
-  if (limiter && !(await limiter.limit({ key: c.req.path })).success) {
-    return c.text('Too many webhook requests.', 429);
-  }
-  await next();
-});
 
 // CSRF: reject cross-site state-changing requests to any admin route (incl.
 // login). Registered before the routes below so it covers them all.
@@ -248,9 +232,8 @@ app.get('/admin/invoices/:id/print', async (c) => {
 
 app.route('/admin', admin);
 
-// Public + provider-facing routes — deliberately outside the Access boundary.
+// Public invoice routes — deliberately outside the Access boundary.
 app.route('/pay', pay);
-app.route('/webhooks', webhooks);
 
 app.notFound((c) => {
   c.header('X-Robots-Tag', 'noindex');
@@ -269,7 +252,7 @@ export default {
   fetch: app.fetch,
   // Daily cron (wrangler.jsonc triggers): enqueue due reminders (opt-in via
   // Settings), drain the email outbox (delivers reminders + retries any
-  // payment emails that failed their immediate attempt), then housekeeping.
+  // email notifications that failed their immediate attempt), then housekeeping.
   scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
     ctx.waitUntil(
       (async () => {

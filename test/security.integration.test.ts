@@ -70,15 +70,17 @@ describe('browser and public-route hardening', () => {
     }
   });
 
-  it('rejects oversized webhook requests before a handler buffers them', async () => {
-    const response = await exports.default.fetch(
-      new Request('https://invoice.test/webhooks/stripe', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ payload: 'x'.repeat(300 * 1024) }),
-      })
-    );
-    expect(response.status).toBe(413);
+  it('does not expose online payment webhook endpoints', async () => {
+    for (const provider of ['stripe', 'paypal']) {
+      const response = await exports.default.fetch(
+        new Request(`https://invoice.test/webhooks/${provider}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        })
+      );
+      expect(response.status).toBe(404);
+    }
   });
 
   it('creates and switches invoice branches while retaining the shared client list', async () => {

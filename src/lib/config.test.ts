@@ -33,17 +33,17 @@ describe('configWarnings', () => {
     expect(await configWarnings(fullEnv, cf)).toEqual([]);
   });
 
-  it('flags each missing payment secret', async () => {
-    const env = { ...fullEnv, STRIPE_SECRET_KEY: '', PAYPAL_WEBHOOK_ID: undefined } as unknown as Bindings;
-    const w = await configWarnings(env, cf);
-    expect(w.some((m) => m.text.includes('STRIPE_SECRET_KEY'))).toBe(true);
-    expect(w.some((m) => m.text.includes('PAYPAL_WEBHOOK_ID'))).toBe(true);
-    expect(w).toHaveLength(2);
-  });
-
-  it('flags missing PayPal credentials as one warning', async () => {
-    const env = { ...fullEnv, PAYPAL_CLIENT_ID: '' } as Bindings;
-    expect((await configWarnings(env, cf)).filter((m) => m.text.includes('PayPal is enabled but'))).toHaveLength(1);
+  it('does not warn about online payment providers because checkout is disabled', async () => {
+    const env = {
+      ...fullEnv,
+      STRIPE_SECRET_KEY: '',
+      STRIPE_WEBHOOK_SECRET: '',
+      PAYPAL_CLIENT_ID: '',
+      PAYPAL_CLIENT_SECRET: '',
+      PAYPAL_WEBHOOK_ID: '',
+    } as Bindings;
+    expect(await configWarnings(env, cf)).toEqual([]);
+    expect(await configWarnings(env, { ...cf, stripe_enabled: 0, paypal_enabled: 0 })).toEqual([]);
   });
 
   it('flags cloudflare email provider without the send_email binding', async () => {
@@ -84,31 +84,9 @@ describe('configWarnings', () => {
     expect(w[0].text).toContain('Email sending is off');
   });
 
-  it('suppresses only the PayPal webhook-id warning in local dev', async () => {
-    const env = { ...fullEnv, PAYPAL_WEBHOOK_ID: '' } as Bindings;
-    expect((await configWarnings(env, cf)).some((m) => m.text.includes('PAYPAL_WEBHOOK_ID'))).toBe(true);
-    expect(await configWarnings(env, cf, { localDev: true })).toEqual([]);
-    // other warnings survive local dev
-    const noStripe = { ...fullEnv, STRIPE_SECRET_KEY: '' } as Bindings;
-    expect((await configWarnings(noStripe, cf, { localDev: true })).some((m) => m.text.includes('STRIPE_SECRET_KEY'))).toBe(true);
-  });
-
-  it('both providers off yields exactly the no-payment-methods notice', async () => {
-    const env = { ...fullEnv, STRIPE_SECRET_KEY: '', PAYPAL_CLIENT_ID: '' } as Bindings;
-    const off = { ...cf, stripe_enabled: 0, paypal_enabled: 0 } as Settings;
-    const w = await configWarnings(env, off);
-    expect(w).toHaveLength(1);
-    expect(w[0].text).toContain('No payment methods are enabled');
-  });
-
-  it('one enabled provider is enough to avoid the no-payments notice', async () => {
-    const on = { ...cf, paypal_enabled: 0, stripe_secret_key: 'sk_live_x' } as Settings;
-    expect((await configWarnings(fullEnv, on)).some((m) => m.text.includes('No payment methods'))).toBe(false);
-  });
-
   it('settings-stored keys satisfy the checks (with an unencrypted advisory sans master key)', async () => {
-    const env = { ...fullEnv, STRIPE_SECRET_KEY: '', STRIPE_WEBHOOK_SECRET: '' } as unknown as Bindings;
-    const stored = { ...cf, stripe_secret_key: 'sk_live_db', stripe_webhook_secret: 'whsec_db' } as Settings;
+    const env = { ...fullEnv, RESEND_API_KEY: '' } as Bindings;
+    const stored = { ...cf, resend_api_key: 're_live_db' } as Settings;
     const w = await configWarnings(env, stored);
     expect(w).toHaveLength(1);
     expect(w[0].category).toBe('auth');
@@ -116,8 +94,8 @@ describe('configWarnings', () => {
   });
 
   it('a placeholder or short master key counts as absent and is called out', async () => {
-    const env = { ...fullEnv, STRIPE_SECRET_KEY: '', SETTINGS_MASTER_KEY: 'change-me' } as unknown as Bindings;
-    const stored = { ...cf, stripe_secret_key: 'sk_live_db' } as Settings;
+    const env = { ...fullEnv, RESEND_API_KEY: '', SETTINGS_MASTER_KEY: 'change-me' } as Bindings;
+    const stored = { ...cf, resend_api_key: 're_live_db' } as Settings;
     const w = await configWarnings(env, stored);
     expect(w).toHaveLength(1);
     expect(w[0].category).toBe('auth');
@@ -125,23 +103,21 @@ describe('configWarnings', () => {
   });
 
   it('boxed stored keys with the master key are silent', async () => {
-    const env = { ...fullEnv, STRIPE_SECRET_KEY: '', STRIPE_WEBHOOK_SECRET: '', SETTINGS_MASTER_KEY: 'unit-test-master-key-0123456789abcdef' } as unknown as Bindings;
+    const env = { ...fullEnv, RESEND_API_KEY: '', SETTINGS_MASTER_KEY: 'unit-test-master-key-0123456789abcdef' } as Bindings;
     const stored = {
       ...cf,
-      stripe_secret_key: await box('unit-test-master-key-0123456789abcdef', 'sk_live_db'),
-      stripe_webhook_secret: await box('unit-test-master-key-0123456789abcdef', 'whsec_db'),
+      resend_api_key: await box('unit-test-master-key-0123456789abcdef', 're_live_db'),
     } as Settings;
     expect(await configWarnings(env, stored)).toEqual([]);
   });
 
   it('flags undecryptable stored keys loudly', async () => {
-    const env = { ...fullEnv, STRIPE_SECRET_KEY: '', STRIPE_WEBHOOK_SECRET: '', SETTINGS_MASTER_KEY: 'a-different-master-key-fedcba9876543210' } as unknown as Bindings;
+    const env = { ...fullEnv, RESEND_API_KEY: '', SETTINGS_MASTER_KEY: 'a-different-master-key-fedcba9876543210' } as Bindings;
     const stored = {
       ...cf,
-      stripe_secret_key: await box('unit-test-master-key-0123456789abcdef', 'sk_live_db'),
-      stripe_webhook_secret: await box('unit-test-master-key-0123456789abcdef', 'whsec_db'),
+      resend_api_key: await box('unit-test-master-key-0123456789abcdef', 're_live_db'),
     } as Settings;
     const w = await configWarnings(env, stored);
-    expect(w.some((m) => m.category === 'payments' && m.text.includes('cannot be decrypted'))).toBe(true);
+    expect(w.some((m) => m.category === 'email' && m.text.includes('cannot be decrypted'))).toBe(true);
   });
 });

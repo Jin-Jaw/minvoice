@@ -52,7 +52,6 @@ import {
   setNextInvoiceNumber,
   setResendApiKey,
   updateEmailSettings,
-  updateProviderSettings,
   updateSettings,
   type ItemDraft,
 } from '../db/queries';
@@ -307,7 +306,7 @@ admin.get('/', async (c) => {
       emailError={c.req.query('email_error')}
       emailEnabled={settings.email_provider !== 'none'}
       today={todayInTz(settings.timezone)}
-      warnings={(await configWarnings(c.env, settings, { localDev: isLocalRequest(c.req.raw) }))
+      warnings={(await configWarnings(c.env, settings))
         .filter((w) => w.category !== 'auth')
         .map((w) => w.text)}
       currentPath="/admin"
@@ -1001,22 +1000,9 @@ admin.get('/settings', async (c) => {
     const opened = await unbox(c.env.SETTINGS_MASTER_KEY, v.trim());
     return opened ? opened.slice(-4) : '';
   };
-  const providerMeta = {
-    sources: {
-      stripeKey: keySource(c.env.STRIPE_SECRET_KEY, settings.stripe_secret_key),
-      stripeWebhook: keySource(c.env.STRIPE_WEBHOOK_SECRET, settings.stripe_webhook_secret),
-      paypalId: keySource(c.env.PAYPAL_CLIENT_ID, settings.paypal_client_id),
-      paypalSecret: keySource(c.env.PAYPAL_CLIENT_SECRET, settings.paypal_client_secret),
-      paypalWebhook: keySource(c.env.PAYPAL_WEBHOOK_ID, settings.paypal_webhook_id),
-      resend: keySource(c.env.RESEND_API_KEY, settings.resend_api_key),
-    },
-    hints: {
-      stripeKey: await tail(settings.stripe_secret_key),
-      stripeWebhook: await tail(settings.stripe_webhook_secret),
-      paypalSecret: await tail(settings.paypal_client_secret),
-      resend: await tail(settings.resend_api_key),
-    },
-    paypalEnvManaged: !!(c.env.PAYPAL_API_BASE ?? '').trim(),
+  const secretMeta = {
+    sources: { resend: keySource(c.env.RESEND_API_KEY, settings.resend_api_key) },
+    hints: { resend: await tail(settings.resend_api_key) },
   };
   return c.html(
     <SettingsPage
@@ -1026,14 +1012,14 @@ admin.get('/settings', async (c) => {
       tzKept={tzKept}
       curKept={curKept}
       numKept={numKept}
-      providerMeta={providerMeta}
+      secretMeta={secretMeta}
       hasLogo={!!(await getLogo(c.env.DB, branchId))}
       emailTestOk={emailTestOk}
       emailTestErr={emailTestErr}
       resendKept={resendKept}
       secretSaveBlocked={secretSaveBlocked}
       accentKept={accentKeptQ}
-      alerts={await configWarnings(c.env, settings, { localDev: isLocalRequest(c.req.raw) })}
+      alerts={await configWarnings(c.env, settings)}
       theme={themeCookie(c)}
       nonce={c.get('secureHeadersNonce')}
     />
@@ -1129,40 +1115,4 @@ admin.post('/settings/test-email', async (c) => {
     const msg = e instanceof Error ? e.message : String(e);
     return c.redirect(`/admin/settings?email_test_err=${encodeURIComponent(msg.slice(0, 200))}`);
   }
-});
-
-admin.post('/settings/providers', async (c) => {
-  const body = (await c.req.parseBody()) as Record<string, string>;
-  const cur = await getSettings(c.env.DB, c.get('branchId'));
-  const submittedSecrets = [
-    body.stripe_secret_key,
-    body.stripe_webhook_secret,
-    body.paypal_client_secret,
-    body.resend_api_key,
-  ].some((value) => !!(value ?? '').trim());
-  if (submittedSecrets && !validMasterKey(c.env.SETTINGS_MASTER_KEY)) {
-    return c.redirect('/admin/settings?secret_key_required=1#payments');
-  }
-  // Masked fields: blank means "keep the stored value" (already encrypted);
-  // new secret values are accepted only when SETTINGS_MASTER_KEY is valid.
-  // Plain fields
-  // (ids) display their value and submit it back directly, so empty clears them.
-  const keep = async (input: string | undefined, current: string) => {
-    const t = (input ?? '').trim();
-    return t ? await sealIfKeyed(c.env.SETTINGS_MASTER_KEY, t) : current;
-  };
-  const plain = (input: string | undefined, current: string) =>
-    input === undefined ? current : input.trim();
-  await updateProviderSettings(c.env.DB, {
-    stripe_enabled: body.stripe_enabled ? 1 : 0,
-    paypal_enabled: body.paypal_enabled ? 1 : 0,
-    stripe_secret_key: await keep(body.stripe_secret_key, cur.stripe_secret_key),
-    stripe_webhook_secret: await keep(body.stripe_webhook_secret, cur.stripe_webhook_secret),
-    paypal_client_id: plain(body.paypal_client_id, cur.paypal_client_id),
-    paypal_client_secret: await keep(body.paypal_client_secret, cur.paypal_client_secret),
-    paypal_webhook_id: plain(body.paypal_webhook_id, cur.paypal_webhook_id),
-    paypal_environment: body.paypal_environment === 'sandbox' ? 'sandbox' : body.paypal_environment === 'live' ? 'live' : cur.paypal_environment,
-    resend_api_key: await keep(body.resend_api_key, cur.resend_api_key),
-  });
-  return c.redirect('/admin/settings?saved=1');
 });

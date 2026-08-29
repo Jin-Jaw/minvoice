@@ -40,6 +40,7 @@ export const de: Strings = {
   trustPaypal: 'PayPal-Zahlungen werden zum Abschluss zu paypal.com weitergeleitet.',
   noOnlinePayment: (email) =>
     `Online-Zahlung ist für diese Rechnung nicht verfügbar${email ? ` — bitte kontaktieren Sie ${email}` : ''}.`,
+  paymentInstructions: 'Bitte verwenden Sie die auf dieser Rechnung angegebenen Zahlungsdaten.',
 
   emailInvoiceSubject: (number, business, subject, total) =>
     subject

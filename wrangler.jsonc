@@ -21,11 +21,6 @@
       "name": "PDF_RATE_LIMITER",
       "namespace_id": "73117",
       "simple": { "limit": 12, "period": 60 }
-    },
-    {
-      "name": "WEBHOOK_RATE_LIMITER",
-      "namespace_id": "73118",
-      "simple": { "limit": 120, "period": 60 }
     }
   ],
   "d1_databases": [

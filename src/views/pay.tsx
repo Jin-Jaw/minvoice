@@ -8,12 +8,8 @@ type Props = {
   invoice: InvoiceWithClient;
   items: InvoiceItem[];
   settings: Settings;
-  justPaid: boolean;
-  canceled: boolean;
   /** Active provider payment that didn't match the invoice — checkout is suppressed (see awaitingPaymentReview) */
   underReview?: boolean;
-  /** Which payment providers have credentials configured — unconfigured buttons are hidden. */
-  providers: { stripe: boolean; paypal: boolean };
   nonce?: string;
 };
 
@@ -42,7 +38,7 @@ export function DraftHold({ invoice, settings, nonce }: { invoice: InvoiceWithCl
   );
 }
 
-export function PublicInvoice({ invoice, items, settings, justPaid, underReview, providers, nonce }: Props) {
+export function PublicInvoice({ invoice, items, settings, underReview, nonce }: Props) {
   const cur = invoice.currency;
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
@@ -59,13 +55,9 @@ export function PublicInvoice({ invoice, items, settings, justPaid, underReview,
     >
       {underReview ? (
         <div class="banner banner-warning">{t.paymentUnderReview}</div>
-      ) : justPaid && invoice.status !== 'paid' ? (
-        <div class="banner banner-success">
-          {t.paymentConfirming}
-        </div>
       ) : null}
       {invoice.status === 'paid' ? (
-        <div class="banner banner-success">{justPaid ? t.invoicePaidThanks : t.invoicePaid}</div>
+        <div class="banner banner-success">{t.invoicePaid}</div>
       ) : null}
       {invoice.status === 'void' ? <div class="banner banner-error">{t.invoiceVoided}</div> : null}
 
@@ -165,51 +157,7 @@ export function PublicInvoice({ invoice, items, settings, justPaid, underReview,
           </div>
         ) : null}
 
-        {payable && (providers.stripe || providers.paypal) ? (
-          <div class="pay-buttons mt-2">
-            {providers.stripe ? (
-              <form method="post" action={`/pay/${invoice.public_token}/stripe`}>
-                <button class="btn btn-primary" type="submit">
-                  <Icon name="card" />
-                  {t.payWithCard}
-                </button>
-              </form>
-            ) : null}
-            {providers.paypal ? (
-              <form method="post" action={`/pay/${invoice.public_token}/paypal`}>
-                <button class={providers.stripe ? 'btn btn-secondary' : 'btn btn-primary'} type="submit">
-                  {t.payWithPaypal}
-                </button>
-              </form>
-            ) : null}
-            <div class="pay-trust">
-              <p class="pay-trust-line">
-                <Icon name="lock" />
-                {t.trustLine}
-              </p>
-              {providers.stripe ? (
-                <p class="pay-trust-detail">
-                  {t.trustCardsPrefix} <strong>Stripe</strong>
-                  <span class="card-chips" aria-hidden="true">
-                    <span>Visa</span>
-                    <span>Mastercard</span>
-                    <span>Amex</span>
-                    <span>Discover</span>
-                    <span class="card-chips-more">+ more</span>
-                  </span>
-                </p>
-              ) : null}
-              {providers.paypal ? (
-                <p class="pay-trust-detail">
-                  {t.trustPaypal}
-                </p>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-        {payable && !providers.stripe && !providers.paypal ? (
-          <p class="muted mt-2">{t.noOnlinePayment(settings.business_email)}</p>
-        ) : null}
+        {payable ? <p class="muted mt-2">{t.paymentInstructions}</p> : null}
 
       </div>
     </Layout>

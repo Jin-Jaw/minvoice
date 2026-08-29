@@ -40,6 +40,7 @@ export const es: Strings = {
   trustPaypal: 'Los pagos con PayPal se completan en paypal.com.',
   noOnlinePayment: (email) =>
     `El pago en línea no está disponible para esta factura${email ? ` — por favor contacte con ${email}` : ''}.`,
+  paymentInstructions: 'Utilice los datos de pago indicados en esta factura.',
 
   emailInvoiceSubject: (number, business, subject, total) =>
     subject
