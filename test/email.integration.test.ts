@@ -1,6 +1,7 @@
 import { env, exports } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { sendTestEmail } from '../src/services/email';
+import { getSettings, type InvoiceWithClient } from '../src/db/queries';
+import { sendInvoiceEmail, sendTestEmail } from '../src/services/email';
 import { isBoxed, unbox } from '../src/lib/secretbox';
 
 const DB = env.DB;
@@ -8,7 +9,7 @@ const TEST_MASTER_KEY = 'integration-test-master-key-0123456789abcdef';
 
 beforeEach(async () => {
   await DB.prepare(
-    `UPDATE settings SET email_provider = 'cloudflare', email_from = 'billing@example.test',
+    `UPDATE settings SET email_provider = 'cloudflare', email_from = 'contract@jin-jaw.co.uk',
      setup_complete = 1 WHERE id = 1`
   ).run();
   await DB.prepare(
@@ -35,7 +36,7 @@ describe('sendTestEmail', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('owner@example.test');
     expect(sent[0].subject).toContain('SAMPLE'); // real invoice-email subject, fake number
-    expect(sent[0].from?.email).toBe('billing@example.test');
+    expect(sent[0].from?.email).toBe('contract@jin-jaw.co.uk');
     // The real PDF rides along (ASCII sample -> fast WinAnsi path -> compact file)
     expect(sent[0].attachments).toHaveLength(1);
     expect(sent[0].attachments![0].filename).toMatch(/SAMPLE\.pdf$/);
@@ -118,5 +119,47 @@ describe('email settings guard', () => {
     expect(row?.email_provider).toBe('resend');
     expect(isBoxed(row?.resend_api_key ?? '')).toBe(true);
     expect(await unbox(TEST_MASTER_KEY, row?.resend_api_key ?? '')).toBe('re_live_abc123');
+  });
+
+  it('sends an invoice to the email stored on the client from the contract address', async () => {
+    const sent: { to?: string; from?: { email: string; name?: string }; text?: string; html?: string }[] = [];
+    const EMAIL = {
+      async send(message: (typeof sent)[number]) {
+        sent.push(message);
+      },
+    } as unknown as SendEmail;
+    const invoice: InvoiceWithClient = {
+      id: 42,
+      branch_id: 1,
+      number: 'INV-0042',
+      client_id: 7,
+      client_name: 'Stored Client',
+      client_email: 'accounts@client.test',
+      client_locale: null,
+      status: 'sent',
+      currency: 'GBP',
+      issue_date: '2026-08-29',
+      due_date: null,
+      subject: null,
+      notes: null,
+      tax_rate_bps: 0,
+      subtotal_cents: 10000,
+      tax_cents: 0,
+      total_cents: 10000,
+      public_token: 'stored-client-token',
+      paypal_order_id: null,
+      sent_at: null,
+      paid_at: null,
+      created_at: '2026-08-29 12:00:00',
+      updated_at: '2026-08-29 12:00:00',
+    };
+
+    await sendInvoiceEmail({ ...env, EMAIL }, invoice, await getSettings(DB, 1), new Uint8Array([1, 2, 3]));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].to).toBe('accounts@client.test');
+    expect(sent[0].from?.email).toBe('contract@jin-jaw.co.uk');
+    expect(sent[0].text).toBeTruthy();
+    expect(sent[0].html).toBeTruthy();
   });
 });

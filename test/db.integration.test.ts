@@ -71,6 +71,18 @@ async function seedSentInvoice(total = 10000): Promise<number> {
   return id;
 }
 
+async function loginCookie(): Promise<string> {
+  const response = await exports.default.fetch(
+    new Request('https://invoice.test/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin' },
+      body: 'password=integration-test-password',
+      redirect: 'manual',
+    })
+  );
+  return response.headers.get('set-cookie')?.split(';')[0] ?? '';
+}
+
 const webhookPayload = (invoiceId: number, over: Partial<WebhookPayment> = {}): WebhookPayment => ({
   provider: 'stripe',
   eventId: 'evt_1',
@@ -164,6 +176,71 @@ describe('shared-client branch isolation', () => {
     const secondReport = await reportSummary(DB, secondBranchId, '2026-08-29');
     expect(firstReport.outstanding_count).toBe(1);
     expect(secondReport.outstanding_count).toBe(0);
+  });
+});
+
+describe('invoice list ordering and row actions', () => {
+  it('orders invoices by newest issue date, then creation time and id', async () => {
+    const clientId = await createClient(DB, {
+      name: 'Order Test',
+      email: null,
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    });
+    const create = (issueDate: string, number: string) =>
+      createInvoice(
+        DB,
+        {
+          client_id: clientId,
+          issue_date: issueDate,
+          due_date: null,
+          subject: null,
+          notes: null,
+          items: [{ description: number, quantity: 1, unit_price_cents: 100 }],
+        },
+        number
+      );
+    const older = await create('2026-07-01', 'OLD');
+    const sameDateEarlier = await create('2026-08-29', 'SAME-EARLY');
+    const sameDateLater = await create('2026-08-29', 'SAME-LATE');
+    await DB.prepare(`UPDATE invoices SET created_at = '2026-08-29 09:00:00' WHERE id = ?`)
+      .bind(sameDateEarlier)
+      .run();
+    await DB.prepare(`UPDATE invoices SET created_at = '2026-08-29 10:00:00' WHERE id = ?`)
+      .bind(sameDateLater)
+      .run();
+
+    expect((await listInvoices(DB, 1)).map((invoice) => invoice.id)).toEqual([
+      sameDateLater,
+      sameDateEarlier,
+      older,
+    ]);
+  });
+
+  it('marks an invoice paid from the row menu and returns to the filtered list', async () => {
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const id = await seedSentInvoice();
+    const invoice = (await getInvoice(DB, id))!;
+    const cookie = await loginCookie();
+    const response = await exports.default.fetch(
+      new Request(`https://invoice.test/admin/invoices/${id}/status`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'sec-fetch-site': 'same-origin',
+          cookie,
+        },
+        body: `action=mark_paid&return_to=${encodeURIComponent(`/admin?status=open&client=${invoice.client_id}`)}`,
+        redirect: 'manual',
+      })
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      `/admin?status=open&client=${invoice.client_id}&paid=${encodeURIComponent(invoice.number)}`
+    );
+    expect((await getInvoice(DB, id))?.status).toBe('paid');
   });
 });
 

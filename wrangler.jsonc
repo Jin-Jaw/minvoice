@@ -10,6 +10,12 @@
     "directory": "./public",
     "binding": "ASSETS"
   },
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["contract@jin-jaw.co.uk"]
+    }
+  ],
   "ratelimits": [
     {
       "name": "PDF_RATE_LIMITER",

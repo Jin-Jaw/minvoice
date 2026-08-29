@@ -250,6 +250,32 @@ function str(v: string | string[] | undefined): string {
   return v ?? '';
 }
 
+/** Only return to the invoice list and preserve its two supported filters. */
+function invoiceListReturnTo(value: string | undefined): string | null {
+  if (!value) return null;
+  let url: URL;
+  try {
+    url = new URL(value, 'https://invoice-list.invalid');
+  } catch {
+    return null;
+  }
+  if (url.origin !== 'https://invoice-list.invalid' || url.pathname !== '/admin') return null;
+
+  const params = new URLSearchParams();
+  const status = url.searchParams.get('status');
+  if (status && (INVOICE_FILTERS as readonly string[]).includes(status)) params.set('status', status);
+  const client = Number(url.searchParams.get('client'));
+  if (Number.isInteger(client) && client > 0) params.set('client', String(client));
+  const query = params.toString();
+  return query ? `/admin?${query}` : '/admin';
+}
+
+function addListNotice(path: string, key: 'paid' | 'emailed' | 'email_error', value: string): string {
+  const url = new URL(path, 'https://invoice-list.invalid');
+  url.searchParams.set(key, value);
+  return `${url.pathname}${url.search}`;
+}
+
 // ---------- Dashboard ----------
 
 admin.get('/', async (c) => {
@@ -270,6 +296,10 @@ admin.get('/', async (c) => {
       filter={filter}
       clientId={clientId}
       deleted={c.req.query('deleted')}
+      paid={c.req.query('paid')}
+      emailed={c.req.query('emailed')}
+      emailError={c.req.query('email_error')}
+      emailEnabled={settings.email_provider !== 'none'}
       today={todayInTz(settings.timezone)}
       warnings={(await configWarnings(c.env, settings, { localDev: isLocalRequest(c.req.raw) }))
         .filter((w) => w.category !== 'auth')
@@ -504,6 +534,7 @@ admin.post('/invoices/:id/status', async (c) => {
 
   const body = (await c.req.parseBody()) as Record<string, string>;
   const action = body.action;
+  const returnTo = invoiceListReturnTo(body.return_to);
   const today = todayInTz((await getSettings(c.env.DB, branchId)).timezone);
 
   switch (action) {
@@ -518,7 +549,10 @@ admin.post('/invoices/:id/status', async (c) => {
         // The email path: send first, mark sent only on success.
         if (body.email === '1') {
           if (!invoice.client_email) {
-            return c.redirect(`/admin/invoices/${id}?email_error=${encodeURIComponent('Client has no email address.')}`);
+            const reason = 'Client has no email address.';
+            return c.redirect(
+              returnTo ? addListNotice(returnTo, 'email_error', reason) : `/admin/invoices/${id}?email_error=${encodeURIComponent(reason)}`
+            );
           }
           try {
             const [items, settings] = await Promise.all([
@@ -537,10 +571,11 @@ admin.post('/invoices/:id/status', async (c) => {
           } catch (e) {
             console.error('invoice email failed', e);
             const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
+            const message = `The invoice was not marked sent. (${reason})`;
             return c.redirect(
-              `/admin/invoices/${id}?email_error=${encodeURIComponent(
-                `Email failed to send — the invoice was NOT marked sent. (${reason})`
-              )}`
+              returnTo
+                ? addListNotice(returnTo, 'email_error', message)
+                : `/admin/invoices/${id}?email_error=${encodeURIComponent(`Email failed to send — ${message}`)}`
             );
           }
           if (invoice.status === 'draft') {
@@ -548,7 +583,11 @@ admin.post('/invoices/:id/status', async (c) => {
             await logInvoiceEvent(c.env.DB, id, 'sent');
           }
           await logInvoiceEvent(c.env.DB, id, 'emailed', `Invoice emailed to ${invoice.client_email}`);
-          return c.redirect(`/admin/invoices/${id}?emailed=${encodeURIComponent(invoice.client_email)}`);
+          return c.redirect(
+            returnTo
+              ? addListNotice(returnTo, 'emailed', invoice.client_email)
+              : `/admin/invoices/${id}?emailed=${encodeURIComponent(invoice.client_email)}`
+          );
         }
 
         await markInvoiceSent(c.env.DB, id, sentDate);
@@ -592,6 +631,9 @@ admin.post('/invoices/:id/status', async (c) => {
       break;
   }
 
+  if (returnTo) {
+    return c.redirect(action === 'mark_paid' ? addListNotice(returnTo, 'paid', invoice.number) : returnTo);
+  }
   return c.redirect(`/admin/invoices/${id}`);
 });
 

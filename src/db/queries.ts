@@ -450,7 +450,7 @@ export async function listInvoices(db: D1Database, branchId: number): Promise<In
         `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale
          FROM invoices i JOIN clients c ON c.id = i.client_id
          WHERE i.branch_id = ?
-         ORDER BY i.id DESC`
+         ORDER BY i.issue_date DESC, i.created_at DESC, i.id DESC`
       )
       .bind(branchId)
       .all<InvoiceWithClient>()

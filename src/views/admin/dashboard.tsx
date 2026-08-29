@@ -67,6 +67,10 @@ export function DashboardPage({
   today,
   warnings,
   deleted,
+  paid,
+  emailed,
+  emailError,
+  emailEnabled,
   currentPath,
   nonce,
 }: {
@@ -78,6 +82,13 @@ export function DashboardPage({
   warnings?: string[];
   /** Invoice number just deleted — success banner. */
   deleted?: string;
+  /** Invoice number just marked paid from the row menu. */
+  paid?: string;
+  /** Recipient of an invoice email sent from the row menu. */
+  emailed?: string;
+  /** Delivery error surfaced without leaving the invoice list. */
+  emailError?: string;
+  emailEnabled: boolean;
   currentPath: string;
   nonce?: string;
 }) {
@@ -100,6 +111,7 @@ export function DashboardPage({
     const qs = params.toString();
     return qs ? `/admin?${qs}` : '/admin';
   };
+  const returnTo = tabHref(filter);
 
   return (
     <Layout title="Invoices" currentPath={currentPath} nonce={nonce}>
@@ -114,6 +126,9 @@ export function DashboardPage({
       </div>
 
       {deleted ? <div class="banner banner-success">Invoice {deleted} deleted.</div> : null}
+      {paid ? <div class="banner banner-success">Invoice {paid} marked as paid.</div> : null}
+      {emailed ? <div class="banner banner-success">Invoice emailed to {emailed}.</div> : null}
+      {emailError ? <div class="banner banner-error">Email failed to send: {emailError}</div> : null}
 
       {warnings?.length ? (
         <div class="banner banner-warning">
@@ -211,9 +226,27 @@ export function DashboardPage({
                           Duplicate
                         </button>
                       </form>
+                      {emailEnabled && inv.client_email && (inv.status === 'draft' || inv.status === 'sent') ? (
+                        <form
+                          method="post"
+                          action={`/admin/invoices/${inv.id}/status`}
+                          data-confirm={`Email invoice ${inv.number} (with PDF and pay link) to ${inv.client_email}?${
+                            inv.status === 'draft' ? ' It will be marked as sent.' : ''
+                          }`}
+                        >
+                          <input type="hidden" name="action" value="send" />
+                          <input type="hidden" name="email" value="1" />
+                          <input type="hidden" name="return_to" value={returnTo} />
+                          <button type="submit">
+                            <Icon name="send" />
+                            {inv.status === 'draft' ? 'Send invoice' : 'Resend invoice'}
+                          </button>
+                        </form>
+                      ) : null}
                       {inv.status === 'draft' || inv.status === 'sent' ? (
                         <form method="post" action={`/admin/invoices/${inv.id}/status`}>
                           <input type="hidden" name="action" value="mark_paid" />
+                          <input type="hidden" name="return_to" value={returnTo} />
                           <button type="submit">
                             <Icon name="check-circle" />
                             Mark as paid
