@@ -306,7 +306,7 @@ export function SettingsPage({
           </div>
 
           <div class="form-group">
-            <label for="default_rate">Default rate</label>
+            <label for="default_rate">Default invoice rate</label>
             <input
               type="text"
               id="default_rate"
@@ -314,7 +314,10 @@ export function SettingsPage({
               value={settings.default_rate_cents > 0 ? (settings.default_rate_cents / 100).toFixed(2) : ''}
               placeholder="e.g. 150.00"
             />
-            <span class="muted">Prefills the unit price of new invoice line items. Clients can override it.</span>
+            <span class="muted">
+              Fills the unit price on new invoices. A client-specific rate takes priority, and you can still
+              change it on each invoice.
+            </span>
           </div>
 
           <div class="form-row">

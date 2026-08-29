@@ -23,6 +23,7 @@ export function InvoiceDetailPage({
   timeline,
   timezone,
   emailEnabled,
+  hasOriginalPdf,
   notice,
   error,
   nonce,
@@ -35,6 +36,7 @@ export function InvoiceDetailPage({
   timezone: string;
   /** false when Settings → Email = none: email actions degrade to mark-sent */
   emailEnabled: boolean;
+  hasOriginalPdf: boolean;
   notice?: string;
   error?: string;
   nonce?: string;
@@ -141,7 +143,7 @@ export function InvoiceDetailPage({
           </a>
           <a class="btn btn-secondary" href={`/admin/invoices/${invoice.id}/pdf`}>
             <Icon name="download" />
-            Download PDF
+            {hasOriginalPdf ? 'Download original PDF' : 'Download PDF'}
           </a>
         </div>
       </div>
@@ -150,6 +152,22 @@ export function InvoiceDetailPage({
 
       {notice ? <div class="banner banner-success">{notice}</div> : null}
       {error ? <div class="banner banner-error">{error}</div> : null}
+
+      <div class="card">
+        <h2>Original PDF</h2>
+        {hasOriginalPdf ? (
+          <p class="muted">The exact originally issued PDF is archived and used for downloads and invoice emails.</p>
+        ) : (
+          <form method="post" action={`/admin/invoices/${invoice.id}/source-pdf`} enctype="multipart/form-data">
+            <div class="form-group">
+              <label for="source_pdf">Archive the originally issued PDF</label>
+              <input type="file" id="source_pdf" name="source_pdf" accept="application/pdf,.pdf" required />
+              <span class="muted">Up to 750 KB. Once saved, downloads and emails use this exact document.</span>
+            </div>
+            <button type="submit" class="btn btn-secondary">Archive original PDF</button>
+          </form>
+        )}
+      </div>
 
       <div class="card">
         <h2>Client</h2>

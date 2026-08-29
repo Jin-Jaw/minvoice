@@ -29,6 +29,7 @@ import {
   getInvoice,
   getInvoiceEvents,
   getInvoiceItems,
+  getInvoiceSourcePdf,
   getPayments,
   getSettings,
   logInvoiceEvent,
@@ -37,6 +38,7 @@ import {
   listBranches,
   listClients,
   listInvoices,
+  hasInvoiceSourcePdf,
   markInvoiceSent,
   markInvoiceUnsent,
   monthlyReport,
@@ -47,6 +49,7 @@ import {
   updatePaymentNote,
   setInvoiceStatus,
   setLogo,
+  setInvoiceSourcePdf,
   updateClient,
   updateInvoice,
   setNextInvoiceNumber,
@@ -411,11 +414,12 @@ admin.get('/invoices/:id', async (c) => {
   const invoice = await getInvoice(c.env.DB, branchId, id);
   if (!invoice) return c.notFound();
 
-  const [items, payments, events, settings] = await Promise.all([
+  const [items, payments, events, settings, hasOriginalPdf] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
     getPayments(c.env.DB, id),
     getInvoiceEvents(c.env.DB, id),
     getSettings(c.env.DB, branchId),
+    hasInvoiceSourcePdf(c.env.DB, id),
   ]);
   const timeline = buildTimeline(invoice, payments, events, formatCents);
   const emailedTo = c.req.query('emailed');
@@ -430,7 +434,14 @@ admin.get('/invoices/:id', async (c) => {
       timeline={timeline}
       timezone={settings.timezone}
       emailEnabled={settings.email_provider !== 'none'}
-      notice={emailedTo ? `Invoice emailed to ${emailedTo}.` : undefined}
+      hasOriginalPdf={hasOriginalPdf}
+      notice={
+        emailedTo
+          ? `Invoice emailed to ${emailedTo}.`
+          : c.req.query('pdf_saved')
+            ? 'Original invoice PDF archived.'
+            : undefined
+      }
       error={emailError}
       nonce={c.get('secureHeadersNonce')}
     />
@@ -558,11 +569,12 @@ admin.post('/invoices/:id/status', async (c) => {
             );
           }
           try {
-            const [items, settings] = await Promise.all([
+            const [items, settings, sourcePdf] = await Promise.all([
               getInvoiceItems(c.env.DB, id),
               getSettings(c.env.DB, branchId),
+              getInvoiceSourcePdf(c.env.DB, id),
             ]);
-            const pdf = await generateInvoicePdf(
+            const pdf = sourcePdf?.bytes ?? await generateInvoicePdf(
               invoice,
               items,
               settings,
@@ -735,6 +747,25 @@ admin.get('/clients/new', async (c) => {
       nonce={c.get('secureHeadersNonce')}
     />
   );
+});
+
+admin.post('/invoices/:id/source-pdf', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.notFound();
+  const invoice = await getInvoice(c.env.DB, c.get('branchId'), id);
+  if (!invoice) return c.notFound();
+
+  const body = await c.req.parseBody();
+  const file = body.source_pdf;
+  if (!(file instanceof File) || file.size === 0) return c.text('Choose a PDF file.', 400);
+  if (file.size > 750 * 1024) return c.text('Original PDF must be under 750 KB.', 400);
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (new TextDecoder().decode(bytes.subarray(0, 5)) !== '%PDF-') return c.text('That file is not a valid PDF.', 400);
+  const filename = `${invoice.number}.pdf`;
+  await setInvoiceSourcePdf(c.env.DB, id, bytes, filename);
+  await logInvoiceEvent(c.env.DB, id, 'source_pdf_archived', `Original PDF archived as ${filename}`);
+  return c.redirect(`/admin/invoices/${id}?pdf_saved=1`);
 });
 
 admin.get('/clients/:id', async (c) => {

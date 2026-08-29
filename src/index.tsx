@@ -10,6 +10,7 @@ import {
   clearLoginAttempts,
   getInvoice,
   getInvoiceItems,
+  getInvoiceSourcePdf,
   getLogo,
   getSettings,
   purgeOldLoginAttempts,
@@ -198,6 +199,8 @@ app.get('/admin/invoices/:id/pdf', async (c) => {
   const branchId = c.get('branchId');
   const invoice = await getInvoice(c.env.DB, branchId, id);
   if (!invoice) return c.notFound();
+  const sourcePdf = await getInvoiceSourcePdf(c.env.DB, id);
+  if (sourcePdf) return pdfResponse(sourcePdf.bytes, sourcePdf.filename);
   const [items, settings, logo] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
     getSettings(c.env.DB, branchId),

@@ -750,6 +750,7 @@ export type InvoiceEvent = {
     | 'payment_undone'
     | 'sent_date_changed'
     | 'payment_note_edited'
+    | 'source_pdf_archived'
     | 'duplicated'
     | 'viewed'
     | 'reminder';
@@ -856,6 +857,7 @@ export function buildTimeline(
     payment_undone: 'Payment undone',
     sent_date_changed: 'Sent date updated',
     payment_note_edited: 'Payment note updated',
+    source_pdf_archived: 'Original PDF archived',
     duplicated: 'Created by duplicating',
     viewed: 'Link opened',
     reminder: 'Reminder emailed',
@@ -1290,6 +1292,46 @@ export async function setLogo(
 
 export async function deleteLogo(db: D1Database, branchId = 1): Promise<void> {
   await db.prepare('DELETE FROM branch_logos WHERE branch_id = ?').bind(branchId).run();
+}
+
+// ---------- Original invoice PDFs ----------
+
+export type InvoiceSourcePdf = {
+  bytes: Uint8Array;
+  mime: 'application/pdf';
+  filename: string;
+  uploaded_at: string;
+};
+
+export async function getInvoiceSourcePdf(db: D1Database, invoiceId: number): Promise<InvoiceSourcePdf | null> {
+  const row = await db
+    .prepare('SELECT bytes, mime, filename, uploaded_at FROM invoice_source_pdfs WHERE invoice_id = ?')
+    .bind(invoiceId)
+    .first<{ bytes: ArrayBuffer | number[]; mime: 'application/pdf'; filename: string; uploaded_at: string }>();
+  if (!row) return null;
+  const bytes = row.bytes instanceof ArrayBuffer ? new Uint8Array(row.bytes) : Uint8Array.from(row.bytes);
+  return { bytes, mime: row.mime, filename: row.filename, uploaded_at: row.uploaded_at };
+}
+
+export async function hasInvoiceSourcePdf(db: D1Database, invoiceId: number): Promise<boolean> {
+  return Boolean(await db.prepare('SELECT 1 FROM invoice_source_pdfs WHERE invoice_id = ?').bind(invoiceId).first());
+}
+
+export async function setInvoiceSourcePdf(
+  db: D1Database,
+  invoiceId: number,
+  bytes: Uint8Array,
+  filename: string
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO invoice_source_pdfs (invoice_id, bytes, mime, filename, uploaded_at)
+       VALUES (?, ?, 'application/pdf', ?, datetime('now'))
+       ON CONFLICT (invoice_id) DO UPDATE SET
+         bytes = excluded.bytes, filename = excluded.filename, uploaded_at = datetime('now')`
+    )
+    .bind(invoiceId, bytes, filename)
+    .run();
 }
 
 // ---------- Email outbox (durable side-effect delivery) ----------

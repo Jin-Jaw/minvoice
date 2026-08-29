@@ -124,9 +124,12 @@ export function ClientNewPage({
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label for="default_rate">Default rate</label>
+              <label for="default_rate">Default invoice rate</label>
               <input type="text" id="default_rate" name="default_rate" placeholder="Inherit from settings" />
-              <span class="muted">Overrides the settings default rate for this client's invoices.</span>
+              <span class="muted">
+                Fills the unit price on new invoices for this client. Leave blank to use the rate in Settings;
+                you can still change it on each invoice.
+              </span>
             </div>
             <div class="form-group">
               <label for="default_currency">Rate currency</label>
@@ -137,7 +140,9 @@ export function ClientNewPage({
           <div class="form-group">
             <label for="payment_terms_days">Payment terms (days)</label>
             <input type="number" id="payment_terms_days" name="payment_terms_days" min="0" placeholder="Inherit from settings" />
-            <span class="muted">Overrides the settings payment terms for this client's invoices.</span>
+            <span class="muted">
+              Sets the default due date to this many days after the invoice date. Leave blank to use Settings.
+            </span>
           </div>
           <div class="form-group">
             <label for="locale">Language &amp; region</label>
@@ -214,7 +219,7 @@ export function ClientEditPage({ currentPath, client, nonce }: { currentPath: st
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label for="default_rate">Default rate</label>
+              <label for="default_rate">Default invoice rate</label>
               <input
                 type="text"
                 id="default_rate"
@@ -222,7 +227,10 @@ export function ClientEditPage({ currentPath, client, nonce }: { currentPath: st
                 value={client.default_rate_cents != null ? (client.default_rate_cents / 100).toFixed(2) : ''}
                 placeholder="Inherit from settings"
               />
-              <span class="muted">Overrides the settings default rate for this client's invoices.</span>
+              <span class="muted">
+                Fills the unit price on new invoices for this client. Leave blank to use the rate in Settings;
+                you can still change it on each invoice.
+              </span>
             </div>
             <div class="form-group">
               <label for="default_currency">Rate currency</label>
@@ -240,7 +248,9 @@ export function ClientEditPage({ currentPath, client, nonce }: { currentPath: st
               value={client.payment_terms_days != null ? String(client.payment_terms_days) : ''}
               placeholder="Inherit from settings"
             />
-            <span class="muted">Overrides the settings payment terms for this client's invoices.</span>
+            <span class="muted">
+              Sets the default due date to this many days after the invoice date. Leave blank to use Settings.
+            </span>
           </div>
           <div class="form-group">
             <label for="locale">Language &amp; region</label>

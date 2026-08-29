@@ -5,6 +5,7 @@ import {
   awaitingPaymentReview,
   getInvoiceByToken,
   getInvoiceItems,
+  getInvoiceSourcePdf,
   getLogo,
   getPayments,
   getSettings,
@@ -109,6 +110,8 @@ pay.get('/:token/pdf', async (c) => {
   if (limiter && !(await limiter.limit({ key: invoice.public_token })).success) {
     return c.text('Too many PDF requests. Please try again in a minute.', 429);
   }
+  const sourcePdf = await getInvoiceSourcePdf(c.env.DB, invoice.id);
+  if (sourcePdf) return pdfResponse(sourcePdf.bytes, sourcePdf.filename);
   const [items, settings, logo] = await Promise.all([
     getInvoiceItems(c.env.DB, invoice.id),
     getSettings(c.env.DB, invoice.branch_id),
