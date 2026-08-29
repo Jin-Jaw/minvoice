@@ -103,8 +103,9 @@ export async function sendInvoiceEmail(
   invoice: InvoiceWithClient,
   settings: Settings,
   pdfBytes: Uint8Array,
-  copyTo?: string
+  opts?: { copyTo?: string; hasLogo?: boolean }
 ): Promise<void> {
+  const copyTo = opts?.copyTo;
   if (!copyTo && !invoice.client_email) throw new Error('client has no email address');
 
   const businessName = settings.business_name || 'Minvoice';
@@ -113,11 +114,14 @@ export async function sendInvoiceEmail(
   const total = formatCentsTag(invoice.total_cents, invoice.currency, tag);
   // No due date -> no due wording at all; don't invent terms like "on receipt".
   const dueDate = invoice.due_date ? formatDateTag(invoice.due_date, tag) : null;
-  // The logo must be a public absolute URL to render in mail clients; the
-  // per-branch logo_url qualifies when absolute, else the served brand mark.
-  const logoUrl = /^https?:\/\//i.test(settings.logo_url ?? '')
-    ? settings.logo_url!
-    : `${env.APP_BASE_URL}/jinjaw-square.png`;
+  // The logo must be a public absolute URL to render in mail clients. The
+  // branch's uploaded logo (served at /logo/:branchId) wins so each company
+  // brands its own mail; then an absolute logo_url; then the site brand mark.
+  const logoUrl = opts?.hasLogo
+    ? `${env.APP_BASE_URL}/logo/${invoice.branch_id}`
+    : /^https?:\/\//i.test(settings.logo_url ?? '')
+      ? settings.logo_url!
+      : `${env.APP_BASE_URL}/jinjaw-square.png`;
   const footerIdentity = [
     businessName,
     settings.business_address ? settings.business_address.replace(/\r?\n+/g, ', ') : null,
@@ -221,11 +225,12 @@ export async function sendInvoiceEmailToClientAndOwner(
   env: Bindings,
   invoice: InvoiceWithClient,
   settings: Settings,
-  pdfBytes: Uint8Array
+  pdfBytes: Uint8Array,
+  hasLogo?: boolean
 ): Promise<string> {
   const ownerCopyAddress = settings.business_email?.trim() || 'jad@jin-jaw.co.uk';
-  await sendInvoiceEmail(env, invoice, settings, pdfBytes, ownerCopyAddress);
-  await sendInvoiceEmail(env, invoice, settings, pdfBytes);
+  await sendInvoiceEmail(env, invoice, settings, pdfBytes, { copyTo: ownerCopyAddress, hasLogo });
+  await sendInvoiceEmail(env, invoice, settings, pdfBytes, { hasLogo });
   return ownerCopyAddress;
 }
 
@@ -424,14 +429,9 @@ export async function sendTestEmail(env: Bindings, db: D1Database, branchId: num
     client_email: settings.business_email,
     client_locale: null,
   };
-  const pdf = await generateInvoicePdf(
-    invoice,
-    items,
-    settings,
-    env.ASSETS,
-    await getLogo(db, branchId)
-  );
-  await sendInvoiceEmail(env, invoice, settings, pdf);
+  const logo = await getLogo(db, branchId);
+  const pdf = await generateInvoicePdf(invoice, items, settings, env.ASSETS, logo);
+  await sendInvoiceEmail(env, invoice, settings, pdf, { hasLogo: !!logo });
   return settings.business_email;
 }
 

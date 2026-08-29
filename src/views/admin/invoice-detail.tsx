@@ -168,7 +168,18 @@ export function InvoiceDetailPage({
       <div class="card">
         <h2>Original PDF</h2>
         {hasOriginalPdf ? (
-          <p class="muted">The exact originally issued PDF is archived and used for downloads and invoice emails.</p>
+          <>
+            <p class="muted">The exact originally issued PDF is archived and used for downloads and invoice emails.</p>
+            <form
+              method="post"
+              action={`/admin/invoices/${invoice.id}/regenerate-pdf`}
+              data-confirm={`Regenerate ${invoice.number}.pdf from the current invoice data? The archived original is replaced — downloads, emails, and resends will use the new document.`}
+            >
+              <button type="submit" class="btn btn-secondary btn-sm">
+                Regenerate PDF
+              </button>
+            </form>
+          </>
         ) : (
           <form method="post" action={`/admin/invoices/${invoice.id}/source-pdf`} enctype="multipart/form-data">
             <div class="form-group">

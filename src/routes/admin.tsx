@@ -595,19 +595,15 @@ admin.post('/invoices/:id/status', async (c) => {
           }
           let ownerCopyAddress = 'jad@jin-jaw.co.uk';
           try {
-            const [items, settings, sourcePdf] = await Promise.all([
+            const [items, settings, sourcePdf, logo] = await Promise.all([
               getInvoiceItems(c.env.DB, id),
               getSettings(c.env.DB, branchId),
               getInvoiceSourcePdf(c.env.DB, id),
+              getLogo(c.env.DB, branchId),
             ]);
-            const pdf = sourcePdf?.bytes ?? await generateInvoicePdf(
-              invoice,
-              items,
-              settings,
-              c.env.ASSETS,
-              await getLogo(c.env.DB, branchId)
-            );
-            ownerCopyAddress = await sendInvoiceEmailToClientAndOwner(c.env, invoice, settings, pdf);
+            const pdf =
+              sourcePdf?.bytes ?? (await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo));
+            ownerCopyAddress = await sendInvoiceEmailToClientAndOwner(c.env, invoice, settings, pdf, !!logo);
           } catch (e) {
             console.error('invoice email failed', e);
             const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
@@ -733,14 +729,14 @@ admin.post('/invoices/:id/email-copy', async (c) => {
     );
   }
   try {
-    const [items, sourcePdf] = await Promise.all([
+    const [items, sourcePdf, logo] = await Promise.all([
       getInvoiceItems(c.env.DB, id),
       getInvoiceSourcePdf(c.env.DB, id),
+      getLogo(c.env.DB, branchId),
     ]);
     const pdf =
-      sourcePdf?.bytes ??
-      (await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, await getLogo(c.env.DB, branchId)));
-    await sendInvoiceEmail(c.env, invoice, settings, pdf, to);
+      sourcePdf?.bytes ?? (await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo));
+    await sendInvoiceEmail(c.env, invoice, settings, pdf, { copyTo: to, hasLogo: !!logo });
   } catch (e) {
     console.error('invoice copy email failed', e);
     const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
@@ -750,6 +746,27 @@ admin.post('/invoices/:id/email-copy', async (c) => {
   }
   await logInvoiceEvent(c.env.DB, id, 'emailed', `Copy emailed to ${to}`);
   return c.redirect(`/admin/invoices/${id}?emailed=${encodeURIComponent(to)}`);
+});
+
+// Regenerate the invoice PDF from current data and archive it, replacing any
+// stored original — downloads, emails, and resends serve the new document.
+admin.post('/invoices/:id/regenerate-pdf', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.notFound();
+
+  const invoice = await getInvoiceById(c.env.DB, id);
+  if (!invoice) return c.notFound();
+  const branchId = invoice.branch_id;
+
+  const [items, settings, logo] = await Promise.all([
+    getInvoiceItems(c.env.DB, id),
+    getSettings(c.env.DB, branchId),
+    getLogo(c.env.DB, branchId),
+  ]);
+  const pdf = await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo);
+  await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`);
+  await logInvoiceEvent(c.env.DB, id, 'source_pdf_archived', `PDF regenerated and archived as ${invoice.number}.pdf`);
+  return c.redirect(`/admin/invoices/${id}`);
 });
 
 admin.post('/invoices/:id/payments/:pid/undo', async (c) => {
