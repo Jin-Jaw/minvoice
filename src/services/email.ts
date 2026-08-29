@@ -110,7 +110,6 @@ export async function sendInvoiceEmail(
   const businessName = settings.business_name || 'Minvoice';
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
-  const accent = safeAccent(settings.accent_color);
   const total = formatCentsTag(invoice.total_cents, invoice.currency, tag);
   // No due date -> no due wording at all; don't invent terms like "on receipt".
   const dueDate = invoice.due_date ? formatDateTag(invoice.due_date, tag) : null;
@@ -144,7 +143,7 @@ export async function sendInvoiceEmail(
     ].join('\n'),
     html: `
 <div style="max-width: 560px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Arial, sans-serif; color: #1f272b;">
-  <div style="background: #ffffff; border: 1px solid #e4e7e9; border-top: 3px solid ${accent}; border-radius: 8px; padding: 32px 36px;">
+  <div style="background: #ffffff; border: 1px solid #e4e7e9; border-radius: 8px; padding: 32px 36px;">
     <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 0 22px;">
       <tr>
         <td style="padding-right: 12px;"><img src="${logoUrl}" alt="" width="40" height="40" style="display: block; border-radius: 8px;"></td>
@@ -182,8 +181,7 @@ export async function sendInvoiceEmail(
       </tr>
     </table>
     <div style="border: 1px solid #e4e7e9; border-radius: 8px; padding: 12px 14px; margin: 0 0 22px;">
-      <div style="font-size: 13.5px; font-weight: 600;">${escapeHtml(invoice.number)}.pdf</div>
-      <div style="font-size: 12px; color: #8b969c;">PDF</div>
+      <div style="font-size: 13.5px; font-weight: 600;">${escapeHtml(t.attachedBelow(invoice.number))}</div>
     </div>
     ${
       invoice.notes

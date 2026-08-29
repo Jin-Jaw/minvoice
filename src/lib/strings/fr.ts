@@ -52,6 +52,7 @@ export const fr: Strings = {
   viewAndPay: 'Voir et payer en ligne :',
   pdfAttached: 'Une copie PDF est jointe.',
   amountDue: 'Montant dû',
+  attachedBelow: (number) => `Facture ${number} jointe ci-dessous`,
   paymentDetails: 'Détails de paiement',
   emailSignoff: 'Merci,',
   emailReplyHint: 'Des questions sur cette facture ? Répondez simplement à cet e-mail.',

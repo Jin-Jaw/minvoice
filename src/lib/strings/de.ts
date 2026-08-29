@@ -52,6 +52,7 @@ export const de: Strings = {
   viewAndPay: 'Online ansehen und bezahlen:',
   pdfAttached: 'Eine PDF-Kopie ist beigefügt.',
   amountDue: 'Fälliger Betrag',
+  attachedBelow: (number) => `Rechnung ${number} unten im Anhang`,
   paymentDetails: 'Zahlungsdetails',
   emailSignoff: 'Vielen Dank,',
   emailReplyHint: 'Fragen zu dieser Rechnung? Antworten Sie einfach auf diese E-Mail.',

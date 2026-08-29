@@ -52,6 +52,7 @@ export const es: Strings = {
   viewAndPay: 'Ver y pagar en línea:',
   pdfAttached: 'Se adjunta una copia en PDF.',
   amountDue: 'Importe adeudado',
+  attachedBelow: (number) => `Factura ${number} adjunta más abajo`,
   paymentDetails: 'Datos de pago',
   emailSignoff: 'Gracias,',
   emailReplyHint: '¿Tiene preguntas sobre esta factura? Simplemente responda a este correo.',

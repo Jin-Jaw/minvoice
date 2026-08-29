@@ -64,6 +64,7 @@ export type Strings = {
   viewAndPay: string;
   pdfAttached: string;
   amountDue: string;
+  attachedBelow: (number: string) => string;
   paymentDetails: string;
   emailSignoff: string;
   emailReplyHint: string;

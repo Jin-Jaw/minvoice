@@ -50,6 +50,7 @@ export const en: Strings = {
   viewAndPay: 'View and pay online:',
   pdfAttached: 'A PDF copy is attached.',
   amountDue: 'Amount due',
+  attachedBelow: (number) => `Invoice ${number} attached below`,
   paymentDetails: 'Payment details',
   emailSignoff: 'Thank you,',
   emailReplyHint: 'Questions about this invoice? Just reply to this email.',
