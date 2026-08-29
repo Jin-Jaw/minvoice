@@ -61,7 +61,7 @@ import {
 } from '../db/queries';
 import { DashboardPage, INVOICE_FILTERS, type InvoiceFilter } from '../views/admin/dashboard';
 import { generateInvoicePdf } from '../services/pdf';
-import { sendInvoiceEmail, sendTestEmail } from '../services/email';
+import { sendInvoiceEmail, sendInvoiceEmailToClientAndOwner, sendTestEmail } from '../services/email';
 import { InvoiceFormPage } from '../views/admin/invoice-form';
 import { InvoiceDetailPage } from '../views/admin/invoice-detail';
 import { ClientEditPage, ClientNewPage, ClientsPage } from '../views/admin/clients';
@@ -593,6 +593,7 @@ admin.post('/invoices/:id/status', async (c) => {
               returnTo ? addListNotice(returnTo, 'email_error', reason) : `/admin/invoices/${id}?email_error=${encodeURIComponent(reason)}`
             );
           }
+          let ownerCopyAddress = 'jad@jin-jaw.co.uk';
           try {
             const [items, settings, sourcePdf] = await Promise.all([
               getInvoiceItems(c.env.DB, id),
@@ -606,7 +607,7 @@ admin.post('/invoices/:id/status', async (c) => {
               c.env.ASSETS,
               await getLogo(c.env.DB, branchId)
             );
-            await sendInvoiceEmail(c.env, invoice, settings, pdf);
+            ownerCopyAddress = await sendInvoiceEmailToClientAndOwner(c.env, invoice, settings, pdf);
           } catch (e) {
             console.error('invoice email failed', e);
             const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
@@ -621,7 +622,12 @@ admin.post('/invoices/:id/status', async (c) => {
             await markInvoiceSent(c.env.DB, id);
             await logInvoiceEvent(c.env.DB, id, 'sent');
           }
-          await logInvoiceEvent(c.env.DB, id, 'emailed', `Invoice emailed to ${invoice.client_email}`);
+          await logInvoiceEvent(
+            c.env.DB,
+            id,
+            'emailed',
+            `Invoice emailed to ${invoice.client_email}; separate copy sent to ${ownerCopyAddress}`
+          );
           return c.redirect(
             returnTo
               ? addListNotice(returnTo, 'emailed', invoice.client_email)

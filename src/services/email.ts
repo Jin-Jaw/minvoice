@@ -9,7 +9,6 @@ import { effectiveProviderEnv } from '../lib/providers';
 
 type Mail = {
   to: string;
-  cc?: string[];
   fromName: string;
   subject: string;
   text: string;
@@ -44,7 +43,6 @@ async function deliver(env: Bindings, settings: Settings, m: Mail): Promise<void
       body: JSON.stringify({
         from: `${m.fromName} <${fromAddress}>`,
         to: [m.to],
-        ...(m.cc?.length ? { cc: m.cc } : {}),
         subject: m.subject,
         text: m.text,
         html: m.html,
@@ -65,7 +63,6 @@ async function deliver(env: Bindings, settings: Settings, m: Mail): Promise<void
   }
   await env.EMAIL.send({
     to: m.to,
-    ...(m.cc?.length ? { cc: m.cc } : {}),
     from: { email: fromAddress, name: m.fromName },
     ...(m.replyTo ? { replyTo: m.replyTo } : {}),
     subject: m.subject,
@@ -134,7 +131,6 @@ export async function sendInvoiceEmail(
 
   await deliver(env, settings, {
     to: copyTo ?? invoice.client_email!,
-    ...(copyTo ? {} : { cc: ['jad@jin-jaw.co.uk'] }),
     fromName: businessName,
     ...(settings.business_email ? { replyTo: settings.business_email } : {}),
     subject: t.emailInvoiceSubject(invoice.number, businessName, invoice.subject, total),
@@ -215,6 +211,24 @@ export async function sendInvoiceEmail(
       },
     ],
   });
+}
+
+/**
+ * Send two private copies of an invoice: first to the configured business
+ * address, then to the client. Sending the owner copy first means a retry can
+ * never duplicate a successful client delivery, and neither recipient is
+ * exposed to the other through CC/BCC headers.
+ */
+export async function sendInvoiceEmailToClientAndOwner(
+  env: Bindings,
+  invoice: InvoiceWithClient,
+  settings: Settings,
+  pdfBytes: Uint8Array
+): Promise<string> {
+  const ownerCopyAddress = settings.business_email?.trim() || 'jad@jin-jaw.co.uk';
+  await sendInvoiceEmail(env, invoice, settings, pdfBytes, ownerCopyAddress);
+  await sendInvoiceEmail(env, invoice, settings, pdfBytes);
+  return ownerCopyAddress;
 }
 
 /** Gentle overdue nudge with payment instructions but no online pay link. */

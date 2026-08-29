@@ -13,7 +13,7 @@
   "send_email": [
     {
       "name": "EMAIL",
-      "allowed_sender_addresses": ["contract@jin-jaw.co.uk"]
+      "allowed_sender_addresses": ["contact@jin-jaw.co.uk"]
     }
   ],
   "ratelimits": [
