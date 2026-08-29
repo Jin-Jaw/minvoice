@@ -847,16 +847,63 @@ textarea::placeholder {
   margin-bottom: 26px;
 }
 
+.sheet-head-left {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  flex: 0 1 380px;
+  min-width: 0;
+}
+
+/* Logo slot — the uploaded logo, or a dashed prompt linking to Settings */
+.sheet-logo-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 200px;
+  min-height: 110px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-deep);
+}
+
+.sheet-logo-add {
+  border-style: dashed;
+  border-color: var(--line-strong);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.sheet-logo-add:hover {
+  border-color: var(--green);
+  color: var(--green);
+  text-decoration: none;
+}
+
 .sheet-logo {
   display: block;
-  max-height: 48px;
-  max-width: 160px;
-  border-radius: 8px;
-  margin-bottom: 12px;
+  max-height: 84px;
+  max-width: 172px;
+}
+
+/* Sender identity — read-only panel, sourced from Settings */
+.sheet-from {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-deep);
+  padding: 10px 12px;
+}
+
+.sheet-from-edit {
+  display: inline-block;
+  font-size: 12px;
+  margin-top: 5px;
 }
 
 .sheet-biz-name {
-  font-size: 15px;
+  font-size: 14.5px;
   font-weight: 650;
 }
 
@@ -869,33 +916,64 @@ textarea::placeholder {
 }
 
 .sheet-meta {
-  width: 280px;
+  width: 320px;
   flex-shrink: 0;
 }
 
-.sheet-meta .form-group {
-  margin-bottom: 12px;
-}
-
 .sheet-doc-title {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-align: right;
   color: var(--ink);
-  margin: 0 0 14px;
+  margin: 0 0 12px;
 }
 
-.sheet-meta-dates {
-  display: flex;
-  gap: 10px;
+.sheet-number {
+  width: 170px;
+  margin-left: auto;
+  margin-bottom: 16px;
+}
+
+.sheet-number input {
+  text-align: right;
+  font-weight: 600;
 }
 
 .sheet-number-static {
+  width: 170px;
+  margin-left: auto;
+  margin-bottom: 16px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-deep);
+  text-align: right;
   font-size: 15px;
   font-weight: 650;
-  padding: 6px 0;
   font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+}
+
+/* Label-left, input-right meta rows (issue date, due date, currency) */
+.sheet-meta-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sheet-meta-row {
+  display: grid;
+  grid-template-columns: 1fr 160px;
+  align-items: center;
+  gap: 12px;
+}
+
+.sheet-meta-row label {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  text-align: right;
 }
 
 .sheet-parties {
@@ -908,6 +986,89 @@ textarea::placeholder {
   flex: 0 1 340px;
 }
 
+/* Full-width quiet add-line row under the items table */
+#add-line-btn {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--stone-tint);
+  color: var(--ink);
+  font-weight: 600;
+  text-align: center;
+}
+
+#add-line-btn:hover {
+  background: var(--line);
+  transform: none;
+}
+
+.rate-hint-wrap {
+  display: block;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+}
+
+/* Notes left, running totals right */
+.sheet-foot {
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+  margin-top: 24px;
+}
+
+.sheet-notes {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.sheet-totals {
+  width: 300px;
+  flex-shrink: 0;
+  padding-top: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-totals-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 5px 0;
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+.sheet-totals-row .item-amount {
+  color: var(--ink);
+}
+
+.sheet-totals-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-strong);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.rail-cancel {
+  display: block;
+  text-align: center;
+  margin-top: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.rail-cancel:hover {
+  color: var(--ink);
+  text-decoration: none;
+}
+
 /* --------------------------------------------------------------------------
    Line-items editor
    -------------------------------------------------------------------------- */
@@ -918,15 +1079,28 @@ textarea::placeholder {
   margin-top: 8px;
 }
 
+/* Dark header bar over the line items, ink-on-paper inverted */
 .items-editor th {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   text-align: left;
-  color: var(--ink-faint);
-  padding: 0 8px 8px 0;
-  border-bottom: 1px solid var(--line-strong);
+  color: var(--paper);
+  background: var(--ink);
+  padding: 9px 10px;
+  border-bottom: none;
+}
+
+.items-editor th:first-child {
+  padding-left: 12px;
+  border-top-left-radius: var(--radius-sm);
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.items-editor th:last-child {
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
 }
 
 .items-editor td {
@@ -1504,12 +1678,29 @@ a .ref {
     gap: 18px;
   }
 
+  .sheet-head-left {
+    flex: 1;
+  }
+
   .sheet-doc-title {
     text-align: left;
   }
 
   .sheet-meta {
     width: 100%;
+  }
+
+  .sheet-number,
+  .sheet-number-static {
+    margin-left: 0;
+  }
+
+  .sheet-meta-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .sheet-meta-row label {
+    text-align: left;
   }
 
   .sheet-parties {
@@ -1519,6 +1710,16 @@ a .ref {
 
   .sheet-parties .form-group:first-child {
     flex: 1;
+  }
+
+  .sheet-foot {
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .sheet-totals {
+    width: 100%;
+    padding-top: 0;
   }
 }
 

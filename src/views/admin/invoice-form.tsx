@@ -107,40 +107,62 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
       <form method="post" action={actionUrl} class="invoice-editor">
         <div class="card invoice-sheet">
           <div class="sheet-head">
-            <div>
-              {settings.logo_url ? <img src={settings.logo_url} alt="" class="sheet-logo" /> : null}
-              <div class="sheet-biz-name">{settings.business_name}</div>
-              {settings.business_address ? (
-                <div class="sheet-biz-address">{settings.business_address}</div>
-              ) : null}
+            <div class="sheet-head-left">
+              {settings.logo_url ? (
+                <div class="sheet-logo-box">
+                  <img src={settings.logo_url} alt="" class="sheet-logo" />
+                </div>
+              ) : (
+                <a class="sheet-logo-box sheet-logo-add" href="/admin/settings">
+                  + Add your logo
+                </a>
+              )}
+              <div>
+                <div class="sheet-from">
+                  <div class="sheet-biz-name">{settings.business_name}</div>
+                  {settings.business_address ? (
+                    <div class="sheet-biz-address">{settings.business_address}</div>
+                  ) : null}
+                </div>
+                <a class="sheet-from-edit muted" href="/admin/settings">
+                  Edit in settings
+                </a>
+              </div>
             </div>
             <div class="sheet-meta">
               <div class="sheet-doc-title">INVOICE</div>
               {!isEdit ? (
-                <div class="form-group">
-                  <label for="number">Number</label>
+                <div class="sheet-number">
                   <input
                     type="text"
                     id="number"
                     name="number"
                     value={fv?.number ?? props.suggestedNumber ?? ''}
+                    aria-label="Invoice number"
+                    title="Edit for a custom number, or leave as-is to use the counter."
                   />
-                  <span class="muted">Edit for a custom number, or leave as-is to use the counter.</span>
                 </div>
               ) : (
-                <div class="form-group">
-                  <label>Number</label>
-                  <div class="sheet-number-static">{invoice!.number}</div>
-                </div>
+                <div class="sheet-number-static">{invoice!.number}</div>
               )}
-              <div class="sheet-meta-dates">
-                <div class="form-group">
+              <div class="sheet-meta-rows">
+                <div class="sheet-meta-row">
                   <label for="issue_date">Issue date</label>
                   <input type="date" id="issue_date" name="issue_date" value={issueDate} required />
                 </div>
-                <div class="form-group">
+                <div class="sheet-meta-row">
                   <label for="due_date">Due date</label>
                   <input type="date" id="due_date" name="due_date" value={dueDate} />
+                </div>
+                <div class="sheet-meta-row">
+                  <label for="currency">Currency</label>
+                  <select id="currency" name="currency">
+                    {currencyOptions().map((c) => (
+                      <option value={c.code} selected={c.code === currency}>
+                        {c.code}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
@@ -219,17 +241,6 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
                 </tr>
               ))}
             </tbody>
-            <tfoot>
-              <tr>
-                <td colspan={3} class="text-right subtotal-label">
-                  Subtotal
-                </td>
-                <td class="text-right item-amount" id="items-subtotal">
-                  —
-                </td>
-                <td></td>
-              </tr>
-            </tfoot>
           </table>
 
           <div class="mt-2">
@@ -241,12 +252,28 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
             </span>
           </div>
 
-          <div class="form-group mt-2">
-            <label for="notes">Payment details / notes</label>
-            <textarea id="notes" name="notes">
-              {notes}
-            </textarea>
-            <span class="muted">Included in the PDF and client email. Add the bank or payment instructions for this invoice here.</span>
+          <div class="sheet-foot">
+            <div class="form-group sheet-notes">
+              <label for="notes">Payment details / notes</label>
+              <textarea id="notes" name="notes">
+                {notes}
+              </textarea>
+              <span class="muted">Included in the PDF and client email. Add the bank or payment instructions for this invoice here.</span>
+            </div>
+            <div class="sheet-totals">
+              <div class="sheet-totals-row">
+                <span>Subtotal</span>
+                <span class="item-amount" id="items-subtotal">
+                  —
+                </span>
+              </div>
+              <div class="sheet-totals-total">
+                <span>Total</span>
+                <span class="item-amount" id="items-total">
+                  —
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -256,27 +283,14 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
               {isEdit ? 'Save changes' : 'Create invoice'}
             </button>
             {isEdit ? (
-              <a class="btn btn-secondary" href={`/admin/invoices/${invoice!.id}`}>
+              <a class="rail-cancel" href={`/admin/invoices/${invoice!.id}`}>
                 Cancel
               </a>
             ) : (
-              <a class="btn btn-secondary" href="/admin">
+              <a class="rail-cancel" href="/admin">
                 Cancel
               </a>
             )}
-          </div>
-          <div class="card">
-            <div class="rail-title">Invoice settings</div>
-            <div class="form-group">
-              <label for="currency">Currency</label>
-              <select id="currency" name="currency">
-                {currencyOptions().map((c) => (
-                  <option value={c.code} selected={c.code === currency}>
-                    {c.code} — {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
             <p class="rail-hint">
               The due date prefills from the client's payment terms when you pick a client or change
               the issue date.
@@ -378,7 +392,10 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
       var p = parseFloat(row.querySelector('.item-price').value);
       if (isFinite(q) && isFinite(p)) { sum += q * p; any = true; }
     });
-    document.getElementById('items-subtotal').textContent = any ? sum.toFixed(2) : '—';
+    var text = any ? sum.toFixed(2) : '—';
+    document.getElementById('items-subtotal').textContent = text;
+    // No tax/discount fields (yet) — the total mirrors the subtotal
+    document.getElementById('items-total').textContent = text;
   }
 
   // Grow description boxes with their content (single-line height at rest)
