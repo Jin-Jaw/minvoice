@@ -122,7 +122,7 @@ describe('email settings guard', () => {
   });
 
   it('sends an invoice to the email stored on the client from the contract address', async () => {
-    const sent: { to?: string; from?: { email: string; name?: string }; text?: string; html?: string }[] = [];
+    const sent: { to?: string; cc?: string[]; from?: { email: string; name?: string }; text?: string; html?: string }[] = [];
     const EMAIL = {
       async send(message: (typeof sent)[number]) {
         sent.push(message);
@@ -158,6 +158,7 @@ describe('email settings guard', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('accounts@client.test');
+    expect(sent[0].cc).toEqual(['jad@jin-jaw.co.uk']);
     expect(sent[0].from?.email).toBe('contract@jin-jaw.co.uk');
     expect(sent[0].text).toContain('IBAN: GB00 TEST 0000 0000');
     expect(sent[0].html).toContain('IBAN: GB00 TEST 0000 0000');

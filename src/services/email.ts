@@ -9,6 +9,7 @@ import { effectiveProviderEnv } from '../lib/providers';
 
 type Mail = {
   to: string;
+  cc?: string[];
   fromName: string;
   subject: string;
   text: string;
@@ -43,6 +44,7 @@ async function deliver(env: Bindings, settings: Settings, m: Mail): Promise<void
       body: JSON.stringify({
         from: `${m.fromName} <${fromAddress}>`,
         to: [m.to],
+        ...(m.cc?.length ? { cc: m.cc } : {}),
         subject: m.subject,
         text: m.text,
         html: m.html,
@@ -63,6 +65,7 @@ async function deliver(env: Bindings, settings: Settings, m: Mail): Promise<void
   }
   await env.EMAIL.send({
     to: m.to,
+    ...(m.cc?.length ? { cc: m.cc } : {}),
     from: { email: fromAddress, name: m.fromName },
     ...(m.replyTo ? { replyTo: m.replyTo } : {}),
     subject: m.subject,
@@ -113,6 +116,7 @@ export async function sendInvoiceEmail(
 
   await deliver(env, settings, {
     to: invoice.client_email,
+    cc: ['jad@jin-jaw.co.uk'],
     fromName: businessName,
     ...(settings.business_email ? { replyTo: settings.business_email } : {}),
     subject: t.emailInvoiceSubject(invoice.number, businessName, invoice.subject, total),
