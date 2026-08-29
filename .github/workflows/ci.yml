@@ -5,9 +5,27 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  checks:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Typecheck
+            script: typecheck
+          - name: Tests
+            script: test
+          - name: Worker dry run
+            script: deploy:dry-run
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,7 +33,4 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # Bindings types are generated from the wrangler config
-      - run: npx wrangler types
-      - run: npx tsc --noEmit
-      - run: npm test
+      - run: npm run ${{ matrix.script }}
