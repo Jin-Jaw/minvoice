@@ -198,15 +198,20 @@ export async function generateInvoicePdf(
     identityX = MARGIN + dims.width + 10;
   }
   ctx.y = TOP - 13;
-  text(truncate(settings.business_name || t.invoice, ctx.bold, 13.5, 330 - identityX), identityX, {
-    size: 13.5,
-    font: ctx.bold,
-  });
-  ctx.y -= 13;
-  const addressLine = (settings.business_address || '').split('\n').filter(Boolean).join(', ');
-  const identityParts = [addressLine, settings.business_email ?? ''].filter(Boolean).join(' · ');
-  if (identityParts) {
-    text(truncate(identityParts, ctx.regular, 9, 350 - identityX), identityX, { size: 9, color: SOFT });
+  const identityWidth = 350 - identityX;
+  const businessLines = wrapText(settings.business_name || t.invoice, ctx.bold, 13.5, identityWidth);
+  for (const [index, line] of businessLines.entries()) {
+    if (index) ctx.y -= 15;
+    text(line, identityX, { size: 13.5, font: ctx.bold });
+  }
+  const identityLines = (settings.business_address || '')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .flatMap((line) => wrapText(line, ctx.regular, 9, identityWidth));
+  if (settings.business_email) identityLines.push(...wrapText(settings.business_email, ctx.regular, 9, identityWidth));
+  for (const [index, line] of identityLines.entries()) {
+    ctx.y -= index === 0 ? 14 : 11;
+    text(line, identityX, { size: 9, color: SOFT });
   }
   const leftEndY = ctx.y;
   ctx.y = TOP - 17;
@@ -270,7 +275,7 @@ export async function generateInvoicePdf(
     text(descLines[0], COL.desc + CELL_INSET);
     text(String(item.quantity), 0, { rightAlignTo: COL.qtyRight, color: SOFT });
     text(money(item.unit_price_cents), 0, { rightAlignTo: COL.unitRight, color: SOFT });
-    text(money(item.amount_cents), 0, { font: ctx.bold, rightAlignTo: COL.amountRight - CELL_INSET });
+    text(money(item.amount_cents), 0, { font: ctx.bold, rightAlignTo: COL.amountRight });
     for (const line of descLines.slice(1)) {
       ctx.y -= 12;
       text(line, COL.desc + CELL_INSET, { color: SOFT, size: 9 });

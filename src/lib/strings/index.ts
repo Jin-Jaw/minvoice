@@ -60,11 +60,10 @@ export type Strings = {
   // Invoice email
   emailInvoiceSubject: (number: string, business: string, subject: string | null, total: string) => string;
   greeting: (name: string) => string;
-  emailInvoiceBody: (business: string, number: string, total: string, dueDate: string | null) => string;
+  emailInvoiceBody: (business: string, total: string) => string;
   viewAndPay: string;
-  pdfAttached: string;
   amountDue: string;
-  attachedBelow: (number: string) => string;
+  attachedBelow: (filename: string) => string;
   paymentDetails: string;
   emailSignoff: string;
   emailReplyHint: string;

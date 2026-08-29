@@ -113,6 +113,7 @@ export async function sendInvoiceEmail(
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
   const total = formatCentsTag(invoice.total_cents, invoice.currency, tag);
+  const attachmentFilename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
   // No due date -> no due wording at all; don't invent terms like "on receipt".
   const dueDate = invoice.due_date ? formatDateTag(invoice.due_date, tag) : null;
   // The logo must be a public absolute URL to render in mail clients. The
@@ -125,7 +126,6 @@ export async function sendInvoiceEmail(
       : `${env.APP_BASE_URL}/jinjaw-square.png`;
   const footerIdentity = [
     businessName,
-    settings.business_address ? settings.business_address.replace(/\r?\n+/g, ', ') : null,
     settings.business_email || null,
   ]
     .filter(Boolean)
@@ -141,9 +141,7 @@ export async function sendInvoiceEmail(
     text: [
       t.greeting(invoice.client_name),
       ``,
-      t.emailInvoiceBody(businessName, invoice.number, total, dueDate),
-      ``,
-      t.pdfAttached,
+      t.emailInvoiceBody(businessName, total),
       ...(invoice.notes ? [``, `${t.paymentDetails}:`, invoice.notes] : []),
     ].join('\n'),
     html: `
@@ -162,8 +160,7 @@ export async function sendInvoiceEmail(
     </table>
     <p style="font-size: 15px; line-height: 1.6; margin: 0 0 12px;">${escapeHtml(t.greeting(invoice.client_name))}</p>
     <p style="font-size: 15px; line-height: 1.6; margin: 0 0 22px;">
-      ${escapeHtml(t.emailInvoiceBody(businessName, invoice.number, total, dueDate))}
-      ${escapeHtml(t.pdfAttached)}
+      ${escapeHtml(t.emailInvoiceBody(businessName, total))}
     </p>
     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background: #f9fafb; border: 1px solid #eef1f2; border-radius: 8px; margin: 0 0 22px;">
       <tr>
@@ -186,7 +183,7 @@ export async function sendInvoiceEmail(
       </tr>
     </table>
     <div style="border: 1px solid #e4e7e9; border-radius: 8px; padding: 12px 14px; margin: 0 0 22px;">
-      <div style="font-size: 13.5px; font-weight: 600;">${escapeHtml(t.attachedBelow(invoice.number))}</div>
+      <div style="font-size: 13.5px; font-weight: 600;">${escapeHtml(t.attachedBelow(attachmentFilename))}</div>
     </div>
     ${
       invoice.notes
@@ -209,7 +206,7 @@ export async function sendInvoiceEmail(
     attachments: [
       {
         content: pdfBytes,
-        filename: invoicePdfFilename(settings.branch_id, invoice.issue_date),
+        filename: attachmentFilename,
         type: 'application/pdf',
       },
     ],

@@ -45,12 +45,10 @@ export const en: Strings = {
       ? `Invoice ${number} from ${business} — ${subject} — ${total}`
       : `Invoice ${number} from ${business} — ${total}`,
   greeting: (name) => `Hi ${name},`,
-  emailInvoiceBody: (business, number, total, dueDate) =>
-    `${business} has sent you invoice ${number} for ${total}${dueDate ? `, due by ${dueDate}` : ''}.`,
+  emailInvoiceBody: (business, total) => `${business} has sent you an invoice for ${total}.`,
   viewAndPay: 'View and pay online:',
-  pdfAttached: 'A PDF copy is attached.',
   amountDue: 'Amount due',
-  attachedBelow: (number) => `Invoice ${number} attached below`,
+  attachedBelow: (filename) => `${filename} attached below`,
   paymentDetails: 'Payment details',
   emailSignoff: 'Thank you,',
   emailReplyHint: 'Questions about this invoice? Just reply to this email.',

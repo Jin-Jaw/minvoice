@@ -47,12 +47,10 @@ export const fr: Strings = {
       ? `Facture ${number} de ${business} — ${subject} — ${total}`
       : `Facture ${number} de ${business} — ${total}`,
   greeting: (name) => `Bonjour ${name},`,
-  emailInvoiceBody: (business, number, total, dueDate) =>
-    `${business} vous a envoyé la facture ${number} d'un montant de ${total}${dueDate ? `, à régler avant le ${dueDate}` : ''}.`,
+  emailInvoiceBody: (business, total) => `${business} vous a envoyé une facture d'un montant de ${total}.`,
   viewAndPay: 'Voir et payer en ligne :',
-  pdfAttached: 'Une copie PDF est jointe.',
   amountDue: 'Montant dû',
-  attachedBelow: (number) => `Facture ${number} jointe ci-dessous`,
+  attachedBelow: (filename) => `Fichier ${filename} joint ci-dessous`,
   paymentDetails: 'Détails de paiement',
   emailSignoff: 'Merci,',
   emailReplyHint: 'Des questions sur cette facture ? Répondez simplement à cet e-mail.',

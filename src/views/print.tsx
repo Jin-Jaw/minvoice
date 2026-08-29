@@ -238,7 +238,7 @@ td.amount { font-weight: 600; }
               <div>
                 <h1 class="biz-name">{settings.business_name}</h1>
                 <div class="biz-contact">
-                  {(settings.business_address || '').split('\n').filter(Boolean).join(', ')}
+                  {settings.business_address || ''}
                   {settings.business_email ? `\n${settings.business_email}` : ''}
                 </div>
               </div>

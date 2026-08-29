@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { getSettings, type InvoiceWithClient } from '../src/db/queries';
 import { sendInvoiceEmail, sendInvoiceEmailToClientAndOwner, sendTestEmail } from '../src/services/email';
 import { isBoxed, unbox } from '../src/lib/secretbox';
+import { en } from '../src/lib/strings/en';
 
 const DB = env.DB;
 const TEST_MASTER_KEY = 'integration-test-master-key-0123456789abcdef';
@@ -13,16 +14,28 @@ beforeEach(async () => {
      setup_complete = 1 WHERE id = 1`
   ).run();
   await DB.prepare(
-    `UPDATE branches SET business_email = 'owner@example.test', name = 'Test Biz' WHERE id = 1`
+    `UPDATE branches SET business_email = 'owner@example.test', name = 'Test Biz',
+     business_address = '123 Map Street\nLondon' WHERE id = 1`
   ).run();
 });
 
 describe('sendTestEmail', () => {
+  it('uses the requested invoice sentence and attachment filename label', () => {
+    expect(en.emailInvoiceBody('Jin&Jaw Ltd', '$14,270.00')).toBe(
+      'Jin&Jaw Ltd has sent you an invoice for $14,270.00.'
+    );
+    expect(en.attachedBelow('JinJawLTD_Invoice_August_2026.pdf')).toBe(
+      'JinJawLTD_Invoice_August_2026.pdf attached below'
+    );
+  });
+
   it('sends a sample invoice email with PDF to the business email', async () => {
     const sent: {
       to?: string;
       subject?: string;
       from?: { email: string; name: string };
+      text?: string;
+      html?: string;
       attachments?: { filename: string; content: Uint8Array }[];
     }[] = [];
     const EMAIL = {
@@ -41,6 +54,10 @@ describe('sendTestEmail', () => {
     expect(sent[0].attachments).toHaveLength(1);
     expect(sent[0].attachments![0].filename).toBe('JinJawLTD_Invoice_August_2026.pdf');
     expect(sent[0].attachments![0].content.length).toBeGreaterThan(1000);
+    expect(sent[0].text).toContain('Test Biz has sent you an invoice for');
+    expect(sent[0].text).not.toContain('A PDF copy is attached');
+    expect(sent[0].html).toContain('JinJawLTD_Invoice_August_2026.pdf attached below');
+    expect(sent[0].html).not.toContain('123 Map Street');
   });
 
   it('no database rows are created by the sample invoice', async () => {
