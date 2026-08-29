@@ -121,6 +121,7 @@ export type Payment = {
 export type InvoiceWithClient = Invoice & {
   client_name: string;
   client_email: string | null;
+  client_address: string | null;
   client_locale: string | null;
   branch_name?: string;
 };
@@ -299,7 +300,7 @@ export async function listOverdueForReminders(
   return (
     await db
       .prepare(
-        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale,
+        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.address AS client_address, c.locale AS client_locale,
            (SELECT COUNT(*) FROM invoice_events e WHERE e.invoice_id = i.id AND e.type = 'reminder') AS reminders_sent,
            (SELECT MAX(created_at) FROM invoice_events e WHERE e.invoice_id = i.id AND e.type = 'reminder') AS last_reminder_at
          FROM invoices i JOIN clients c ON c.id = i.client_id
@@ -483,7 +484,7 @@ export async function listInvoices(db: D1Database, branchId: number): Promise<In
   return (
     await db
       .prepare(
-        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale,
+        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.address AS client_address, c.locale AS client_locale,
                 b.name AS branch_name
          FROM invoices i JOIN clients c ON c.id = i.client_id JOIN branches b ON b.id = i.branch_id
          WHERE i.branch_id = ?
@@ -498,7 +499,7 @@ export async function listAllInvoices(db: D1Database): Promise<InvoiceWithClient
   return (
     await db
       .prepare(
-        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale,
+        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.address AS client_address, c.locale AS client_locale,
                 b.name AS branch_name
          FROM invoices i JOIN clients c ON c.id = i.client_id JOIN branches b ON b.id = i.branch_id
          ORDER BY i.issue_date DESC, CAST(i.number AS INTEGER) DESC, i.created_at DESC, i.id DESC`
@@ -521,7 +522,7 @@ export async function getInvoice(
   const id = invoiceId ?? branchIdOrInvoiceId;
   return db
     .prepare(
-      `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale
+      `SELECT i.*, c.name AS client_name, c.email AS client_email, c.address AS client_address, c.locale AS client_locale
        FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.branch_id = ? AND i.id = ?`
     )
     .bind(branchId, id)
@@ -532,7 +533,7 @@ export async function getInvoice(
 export async function getInvoiceById(db: D1Database, id: number): Promise<InvoiceWithClient | null> {
   return db
     .prepare(
-      `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale
+      `SELECT i.*, c.name AS client_name, c.email AS client_email, c.address AS client_address, c.locale AS client_locale
        FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = ?`
     )
     .bind(id)
@@ -542,7 +543,7 @@ export async function getInvoiceById(db: D1Database, id: number): Promise<Invoic
 export async function getInvoiceByToken(db: D1Database, token: string): Promise<InvoiceWithClient | null> {
   return db
     .prepare(
-      `SELECT i.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale
+      `SELECT i.*, c.name AS client_name, c.email AS client_email, c.address AS client_address, c.locale AS client_locale
        FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.public_token = ?`
     )
     .bind(token)

@@ -1,46 +1,50 @@
-import { PDFDocument, PDFFont, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import type { InvoiceItem, InvoiceWithClient, Logo, Settings } from '../db/queries';
 import { formatTaxRate } from '../lib/money';
 import { formatCentsTag, formatDateTag, getStrings, resolveLocale } from '../lib/strings';
 import { hexToRgb01 } from '../lib/color';
 
-// US Letter, "Ledger" palette — mirrors public/styles.css
-const PAGE = { width: 612, height: 792 };
-const MARGIN = 54;
-const COL = { desc: MARGIN, qty: 330, unit: 408, amountRight: PAGE.width - MARGIN };
-const INK = rgb(0.114, 0.102, 0.082); // #1d1a15
-const SOFT = rgb(0.42, 0.39, 0.35); // #6b6459
-const FAINT = rgb(0.56, 0.53, 0.49); // #8f887c
-const LINE = rgb(0.9, 0.88, 0.84); // #e6e1d6
-const LINE_STRONG = rgb(0.81, 0.78, 0.72); // #cfc7b8
-const GREEN = rgb(0.118, 0.357, 0.263); // #1e5b43
-const PAPER_TINT = rgb(0.973, 0.965, 0.945); // #f8f6f1 header band
-const RUST = rgb(0.659, 0.251, 0.165); // #a8402a
+// A4, "Register" palette — mirrors public/styles.css. Sizes are pt (px × 0.75).
+const PAGE = { width: 595.28, height: 841.89 };
+const MARGIN = 45; // ~60px side margins
+const TOP = PAGE.height - 42; // ~56px top margin
+const FOOTER_FLOOR = 88; // content never draws below this — footer space is reserved
+const COL = {
+  desc: MARGIN,
+  qtyRight: 390,
+  unitRight: 468,
+  amountRight: PAGE.width - MARGIN,
+};
+const CELL_INSET = 9; // 12px cell padding inside the table
+const INK = rgb(0.122, 0.153, 0.169); // #1f272b
+const BODY = rgb(0.239, 0.278, 0.298); // #3d474c
+const SOFT = rgb(0.431, 0.478, 0.506); // #6e7a81
+const LINE = rgb(0.894, 0.906, 0.914); // #e4e7e9
+const ROWLINE = rgb(0.933, 0.945, 0.949); // #eef1f2
+const PANEL = rgb(0.976, 0.98, 0.984); // #f9fafb
+const WHITE = rgb(1, 1, 1);
+const RUST = rgb(0.69, 0.227, 0.153); // #b03a27
 
 type Ctx = {
   doc: PDFDocument;
   page: ReturnType<PDFDocument['addPage']>;
   regular: PDFFont;
   bold: PDFFont;
-  serif: PDFFont;
-  serifBold: PDFFont;
   y: number;
 };
 
 /**
- * Noto Sans/Serif (Latin + Greek + Cyrillic) served from the static assets
- * binding — assets don't count toward Worker script size, and `subset: true`
- * embeds only used glyphs per document. Font BYTES are cached per isolate;
- * each PDFDocument still embeds its own copy (pdf-lib requirement).
- * Any failure here falls back to the WinAnsi standard fonts, which keeps
- * PDFs rendering (Latin-1 only) even if a fork drops the font files.
+ * Noto Sans (Latin + Greek + Cyrillic) served from the static assets binding —
+ * assets don't count toward Worker script size, and `subset: true` embeds only
+ * used glyphs per document. Font BYTES are cached per isolate; each
+ * PDFDocument still embeds its own copy (pdf-lib requirement). Any failure
+ * here falls back to the WinAnsi standard fonts, which keeps PDFs rendering
+ * (Latin-1 only) even if a fork drops the font files.
  */
 const FONT_PATHS = {
   regular: '/fonts/pdf/NotoSans-Regular.ttf',
   bold: '/fonts/pdf/NotoSans-Bold.ttf',
-  serif: '/fonts/pdf/NotoSerif-Regular.ttf',
-  serifBold: '/fonts/pdf/NotoSerif-Bold.ttf',
 } as const;
 let fontBytesPromise: Promise<Record<keyof typeof FONT_PATHS, ArrayBuffer> | null> | null = null;
 
@@ -70,17 +74,36 @@ async function embedFonts(doc: PDFDocument, assets: Fetcher | undefined) {
     return {
       regular: await doc.embedFont(StandardFonts.Helvetica),
       bold: await doc.embedFont(StandardFonts.HelveticaBold),
-      serif: await doc.embedFont(StandardFonts.TimesRoman),
-      serifBold: await doc.embedFont(StandardFonts.TimesRomanBold),
     };
   }
   doc.registerFontkit(fontkit);
   return {
     regular: await doc.embedFont(bytes.regular, { subset: true }),
     bold: await doc.embedFont(bytes.bold, { subset: true }),
-    serif: await doc.embedFont(bytes.serif, { subset: true }),
-    serifBold: await doc.embedFont(bytes.serifBold, { subset: true }),
   };
+}
+
+/** Filled (optionally bordered) rectangle with rounded corners — pdf-lib has no native radius. */
+function roundedRect(
+  page: PDFPage,
+  x: number,
+  topY: number,
+  w: number,
+  h: number,
+  r: number,
+  fill: ReturnType<typeof rgb>,
+  border?: { color: ReturnType<typeof rgb>; width: number }
+) {
+  const path =
+    `M ${r},0 H ${w - r} A ${r},${r} 0 0 1 ${w},${r} V ${h - r} ` +
+    `A ${r},${r} 0 0 1 ${w - r},${h} H ${r} A ${r},${r} 0 0 1 0,${h - r} ` +
+    `V ${r} A ${r},${r} 0 0 1 ${r},0 Z`;
+  page.drawSvgPath(path, {
+    x,
+    y: topY,
+    color: fill,
+    ...(border ? { borderColor: border.color, borderWidth: border.width } : {}),
+  });
 }
 
 export async function generateInvoicePdf(
@@ -88,11 +111,12 @@ export async function generateInvoicePdf(
   items: InvoiceItem[],
   settings: Settings,
   assets?: Fetcher,
-  logo?: Logo | null
+  logo?: Logo | null,
+  payUrl?: string
 ): Promise<Uint8Array> {
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
-  // Intl emits U+00A0/U+202F group separators (e.g. French '1\u202f234,56 €');
+  // Intl emits U+00A0/U+202F group separators (e.g. French '1 234,56 €');
   // normalize to plain spaces so formatted amounts stay WinAnsi-encodable.
   const deSpace = (s: string) => s.replace(/[\u00a0\u202f]/g, ' ');
   const money = (cents: number) => deSpace(formatCentsTag(cents, invoice.currency, tag));
@@ -108,19 +132,21 @@ export async function generateInvoicePdf(
   // Collect the EXACT strings that will be drawn — including locale-aware
   // uppercasing (Turkish 'İ' is not WinAnsi) and every formatted date the
   // document can contain (a Polish paid date renders 'paź').
+  // The invoice subject is deliberately NOT part of the document.
   const upper = (v: string) => v.toLocaleUpperCase(tag);
   const documentText = [
     t.invoice, upper(t.invoice),
-    ...[t.billedTo, t.subject, t.description, t.qty, t.unitPrice, t.amount, t.notes].map(upper),
-    t.issued, t.due, t.subtotal, t.tax, t.total,
+    ...[t.billedTo, t.description, t.qty, t.unitPrice, t.amount, t.amountDue, t.issued, t.due, t.paymentDetails].map(upper),
+    t.subtotal, t.tax, t.total,
     t.statusPaid, t.statusVoid,
     t.footerThanks(settings.business_name || null),
     settings.business_name, settings.business_address, settings.business_email ?? '',
-    invoice.number, invoice.client_name, invoice.client_email ?? '', invoice.subject ?? '', invoice.notes ?? '',
+    invoice.number, invoice.client_name, invoice.client_email ?? '', invoice.client_address ?? '', invoice.notes ?? '',
     date(invoice.issue_date),
     invoice.due_date ? date(invoice.due_date) : '',
     invoice.paid_at ? date(invoice.paid_at.slice(0, 10)) : '',
     money(invoice.total_cents),
+    payUrl ?? '',
     ...items.map((it) => it.description),
   ].join('');
   const needsUnicodeFonts = ![...documentText].every(
@@ -133,7 +159,7 @@ export async function generateInvoicePdf(
     doc,
     page: doc.addPage([PAGE.width, PAGE.height]),
     ...fonts,
-    y: PAGE.height,
+    y: TOP,
   };
   doc.setTitle(`${t.invoice} ${invoice.number}`);
   if (settings.business_name) doc.setAuthor(settings.business_name);
@@ -146,162 +172,143 @@ export async function generateInvoicePdf(
       font?: PDFFont;
       color?: ReturnType<typeof rgb>;
       rightAlignTo?: number;
-      tracking?: boolean;
     } = {}
   ) => {
     const font = opts.font ?? ctx.regular;
-    const size = opts.size ?? 9.5;
+    const size = opts.size ?? 10;
     const safe = sanitize(str, font);
-    const content = opts.tracking ? safe.split('').join(' ') : safe; // faux letterspacing for labels
     const drawX =
-      opts.rightAlignTo !== undefined ? opts.rightAlignTo - font.widthOfTextAtSize(content, size) : x;
-    ctx.page.drawText(content, { x: drawX, y: ctx.y, size, font, color: opts.color ?? INK });
+      opts.rightAlignTo !== undefined ? opts.rightAlignTo - font.widthOfTextAtSize(safe, size) : x;
+    ctx.page.drawText(safe, { x: drawX, y: ctx.y, size, font, color: opts.color ?? INK });
   };
 
+  // 11px/700 uppercase labels in muted ink
   const label = (str: string, x: number, rightAlignTo?: number) =>
-    text(str.toLocaleUpperCase(tag), x, { size: 7, font: ctx.bold, color: FAINT, rightAlignTo });
+    text(str.toLocaleUpperCase(tag), x, { size: 8, font: ctx.bold, color: SOFT, rightAlignTo });
 
-  const hr = (color = LINE, x1 = MARGIN, x2 = PAGE.width - MARGIN) =>
-    ctx.page.drawLine({ start: { x: x1, y: ctx.y }, end: { x: x2, y: ctx.y }, thickness: 0.7, color });
+  const hr = (color = LINE, x1 = MARGIN, x2 = PAGE.width - MARGIN, thickness = 0.75) =>
+    ctx.page.drawLine({ start: { x: x1, y: ctx.y }, end: { x: x2, y: ctx.y }, thickness, color });
 
-  // ---- Brand tape: the green bar from the pay page ----
-  ctx.page.drawRectangle({ x: 0, y: PAGE.height - 6, width: PAGE.width, height: 6, color: ACCENT });
-
-  // ---- Header: identity left, document meta right ----
-  ctx.y = PAGE.height - 64;
+  // ---- Header: logo + identity left, INVOICE + number right ----
   const logoImage = await tryEmbedLogo(doc, logo ?? settings.logo_url);
+  let identityX = MARGIN;
   if (logoImage) {
-    const dims = logoImage.scaleToFit(110, 36);
-    ctx.page.drawImage(logoImage, { x: MARGIN, y: ctx.y - 6, width: dims.width, height: dims.height });
-    ctx.y -= dims.height + 10;
+    const dims = logoImage.scaleToFit(84, 36);
+    ctx.page.drawImage(logoImage, { x: MARGIN, y: TOP - dims.height, width: dims.width, height: dims.height });
+    identityX = MARGIN + dims.width + 10;
   }
-  text(settings.business_name || t.invoice, MARGIN, { size: 22, font: ctx.serifBold });
-  text(t.invoice.toLocaleUpperCase(tag), 0, {
-    size: 11,
+  ctx.y = TOP - 13;
+  text(truncate(settings.business_name || t.invoice, ctx.bold, 13.5, 330 - identityX), identityX, {
+    size: 13.5,
     font: ctx.bold,
-    color: FAINT,
-    rightAlignTo: COL.amountRight,
-    tracking: true,
   });
-  ctx.y -= 15;
-  text(invoice.number, 0, { size: 13, font: ctx.serifBold, rightAlignTo: COL.amountRight });
-
-  ctx.y -= 14;
-  const addressLines = (settings.business_address || '').split('\n').filter(Boolean);
-  const headerLeftY = ctx.y;
-  for (const line of addressLines) {
-    text(line, MARGIN, { color: SOFT });
-    ctx.y -= 12;
+  ctx.y -= 13;
+  const addressLine = (settings.business_address || '').split('\n').filter(Boolean).join(', ');
+  const identityParts = [addressLine, settings.business_email ?? ''].filter(Boolean).join(' · ');
+  if (identityParts) {
+    text(truncate(identityParts, ctx.regular, 9, 350 - identityX), identityX, { size: 9, color: SOFT });
   }
-  if (settings.business_email) {
-    text(settings.business_email, MARGIN, { color: SOFT });
-    ctx.y -= 12;
-  }
-  // dates on the right, independent of address height
   const leftEndY = ctx.y;
-  ctx.y = headerLeftY;
-  text(`${t.issued}  ${date(invoice.issue_date)}`, 0, { color: SOFT, rightAlignTo: COL.amountRight });
-  if (invoice.due_date) {
-    ctx.y -= 12;
-    text(`${t.due}  ${date(invoice.due_date)}`, 0, { color: SOFT, rightAlignTo: COL.amountRight });
-  }
-  ctx.y = Math.min(leftEndY, ctx.y) - 24;
+  ctx.y = TOP - 17;
+  text(upper(t.invoice), 0, { size: 19.5, font: ctx.bold, rightAlignTo: COL.amountRight });
+  ctx.y -= 15;
+  text(invoice.number, 0, { size: 10.5, font: ctx.bold, color: SOFT, rightAlignTo: COL.amountRight });
+  ctx.y = Math.min(leftEndY, ctx.y, TOP - 40) - 20;
 
-  // ---- Bill to ----
+  // ---- Meta band: billed-to + dates + amount due between hairlines ----
+  hr();
+  ctx.y -= 16;
+  const issuedX = 330;
+  const dueX = 415;
   label(t.billedTo, MARGIN);
+  label(t.issued, issuedX);
+  if (invoice.due_date) label(t.due, dueX);
+  label(t.amountDue, 0, COL.amountRight);
   ctx.y -= 14;
-  text(invoice.client_name, MARGIN, { size: 11, font: ctx.bold });
-  if (invoice.client_email) {
-    ctx.y -= 12;
-    text(invoice.client_email, MARGIN, { color: SOFT });
+  text(truncate(invoice.client_name, ctx.bold, 10.5, issuedX - MARGIN - 14), MARGIN, {
+    size: 10.5,
+    font: ctx.bold,
+  });
+  text(date(invoice.issue_date), issuedX);
+  if (invoice.due_date) text(date(invoice.due_date), dueX);
+  text(money(invoice.total_cents), 0, { font: ctx.bold, rightAlignTo: COL.amountRight });
+  // client address + email under the name, muted
+  const billedLines = [
+    ...(invoice.client_address ?? '').split('\n').filter(Boolean),
+    ...(invoice.client_email ? [invoice.client_email] : []),
+  ];
+  for (const line of billedLines) {
+    ctx.y -= 11;
+    text(truncate(line, ctx.regular, 9, issuedX - MARGIN - 14), MARGIN, { size: 9, color: SOFT });
   }
-  ctx.y -= 26;
+  ctx.y -= 14;
+  hr();
+  ctx.y -= 30;
 
-  // ---- Subject ----
-  if (invoice.subject) {
-    label(t.subject, MARGIN);
-    ctx.y -= 14;
-    text(truncate(invoice.subject, ctx.serifBold, 11.5, PAGE.width - 2 * MARGIN), MARGIN, {
-      size: 11.5,
-      font: ctx.serifBold,
-    });
-    ctx.y -= 26;
-  }
-
-  // ---- Items table ----
+  // ---- Items table: dark header bar, repeated on every page ----
+  const BAR_H = 22;
   const tableHeader = () => {
-    // warm band behind the header row
-    ctx.page.drawRectangle({
-      x: MARGIN - 8,
-      y: ctx.y - 6,
-      width: PAGE.width - 2 * (MARGIN - 8),
-      height: 20,
-      color: PAPER_TINT,
-    });
-    ctx.y += 1;
-    label(t.description, COL.desc);
-    label(t.qty, 0, COL.qty + 18);
-    label(t.unitPrice, 0, COL.unit + 30);
-    label(t.amount, 0, COL.amountRight);
-    ctx.y -= 7;
-    hr(LINE_STRONG, MARGIN - 8, PAGE.width - MARGIN + 8);
-    ctx.y -= 16;
+    roundedRect(ctx.page, MARGIN, ctx.y + 15, PAGE.width - 2 * MARGIN, BAR_H, 4.5, INK);
+    const labelBar = (str: string, x: number, rightAlignTo?: number) =>
+      text(str.toLocaleUpperCase(tag), x, { size: 8.5, font: ctx.bold, color: WHITE, rightAlignTo });
+    labelBar(t.description, COL.desc + CELL_INSET);
+    labelBar(t.qty, 0, COL.qtyRight);
+    labelBar(t.unitPrice, 0, COL.unitRight);
+    labelBar(t.amount, 0, COL.amountRight - CELL_INSET);
+    ctx.y -= BAR_H + 12;
   };
   tableHeader();
 
   for (const item of items) {
-    const descLines = wrapText(item.description, ctx.regular, 9.5, COL.qty - COL.desc - 24);
-    if (ctx.y < 130 + (descLines.length - 1) * 12) {
+    const descLines = wrapText(item.description, ctx.regular, 10, COL.qtyRight - COL.desc - CELL_INSET - 50);
+    if (ctx.y < FOOTER_FLOOR + 40 + (descLines.length - 1) * 12) {
       ctx.page = doc.addPage([PAGE.width, PAGE.height]);
-      ctx.y = PAGE.height - MARGIN;
+      ctx.y = TOP - 15;
       tableHeader();
     }
     // First description line shares the row with the numbers; extra lines follow
-    text(descLines[0], COL.desc);
-    text(String(item.quantity), 0, { rightAlignTo: COL.qty + 18, color: SOFT });
-    text(money(item.unit_price_cents), 0, { rightAlignTo: COL.unit + 30, color: SOFT });
-    text(money(item.amount_cents), 0, { rightAlignTo: COL.amountRight });
+    text(descLines[0], COL.desc + CELL_INSET);
+    text(String(item.quantity), 0, { rightAlignTo: COL.qtyRight, color: SOFT });
+    text(money(item.unit_price_cents), 0, { rightAlignTo: COL.unitRight, color: SOFT });
+    text(money(item.amount_cents), 0, { font: ctx.bold, rightAlignTo: COL.amountRight - CELL_INSET });
     for (const line of descLines.slice(1)) {
       ctx.y -= 12;
-      text(line, COL.desc, { color: SOFT, size: 9 });
+      text(line, COL.desc + CELL_INSET, { color: SOFT, size: 9 });
     }
-    ctx.y -= 6;
-    hr();
-    ctx.y -= 14;
+    ctx.y -= 9;
+    hr(ROWLINE);
+    ctx.y -= 15;
   }
 
-  // ---- Totals ----
-  if (ctx.y < 150) {
+  // ---- Totals: right column with a heavy rule above the total ----
+  if (ctx.y < FOOTER_FLOOR + 80) {
     ctx.page = doc.addPage([PAGE.width, PAGE.height]);
-    ctx.y = PAGE.height - MARGIN;
+    ctx.y = TOP - 15;
   }
-  ctx.y -= 6;
-  const totalsX = COL.qty;
+  const totalsX = COL.amountRight - 210;
   text(t.subtotal, totalsX, { color: SOFT });
   text(money(invoice.subtotal_cents), 0, { rightAlignTo: COL.amountRight });
-  if (invoice.tax_cents > 0) {
-    ctx.y -= 15;
-    text(`${t.tax} (${formatTaxRate(invoice.tax_rate_bps)})`, totalsX, { color: SOFT });
-    text(money(invoice.tax_cents), 0, { rightAlignTo: COL.amountRight });
-  }
-  ctx.y -= 10;
-  hr(INK, totalsX, COL.amountRight);
-  ctx.y -= 18;
-  text(t.total, totalsX, { size: 14, font: ctx.serifBold });
+  ctx.y -= 15;
+  text(`${t.tax} (${formatTaxRate(invoice.tax_rate_bps)})`, totalsX, { color: SOFT });
+  text(money(invoice.tax_cents), 0, { rightAlignTo: COL.amountRight });
+  ctx.y -= 11;
+  hr(INK, totalsX, COL.amountRight, 1.5);
+  ctx.y -= 17;
+  text(t.total, totalsX, { size: 12.75, font: ctx.bold });
   text(money(invoice.total_cents), 0, {
-    size: 14,
-    font: ctx.serifBold,
+    size: 12.75,
+    font: ctx.bold,
     rightAlignTo: COL.amountRight,
   });
 
-  // ---- Status stamp ----
+  // ---- Status stamp (PAID / VOID) ----
   if (invoice.status === 'paid' || invoice.status === 'void') {
     const stamp =
       invoice.status === 'paid'
         ? `${t.statusPaid}${invoice.paid_at ? `  ${date(invoice.paid_at.slice(0, 10))}` : ''}`
         : t.statusVoid;
     const color = invoice.status === 'paid' ? ACCENT : RUST;
-    ctx.y -= 26;
+    ctx.y -= 27;
     const w = ctx.bold.widthOfTextAtSize(sanitize(stamp, ctx.bold), 10) + 20;
     ctx.page.drawRectangle({
       x: COL.amountRight - w,
@@ -316,31 +323,48 @@ export async function generateInvoicePdf(
     text(stamp, 0, { size: 10, font: ctx.bold, color, rightAlignTo: COL.amountRight - 10 });
   }
 
-  // ---- Notes ----
+  // ---- Payment details panel (invoice notes) ----
   if (invoice.notes) {
-    ctx.y -= 34;
-    label(t.notes, MARGIN);
-    ctx.y -= 13;
-    for (const line of invoice.notes.split('\n')) {
-      if (ctx.y < 90) break;
-      text(truncate(line, ctx.regular, 9, PAGE.width - 2 * MARGIN), MARGIN, { size: 9, color: SOFT });
-      ctx.y -= 12;
+    const panelW = PAGE.width - 2 * MARGIN;
+    const bodyLines = invoice.notes
+      .split('\n')
+      .flatMap((line) => (line.trim() ? wrapText(line, ctx.regular, 9.75, panelW - 28) : ['']));
+    const panelH = 13 + 9 + 8 + bodyLines.length * 13 + 10;
+    // The 30pt gap above the panel counts toward the fit check — otherwise a
+    // panel that barely fits gets pushed into the footer and clips its tail.
+    if (ctx.y - 30 - panelH < FOOTER_FLOOR) {
+      ctx.page = doc.addPage([PAGE.width, PAGE.height]);
+      ctx.y = TOP - 15;
+    } else {
+      ctx.y -= 30;
+    }
+    roundedRect(ctx.page, MARGIN, ctx.y + 2, panelW, panelH, 6, PANEL, { color: ROWLINE, width: 0.75 });
+    ctx.y -= 13 + 6;
+    label(t.paymentDetails, MARGIN + 14);
+    ctx.y -= 15;
+    for (const line of bodyLines) {
+      if (ctx.y < FOOTER_FLOOR - 10) break;
+      if (line) text(line, MARGIN + 14, { size: 9.75, color: BODY });
+      ctx.y -= 13;
     }
   }
 
-  // ---- Footer ----
+  // ---- Footer pinned to every page: hairline, thanks left, pay link right ----
   const pages = doc.getPages();
   for (const p of pages) {
     ctx.page = p;
-    ctx.y = 46;
+    ctx.y = 64;
     hr();
-    ctx.y = 32;
-    const msg = t.footerThanks(settings.business_name || null);
-    text(msg, 0, {
-      size: 8.5,
-      color: FAINT,
-      rightAlignTo: PAGE.width / 2 + ctx.regular.widthOfTextAtSize(sanitize(msg, ctx.regular), 8.5) / 2,
-    });
+    ctx.y = 50;
+    const thanks = t.footerThanks(settings.business_name || null);
+    text(thanks, MARGIN, { size: 9, color: SOFT });
+    if (payUrl) {
+      const thanksW = ctx.regular.widthOfTextAtSize(sanitize(thanks, ctx.regular), 9);
+      const linkW = ctx.regular.widthOfTextAtSize(sanitize(payUrl, ctx.regular), 7.5);
+      // Long tokens overflow the shared baseline — drop the link a line down.
+      if (MARGIN + thanksW + 16 + linkW > COL.amountRight) ctx.y = 38;
+      text(payUrl, 0, { size: 7.5, color: ACCENT, rightAlignTo: COL.amountRight });
+    }
   }
 
   return doc.save();

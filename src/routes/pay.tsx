@@ -87,9 +87,10 @@ pay.get('/:token/print', async (c) => {
   const invoice = await getInvoiceByToken(c.env.DB, c.req.param('token'));
   if (!invoice) return c.notFound();
   if (invoice.status === 'draft') return c.notFound();
-  const [items, settings] = await Promise.all([
+  const [items, settings, logo] = await Promise.all([
     getInvoiceItems(c.env.DB, invoice.id),
     getSettings(c.env.DB, invoice.branch_id),
+    getLogo(c.env.DB, invoice.branch_id),
   ]);
   return c.html(
     <PrintInvoice
@@ -97,6 +98,7 @@ pay.get('/:token/print', async (c) => {
       items={items}
       settings={settings}
       payUrl={`${c.env.APP_BASE_URL}/pay/${invoice.public_token}`}
+      logoSrc={logo ? `/logo/${settings.branch_id}` : settings.logo_url || null}
       nonce={c.get('secureHeadersNonce')}
     />
   );
@@ -118,7 +120,14 @@ pay.get('/:token/pdf', async (c) => {
     getLogo(c.env.DB, invoice.branch_id),
   ]);
   return pdfResponse(
-    await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo),
+    await generateInvoicePdf(
+      invoice,
+      items,
+      settings,
+      c.env.ASSETS,
+      logo,
+      `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+    ),
     `${invoice.number}.pdf`
   );
 });

@@ -427,10 +427,18 @@ export async function sendTestEmail(env: Bindings, db: D1Database, branchId: num
     updated_at: '',
     client_name: 'Sample Client',
     client_email: settings.business_email,
+    client_address: '1 Sample Street\nSample Town',
     client_locale: null,
   };
   const logo = await getLogo(db, branchId);
-  const pdf = await generateInvoicePdf(invoice, items, settings, env.ASSETS, logo);
+  const pdf = await generateInvoicePdf(
+    invoice,
+    items,
+    settings,
+    env.ASSETS,
+    logo,
+    `${env.APP_BASE_URL}/pay/${invoice.public_token}`
+  );
   await sendInvoiceEmail(env, invoice, settings, pdf, { hasLogo: !!logo });
   return settings.business_email;
 }

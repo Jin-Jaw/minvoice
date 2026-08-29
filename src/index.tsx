@@ -207,7 +207,14 @@ app.get('/admin/invoices/:id/pdf', async (c) => {
     getLogo(c.env.DB, branchId),
   ]);
   return pdfResponse(
-    await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo),
+    await generateInvoicePdf(
+      invoice,
+      items,
+      settings,
+      c.env.ASSETS,
+      logo,
+      `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+    ),
     `${invoice.number}.pdf`
   );
 });
@@ -218,9 +225,10 @@ app.get('/admin/invoices/:id/print', async (c) => {
   const invoice = await getInvoiceById(c.env.DB, id);
   if (!invoice) return c.notFound();
   const branchId = invoice.branch_id;
-  const [items, settings] = await Promise.all([
+  const [items, settings, logo] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
     getSettings(c.env.DB, branchId),
+    getLogo(c.env.DB, branchId),
   ]);
   return c.html(
     <PrintInvoice
@@ -228,6 +236,7 @@ app.get('/admin/invoices/:id/print', async (c) => {
       items={items}
       settings={settings}
       payUrl={`${c.env.APP_BASE_URL}/pay/${invoice.public_token}`}
+      logoSrc={logo ? `/logo/${settings.branch_id}` : settings.logo_url || null}
       nonce={c.get('secureHeadersNonce')}
     />
   );

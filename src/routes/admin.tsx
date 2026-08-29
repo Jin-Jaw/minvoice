@@ -612,7 +612,14 @@ admin.post('/invoices/:id/status', async (c) => {
             } else {
               // No archive, or the invoice was edited since it was stored —
               // render the current data (and refresh a stale archive).
-              pdf = await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo);
+              pdf = await generateInvoicePdf(
+                invoice,
+                items,
+                settings,
+                c.env.ASSETS,
+                logo,
+                `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+              );
               if (sourcePdf) {
                 await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
                 await logInvoiceEvent(
@@ -760,7 +767,14 @@ admin.post('/invoices/:id/email-copy', async (c) => {
     } else {
       // Match the send path: a stale archive is refreshed so the copy shows
       // exactly what a client send would deliver.
-      pdf = await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo);
+      pdf = await generateInvoicePdf(
+        invoice,
+        items,
+        settings,
+        c.env.ASSETS,
+        logo,
+        `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+      );
       if (sourcePdf) {
         await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
         await logInvoiceEvent(
@@ -798,7 +812,14 @@ admin.post('/invoices/:id/regenerate-pdf', async (c) => {
     getSettings(c.env.DB, branchId),
     getLogo(c.env.DB, branchId),
   ]);
-  const pdf = await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo);
+  const pdf = await generateInvoicePdf(
+    invoice,
+    items,
+    settings,
+    c.env.ASSETS,
+    logo,
+    `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+  );
   await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
   await logInvoiceEvent(c.env.DB, id, 'source_pdf_archived', `PDF regenerated and archived as ${invoice.number}.pdf`);
   return c.redirect(`/admin/invoices/${id}`);
