@@ -320,6 +320,17 @@ export function SettingsPage({
             </span>
           </div>
 
+          <div class="form-group">
+            <label for="default_payment_details">Default payment details</label>
+            <textarea id="default_payment_details" name="default_payment_details" rows={7}>
+              {settings.default_payment_details}
+            </textarea>
+            <span class="muted">
+              Written bank or payment instructions automatically added to new invoices from this branch. No
+              payment links are created, and the text can still be changed on each invoice.
+            </span>
+          </div>
+
           <div class="form-row">
             <div class="form-group">
               <label for="invoice_prefix">Invoice prefix</label>

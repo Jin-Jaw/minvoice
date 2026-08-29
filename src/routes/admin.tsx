@@ -151,6 +151,7 @@ admin.post('/setup', async (c) => {
     tax_rate_bps: 0,
     invoice_prefix: values.invoice_prefix,
     default_rate_cents: (values.default_rate && parseAmountToCents(values.default_rate)) || 0,
+    default_payment_details: '',
     timezone: values.timezone,
     locale: 'en',
     accent_color: '#ef4958',
@@ -321,15 +322,17 @@ admin.get('/', async (c) => {
 // ---------- Invoices: new ----------
 
 admin.get('/invoices/new', async (c) => {
-  const [clients, settings] = await Promise.all([
+  const [clients, settings, logo] = await Promise.all([
     listClients(c.env.DB),
     getSettings(c.env.DB, c.get('branchId')),
+    getLogo(c.env.DB, c.get('branchId')),
   ]);
   return c.html(
     <InvoiceFormPage
       currentPath="/admin"
       clients={clients}
       settings={settings}
+      hasLogo={!!logo}
       suggestedNumber={await suggestedInvoiceNumber(c.env.DB, settings)}
       nonce={c.get('secureHeadersNonce')}
     />
@@ -339,7 +342,11 @@ admin.get('/invoices/new', async (c) => {
 admin.post('/invoices/new', async (c) => {
   const branchId = c.get('branchId');
   const body = (await c.req.parseBody({ all: true })) as Record<string, string | string[]>;
-  const [clients, settings] = await Promise.all([listClients(c.env.DB), getSettings(c.env.DB, branchId)]);
+  const [clients, settings, logo] = await Promise.all([
+    listClients(c.env.DB),
+    getSettings(c.env.DB, branchId),
+    getLogo(c.env.DB, branchId),
+  ]);
   const { items, problems: itemProblems } = parseItemDrafts(body);
   const suggested = await suggestedInvoiceNumber(c.env.DB, settings);
 
@@ -349,6 +356,7 @@ admin.post('/invoices/new', async (c) => {
         currentPath="/admin"
         clients={clients}
         settings={settings}
+        hasLogo={!!logo}
         suggestedNumber={suggested}
         nonce={c.get('secureHeadersNonce')}
         errors={errors}
@@ -462,10 +470,11 @@ admin.get('/invoices/:id/edit', async (c) => {
     return c.redirect(`/admin/invoices/${id}`);
   }
 
-  const [clients, items, settings] = await Promise.all([
+  const [clients, items, settings, logo] = await Promise.all([
     listClients(c.env.DB),
     getInvoiceItems(c.env.DB, id),
     getSettings(c.env.DB, branchId),
+    getLogo(c.env.DB, branchId),
   ]);
 
   return c.html(
@@ -473,6 +482,7 @@ admin.get('/invoices/:id/edit', async (c) => {
       currentPath="/admin"
       clients={clients}
       settings={settings}
+      hasLogo={!!logo}
       invoice={invoice}
       items={items}
       nonce={c.get('secureHeadersNonce')}
@@ -497,12 +507,17 @@ admin.post('/invoices/:id/edit', async (c) => {
   const problems = [...(await invoiceHeaderProblems(c.env.DB, body, { checkClient: true })), ...itemProblems];
 
   if (problems.length) {
-    const [clients, settings] = await Promise.all([listClients(c.env.DB), getSettings(c.env.DB, branchId)]);
+    const [clients, settings, logo] = await Promise.all([
+      listClients(c.env.DB),
+      getSettings(c.env.DB, branchId),
+      getLogo(c.env.DB, branchId),
+    ]);
     return c.html(
       <InvoiceFormPage
         currentPath="/admin"
         clients={clients}
         settings={settings}
+        hasLogo={!!logo}
         invoice={invoice}
         nonce={c.get('secureHeadersNonce')}
         errors={problems}
@@ -1090,6 +1105,7 @@ admin.post('/settings', async (c) => {
     tax_rate_bps: Number.isFinite(taxRateBps) ? taxRateBps : 0,
     invoice_prefix: body.invoice_prefix,
     default_rate_cents: (body.default_rate && parseAmountToCents(body.default_rate)) || 0,
+    default_payment_details: body.default_payment_details ?? current.default_payment_details,
     timezone: tzValid ? body.timezone : current.timezone,
     locale: validLocaleTag(submittedLocale(body)) ? submittedLocale(body)!.trim() : current.locale,
     accent_color: accentUsable(body.accent_color) ? safeAccent(body.accent_color) : current.accent_color,

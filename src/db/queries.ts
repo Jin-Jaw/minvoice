@@ -16,6 +16,7 @@ export type Settings = {
   invoice_prefix: string;
   next_invoice_number: number;
   default_rate_cents: number; // 0 = no default
+  default_payment_details: string; // branch-specific notes prefilled on new invoices
   timezone: string; // IANA name; storage stays UTC
   locale: string; // BCP-47 tag for customer-facing language + formatting
   accent_color: string; // brand accent hex for emails + PDF
@@ -50,6 +51,7 @@ export type Branch = {
   invoice_prefix: string;
   next_invoice_number: number;
   accent_color: string;
+  default_payment_details: string;
   active: number;
   created_at: string;
 };
@@ -166,6 +168,7 @@ export async function getSettings(db: D1Database, branchId = 1): Promise<Setting
     invoice_prefix: branch.invoice_prefix,
     next_invoice_number: branch.next_invoice_number,
     accent_color: branch.accent_color,
+    default_payment_details: branch.default_payment_details,
   };
 }
 
@@ -196,7 +199,8 @@ export async function updateSettings(
     db
       .prepare(
         `UPDATE branches SET name = ?, business_address = ?, business_email = ?, logo_url = ?,
-         currency = ?, invoice_prefix = ?, accent_color = ? WHERE id = ? AND active = 1`
+         currency = ?, invoice_prefix = ?, accent_color = ?, default_payment_details = ?
+         WHERE id = ? AND active = 1`
       )
       .bind(
         s.business_name,
@@ -206,6 +210,7 @@ export async function updateSettings(
         s.currency,
         s.invoice_prefix,
         s.accent_color,
+        s.default_payment_details,
         branchId
       ),
     db

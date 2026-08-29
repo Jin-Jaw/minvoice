@@ -8,6 +8,7 @@ export type InvoiceFormProps = {
   nonce?: string;
   clients: Client[];
   settings: Settings;
+  hasLogo?: boolean;
   /** Next auto number, shown as an editable prefill on new invoices. */
   suggestedNumber?: string;
   invoice?: Invoice;
@@ -68,7 +69,8 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
   const dueDate = fv?.due_date ?? invoice?.due_date ?? '';
   const currency = fv?.currency ?? invoice?.currency ?? selectedClient?.default_currency ?? settings.currency;
   const subject = fv?.subject ?? invoice?.subject ?? '';
-  const notes = fv?.notes ?? invoice?.notes ?? '';
+  const notes = fv?.notes ?? (invoice ? invoice.notes ?? '' : settings.default_payment_details);
+  const logoSrc = props.hasLogo ? `/logo/${settings.branch_id}` : settings.logo_url;
 
   const itemDescriptions = fv?.item_description ?? props.items?.map((it) => it.description) ?? [];
   const itemQuantities = fv?.item_quantity ?? props.items?.map((it) => String(it.quantity)) ?? [];
@@ -109,9 +111,9 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
         <div class="card invoice-sheet">
           <div class="sheet-head">
             <div class="sheet-head-left">
-              {settings.logo_url ? (
+              {logoSrc ? (
                 <div class="sheet-logo-box">
-                  <img src={settings.logo_url} alt="" class="sheet-logo" />
+                  <img src={logoSrc} alt="" class="sheet-logo" />
                 </div>
               ) : (
                 <a class="sheet-logo-box sheet-logo-add" href="/admin/settings">
@@ -182,12 +184,24 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
                     data-rate={effectiveRate(client, settings)}
                     data-currency={client.default_currency ?? settings.currency}
                     data-terms={effectiveTerms(client, settings)}
+                    data-address={client.address ?? ''}
                     selected={selectedClientId === String(client.id)}
                   >
                     {client.name}
                   </option>
                 ))}
               </select>
+              <div id="client-address-preview" class="sheet-biz-address" hidden={!selectedClient?.address}>
+                {selectedClient?.address ?? ''}
+              </div>
+              <a
+                id="client-edit-link"
+                class="muted"
+                href={selectedClient ? `/admin/clients/${selectedClient.id}` : '#'}
+                hidden={!selectedClient}
+              >
+                Edit client details
+              </a>
             </div>
             <div class="form-group">
               <label for="subject">Subject</label>
@@ -331,6 +345,8 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
   var addBtn = document.getElementById('add-line-btn');
   var clientSelect = document.getElementById('client_id');
   var currencySelect = document.getElementById('currency');
+  var clientAddress = document.getElementById('client-address-preview');
+  var clientEditLink = document.getElementById('client-edit-link');
 
   function currentRate() {
     var opt = clientSelect.options[clientSelect.selectedIndex];
@@ -343,6 +359,16 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
     if (currency && currencySelect.querySelector('option[value="' + currency + '"]')) {
       currencySelect.value = currency;
     }
+  }
+
+  function showClientDetails() {
+    var opt = clientSelect.options[clientSelect.selectedIndex];
+    var address = (opt && opt.getAttribute('data-address')) || '';
+    var clientId = (opt && opt.value) || '';
+    clientAddress.textContent = address;
+    clientAddress.hidden = !address;
+    clientEditLink.href = clientId ? '/admin/clients/' + encodeURIComponent(clientId) : '#';
+    clientEditLink.hidden = !clientId;
   }
 
   var issueInput = document.getElementById('issue_date');
@@ -386,6 +412,7 @@ export function InvoiceFormPage(props: InvoiceFormProps) {
     applyRate();
     updateRateHint();
     applyTerms();
+    showClientDetails();
   });
   currencySelect.addEventListener('change', updateRateHint);
 
