@@ -1330,36 +1330,76 @@ export type InvoiceSourcePdf = {
   mime: 'application/pdf';
   filename: string;
   uploaded_at: string;
+  /** True when the app rendered this archive itself (vs. a manual upload). */
+  generated: boolean;
+  /** True when the invoice was edited after this archive was stored. */
+  stale: boolean;
 };
 
 export async function getInvoiceSourcePdf(db: D1Database, invoiceId: number): Promise<InvoiceSourcePdf | null> {
   const row = await db
-    .prepare('SELECT bytes, mime, filename, uploaded_at FROM invoice_source_pdfs WHERE invoice_id = ?')
+    .prepare('SELECT bytes, mime, filename, uploaded_at, generated, stale FROM invoice_source_pdfs WHERE invoice_id = ?')
     .bind(invoiceId)
-    .first<{ bytes: ArrayBuffer | number[]; mime: 'application/pdf'; filename: string; uploaded_at: string }>();
+    .first<{
+      bytes: ArrayBuffer | number[];
+      mime: 'application/pdf';
+      filename: string;
+      uploaded_at: string;
+      generated: number;
+      stale: number;
+    }>();
   if (!row) return null;
   const bytes = row.bytes instanceof ArrayBuffer ? new Uint8Array(row.bytes) : Uint8Array.from(row.bytes);
-  return { bytes, mime: row.mime, filename: row.filename, uploaded_at: row.uploaded_at };
+  return {
+    bytes,
+    mime: row.mime,
+    filename: row.filename,
+    uploaded_at: row.uploaded_at,
+    generated: !!row.generated,
+    stale: !!row.stale,
+  };
+}
+
+export type InvoiceSourcePdfMeta = Pick<InvoiceSourcePdf, 'uploaded_at' | 'generated' | 'stale'>;
+
+/** Archive state without the bytes — for views that only decide what to show. */
+export async function getInvoiceSourcePdfMeta(
+  db: D1Database,
+  invoiceId: number
+): Promise<InvoiceSourcePdfMeta | null> {
+  const row = await db
+    .prepare('SELECT uploaded_at, generated, stale FROM invoice_source_pdfs WHERE invoice_id = ?')
+    .bind(invoiceId)
+    .first<{ uploaded_at: string; generated: number; stale: number }>();
+  if (!row) return null;
+  return { uploaded_at: row.uploaded_at, generated: !!row.generated, stale: !!row.stale };
 }
 
 export async function hasInvoiceSourcePdf(db: D1Database, invoiceId: number): Promise<boolean> {
   return Boolean(await db.prepare('SELECT 1 FROM invoice_source_pdfs WHERE invoice_id = ?').bind(invoiceId).first());
 }
 
+/** Flag the archive as behind the invoice — the next email regenerates it. */
+export async function markInvoiceSourcePdfStale(db: D1Database, invoiceId: number): Promise<void> {
+  await db.prepare('UPDATE invoice_source_pdfs SET stale = 1 WHERE invoice_id = ?').bind(invoiceId).run();
+}
+
 export async function setInvoiceSourcePdf(
   db: D1Database,
   invoiceId: number,
   bytes: Uint8Array,
-  filename: string
+  filename: string,
+  generated = false
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO invoice_source_pdfs (invoice_id, bytes, mime, filename, uploaded_at)
-       VALUES (?, ?, 'application/pdf', ?, datetime('now'))
+      `INSERT INTO invoice_source_pdfs (invoice_id, bytes, mime, filename, uploaded_at, generated, stale)
+       VALUES (?, ?, 'application/pdf', ?, datetime('now'), ?, 0)
        ON CONFLICT (invoice_id) DO UPDATE SET
-         bytes = excluded.bytes, filename = excluded.filename, uploaded_at = datetime('now')`
+         bytes = excluded.bytes, filename = excluded.filename, uploaded_at = datetime('now'),
+         generated = excluded.generated, stale = 0`
     )
-    .bind(invoiceId, bytes, filename)
+    .bind(invoiceId, bytes, filename, generated ? 1 : 0)
     .run();
 }
 

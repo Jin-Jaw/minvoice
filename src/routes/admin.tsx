@@ -39,7 +39,8 @@ import {
   listBranches,
   listClients,
   listInvoices,
-  hasInvoiceSourcePdf,
+  getInvoiceSourcePdfMeta,
+  markInvoiceSourcePdfStale,
   markInvoiceSent,
   markInvoiceUnsent,
   monthlyReport,
@@ -432,12 +433,12 @@ admin.get('/invoices/:id', async (c) => {
   if (!invoice) return c.notFound();
   const branchId = invoice.branch_id;
 
-  const [items, payments, events, settings, hasOriginalPdf] = await Promise.all([
+  const [items, payments, events, settings, pdfMeta] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
     getPayments(c.env.DB, id),
     getInvoiceEvents(c.env.DB, id),
     getSettings(c.env.DB, branchId),
-    hasInvoiceSourcePdf(c.env.DB, id),
+    getInvoiceSourcePdfMeta(c.env.DB, id),
   ]);
   const timeline = buildTimeline(invoice, payments, events, formatCents);
   const emailedTo = c.req.query('emailed');
@@ -452,7 +453,8 @@ admin.get('/invoices/:id', async (c) => {
       timeline={timeline}
       timezone={settings.timezone}
       emailEnabled={settings.email_provider !== 'none'}
-      hasOriginalPdf={hasOriginalPdf}
+      hasOriginalPdf={!!pdfMeta}
+      pdfNeedsRegen={!!pdfMeta && (pdfMeta.stale || !pdfMeta.generated)}
       notice={
         emailedTo
           ? `Invoice emailed to ${emailedTo}.`
@@ -557,6 +559,9 @@ admin.post('/invoices/:id/edit', async (c) => {
     items,
   });
   await logInvoiceEvent(c.env.DB, id, 'edited');
+  // The archived PDF no longer matches the invoice — the next email
+  // regenerates it, and the detail page offers Regenerate again.
+  await markInvoiceSourcePdfStale(c.env.DB, id);
 
   return c.redirect(`/admin/invoices/${id}`);
 });
@@ -601,8 +606,23 @@ admin.post('/invoices/:id/status', async (c) => {
               getInvoiceSourcePdf(c.env.DB, id),
               getLogo(c.env.DB, branchId),
             ]);
-            const pdf =
-              sourcePdf?.bytes ?? (await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo));
+            let pdf: Uint8Array;
+            if (sourcePdf && !sourcePdf.stale) {
+              pdf = sourcePdf.bytes;
+            } else {
+              // No archive, or the invoice was edited since it was stored —
+              // render the current data (and refresh a stale archive).
+              pdf = await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo);
+              if (sourcePdf) {
+                await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
+                await logInvoiceEvent(
+                  c.env.DB,
+                  id,
+                  'source_pdf_archived',
+                  `PDF regenerated after edits and archived as ${invoice.number}.pdf`
+                );
+              }
+            }
             ownerCopyAddress = await sendInvoiceEmailToClientAndOwner(c.env, invoice, settings, pdf, !!logo);
           } catch (e) {
             console.error('invoice email failed', e);
@@ -734,8 +754,23 @@ admin.post('/invoices/:id/email-copy', async (c) => {
       getInvoiceSourcePdf(c.env.DB, id),
       getLogo(c.env.DB, branchId),
     ]);
-    const pdf =
-      sourcePdf?.bytes ?? (await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo));
+    let pdf: Uint8Array;
+    if (sourcePdf && !sourcePdf.stale) {
+      pdf = sourcePdf.bytes;
+    } else {
+      // Match the send path: a stale archive is refreshed so the copy shows
+      // exactly what a client send would deliver.
+      pdf = await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo);
+      if (sourcePdf) {
+        await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
+        await logInvoiceEvent(
+          c.env.DB,
+          id,
+          'source_pdf_archived',
+          `PDF regenerated after edits and archived as ${invoice.number}.pdf`
+        );
+      }
+    }
     await sendInvoiceEmail(c.env, invoice, settings, pdf, { copyTo: to, hasLogo: !!logo });
   } catch (e) {
     console.error('invoice copy email failed', e);
@@ -764,7 +799,7 @@ admin.post('/invoices/:id/regenerate-pdf', async (c) => {
     getLogo(c.env.DB, branchId),
   ]);
   const pdf = await generateInvoicePdf(invoice, items, settings, c.env.ASSETS, logo);
-  await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`);
+  await setInvoiceSourcePdf(c.env.DB, id, pdf, `${invoice.number}.pdf`, true);
   await logInvoiceEvent(c.env.DB, id, 'source_pdf_archived', `PDF regenerated and archived as ${invoice.number}.pdf`);
   return c.redirect(`/admin/invoices/${id}`);
 });

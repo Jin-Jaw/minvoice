@@ -24,6 +24,7 @@ export function InvoiceDetailPage({
   timezone,
   emailEnabled,
   hasOriginalPdf,
+  pdfNeedsRegen,
   notice,
   error,
   nonce,
@@ -37,6 +38,8 @@ export function InvoiceDetailPage({
   /** false when Settings → Email = none: email actions degrade to mark-sent */
   emailEnabled: boolean;
   hasOriginalPdf: boolean;
+  /** Archive is a manual upload or behind the invoice — offer Regenerate. */
+  pdfNeedsRegen?: boolean;
   notice?: string;
   error?: string;
   nonce?: string;
@@ -170,15 +173,19 @@ export function InvoiceDetailPage({
         {hasOriginalPdf ? (
           <>
             <p class="muted">The exact originally issued PDF is archived and used for downloads and invoice emails.</p>
-            <form
-              method="post"
-              action={`/admin/invoices/${invoice.id}/regenerate-pdf`}
-              data-confirm={`Regenerate ${invoice.number}.pdf from the current invoice data? The archived original is replaced — downloads, emails, and resends will use the new document.`}
-            >
-              <button type="submit" class="btn btn-secondary btn-sm">
-                Regenerate PDF
-              </button>
-            </form>
+            {pdfNeedsRegen ? (
+              <form
+                method="post"
+                action={`/admin/invoices/${invoice.id}/regenerate-pdf`}
+                data-confirm={`Regenerate ${invoice.number}.pdf from the current invoice data? The archived original is replaced — downloads, emails, and resends will use the new document.`}
+              >
+                <button type="submit" class="btn btn-secondary btn-sm">
+                  Regenerate PDF
+                </button>
+              </form>
+            ) : (
+              <p class="muted">Up to date with the invoice — editing the invoice regenerates it on the next email.</p>
+            )}
           </>
         ) : (
           <form method="post" action={`/admin/invoices/${invoice.id}/source-pdf`} enctype="multipart/form-data">
