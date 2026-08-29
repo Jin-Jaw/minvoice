@@ -114,8 +114,7 @@ describe('browser and public-route hardening', () => {
 
     const branch = await DB.prepare(`SELECT id FROM branches WHERE name = 'Second Branch Test'`).first<{ id: number }>();
     expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe('/admin/settings');
-    expect(response.headers.get('set-cookie')).toContain(`jj_invoice_branch=${branch!.id}`);
+    expect(response.headers.get('location')).toBe(`/admin/settings?branch=${branch!.id}`);
 
     try {
       const clients = await exports.default.fetch(
