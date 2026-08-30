@@ -3,7 +3,7 @@ import { getInvoiceById, getLogo, getSettings, logInvoiceEvent, type InvoiceItem
 import { computeTotals, formatCents } from '../lib/money';
 import { addDaysISO, todayInTz } from '../lib/dates';
 import { generateInvoicePdf } from './pdf';
-import { formatCentsTag, formatDateTag, getStrings, resolveLocale } from '../lib/strings';
+import { formatCentsTag, formatDateTag, formatMonthYearTag, getStrings, resolveLocale } from '../lib/strings';
 import { safeAccent } from '../lib/color';
 import { effectiveProviderEnv } from '../lib/providers';
 import { invoicePdfFilename } from '../lib/invoice-filename';
@@ -137,7 +137,7 @@ export async function sendInvoiceEmail(
     to: copyTo ?? invoice.client_email!,
     fromName: businessName,
     ...(settings.business_email ? { replyTo: settings.business_email } : {}),
-    subject: t.emailInvoiceSubject(invoice.number, businessName, invoice.subject, total),
+    subject: t.emailInvoiceSubject(formatMonthYearTag(invoice.issue_date, tag), businessName),
     text: [
       t.greeting(invoice.client_name),
       ``,

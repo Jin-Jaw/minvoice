@@ -49,7 +49,7 @@ describe('sendTestEmail', () => {
     expect(to).toBe('owner@example.test');
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('owner@example.test');
-    expect(sent[0].subject).toContain('SAMPLE'); // real invoice-email subject, fake number
+    expect(sent[0].subject).toBe('August 2026 Invoice from Test Biz');
     expect(sent[0].from?.email).toBe('contact@jin-jaw.co.uk');
     // The real PDF rides along (ASCII sample -> fast WinAnsi path -> compact file)
     expect(sent[0].attachments).toHaveLength(1);
@@ -142,7 +142,7 @@ describe('email settings guard', () => {
   });
 
   it('sends an invoice to the email stored on the client without exposing a copied recipient', async () => {
-    const sent: { to?: string; cc?: string[]; from?: { email: string; name?: string }; text?: string; html?: string }[] = [];
+    const sent: { to?: string; cc?: string[]; subject?: string; from?: { email: string; name?: string }; text?: string; html?: string }[] = [];
     const EMAIL = {
       async send(message: (typeof sent)[number]) {
         sent.push(message);
@@ -179,6 +179,7 @@ describe('email settings guard', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('accounts@client.test');
+    expect(sent[0].subject).toBe('August 2026 Invoice from Test Biz');
     expect(sent[0].cc).toBeUndefined();
     expect(sent[0].from?.email).toBe('contact@jin-jaw.co.uk');
     expect(sent[0].text).toContain('IBAN: GB00 TEST 0000 0000');

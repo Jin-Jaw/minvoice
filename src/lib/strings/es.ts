@@ -42,10 +42,7 @@ export const es: Strings = {
     `El pago en línea no está disponible para esta factura${email ? ` — por favor contacte con ${email}` : ''}.`,
   paymentInstructions: 'Utilice los datos de pago indicados en esta factura.',
 
-  emailInvoiceSubject: (number, business, subject, total) =>
-    subject
-      ? `Factura ${number} de ${business} — ${subject} — ${total}`
-      : `Factura ${number} de ${business} — ${total}`,
+  emailInvoiceSubject: (monthYear, business) => `${monthYear} Factura de ${business}`,
   greeting: (name) => `Estimado/a ${name}:`,
   emailInvoiceBody: (business, total) => `${business} le ha enviado una factura por ${total}.`,
   viewAndPay: 'Ver y pagar en línea:',

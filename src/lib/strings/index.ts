@@ -58,7 +58,7 @@ export type Strings = {
   paymentInstructions: string;
 
   // Invoice email
-  emailInvoiceSubject: (number: string, business: string, subject: string | null, total: string) => string;
+  emailInvoiceSubject: (monthYear: string, business: string) => string;
   greeting: (name: string) => string;
   emailInvoiceBody: (business: string, total: string) => string;
   viewAndPay: string;
@@ -139,6 +139,18 @@ export function formatDateTag(iso: string, tag: string): string {
     );
   } catch {
     return iso; // unknown tag or malformed date: show the ISO string rather than throw
+  }
+}
+
+/** Invoice issue month/year for email subjects ('August 2026', 'août 2026'). */
+export function formatMonthYearTag(iso: string, tag: string): string {
+  try {
+    const [y, m] = iso.slice(0, 7).split('-').map(Number);
+    return new Intl.DateTimeFormat(tag || 'en', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(
+      new Date(Date.UTC(y, m - 1, 1))
+    );
+  } catch {
+    return iso.slice(0, 7);
   }
 }
 

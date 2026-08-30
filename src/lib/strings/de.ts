@@ -42,10 +42,7 @@ export const de: Strings = {
     `Online-Zahlung ist für diese Rechnung nicht verfügbar${email ? ` — bitte kontaktieren Sie ${email}` : ''}.`,
   paymentInstructions: 'Bitte verwenden Sie die auf dieser Rechnung angegebenen Zahlungsdaten.',
 
-  emailInvoiceSubject: (number, business, subject, total) =>
-    subject
-      ? `Rechnung ${number} von ${business} — ${subject} — ${total}`
-      : `Rechnung ${number} von ${business} — ${total}`,
+  emailInvoiceSubject: (monthYear, business) => `${monthYear} Rechnung von ${business}`,
   greeting: (name) => `Guten Tag ${name},`,
   emailInvoiceBody: (business, total) => `${business} hat Ihnen eine Rechnung über ${total} gesendet.`,
   viewAndPay: 'Online ansehen und bezahlen:',

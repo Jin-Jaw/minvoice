@@ -40,10 +40,7 @@ export const en: Strings = {
     `Online payment isn't available for this invoice${email ? ` — please contact ${email}` : ''}.`,
   paymentInstructions: 'Please use the payment details provided on this invoice.',
 
-  emailInvoiceSubject: (number, business, subject, total) =>
-    subject
-      ? `Invoice ${number} from ${business} — ${subject} — ${total}`
-      : `Invoice ${number} from ${business} — ${total}`,
+  emailInvoiceSubject: (monthYear, business) => `${monthYear} Invoice from ${business}`,
   greeting: (name) => `Hi ${name},`,
   emailInvoiceBody: (business, total) => `${business} has sent you an invoice for ${total}.`,
   viewAndPay: 'View and pay online:',
