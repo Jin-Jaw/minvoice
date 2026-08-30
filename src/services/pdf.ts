@@ -193,7 +193,9 @@ export async function generateInvoicePdf(
   const logoImage = await tryEmbedLogo(doc, logo ?? settings.logo_url);
   let identityX = MARGIN;
   if (logoImage) {
-    const dims = logoImage.scaleToFit(84, 36);
+    // Match the logo's visual height to the full identity block beside it
+    // (company name, multiline address, and email), not just the name line.
+    const dims = logoImage.scaleToFit(96, 64);
     ctx.page.drawImage(logoImage, { x: MARGIN, y: TOP - dims.height, width: dims.width, height: dims.height });
     identityX = MARGIN + dims.width + 10;
   }

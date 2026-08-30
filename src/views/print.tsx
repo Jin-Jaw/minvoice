@@ -107,7 +107,7 @@ body {
 }
 .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
 .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.brand-logo { display: block; max-height: 48px; max-width: 120px; border-radius: 8px; }
+.brand-logo { display: block; max-height: 72px; max-width: 120px; border-radius: 8px; }
 .biz-name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
 .biz-contact { color: var(--soft); font-size: 12px; white-space: pre-line; margin-top: 2px; }
 .doc-id { text-align: right; flex-shrink: 0; }
