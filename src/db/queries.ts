@@ -1015,20 +1015,20 @@ export type ReportSummary = {
  */
 export async function monthlyReport(
   db: D1Database,
-  branchId = 1,
+  branchId: number | null = 1,
   clientId: number | null = null
 ): Promise<MonthlyReportRow[]> {
-  // ?1 = branch, ?2 = optional shared-client filter
+  // ?1 = optional branch scope (NULL means every company), ?2 = optional shared-client filter
   const [inv, pay] = await db.batch<{ ym: string; currency: string; n: number; total: number }>([
     db.prepare(
       `SELECT strftime('%Y-%m', issue_date) AS ym, currency, COUNT(*) AS n, COALESCE(SUM(total_cents), 0) AS total
-       FROM invoices WHERE branch_id = ?1 AND status IN ('sent', 'paid')
+       FROM invoices WHERE (?1 IS NULL OR branch_id = ?1) AND status IN ('sent', 'paid')
          AND (?2 IS NULL OR client_id = ?2) GROUP BY ym, currency`
     ).bind(branchId, clientId),
     db.prepare(
       `SELECT strftime('%Y-%m', p.created_at) AS ym, p.currency, COUNT(*) AS n, COALESCE(SUM(p.amount_cents), 0) AS total
        FROM payments p JOIN invoices i ON i.id = p.invoice_id
-       WHERE i.branch_id = ?1 AND p.undone_at IS NULL
+       WHERE (?1 IS NULL OR i.branch_id = ?1) AND p.undone_at IS NULL
          AND (?2 IS NULL OR i.client_id = ?2) GROUP BY ym, p.currency`
     ).bind(branchId, clientId),
   ]);
@@ -1100,41 +1100,43 @@ export async function listAllPayments(
 export function reportSummary(db: D1Database, today: string, clientId?: number | null): Promise<ReportSummary>;
 export function reportSummary(
   db: D1Database,
-  branchId: number,
+  branchId: number | null,
   today: string,
   clientId?: number | null
 ): Promise<ReportSummary>;
 export async function reportSummary(
   db: D1Database,
-  branchOrToday: number | string,
+  branchOrToday: number | string | null,
   todayOrClient?: string | number | null,
   explicitClientId: number | null = null
 ): Promise<ReportSummary> {
-  const branchId = typeof branchOrToday === 'number' ? branchOrToday : 1;
-  const today = typeof branchOrToday === 'number' ? (todayOrClient as string) : branchOrToday;
-  const clientId = typeof branchOrToday === 'number' ? explicitClientId : ((todayOrClient as number | null) ?? null);
+  const hasExplicitBranch = typeof branchOrToday !== 'string';
+  const branchId = hasExplicitBranch ? branchOrToday : 1;
+  const today = hasExplicitBranch ? (todayOrClient as string) : branchOrToday;
+  const clientId = hasExplicitBranch ? explicitClientId : ((todayOrClient as number | null) ?? null);
   const [counts, outstanding, received] = await db.batch([
     db
       .prepare(
         `SELECT
           (SELECT COUNT(*) FROM invoices
-            WHERE branch_id = ?1 AND status = 'sent' AND (?3 IS NULL OR client_id = ?3)) AS outstanding_count,
+            WHERE (?1 IS NULL OR branch_id = ?1) AND status = 'sent' AND (?3 IS NULL OR client_id = ?3)) AS outstanding_count,
           (SELECT COUNT(*) FROM invoices
-            WHERE branch_id = ?1 AND status = 'sent' AND due_date IS NOT NULL AND due_date < ?2
+            WHERE (?1 IS NULL OR branch_id = ?1) AND status = 'sent' AND due_date IS NOT NULL AND due_date < ?2
               AND (?3 IS NULL OR client_id = ?3)) AS overdue_count`
       )
       .bind(branchId, today, clientId),
     db
       .prepare(
         `SELECT currency, COALESCE(SUM(total_cents), 0) AS cents FROM invoices
-         WHERE branch_id = ?1 AND status = 'sent' AND (?2 IS NULL OR client_id = ?2) GROUP BY currency`
+         WHERE (?1 IS NULL OR branch_id = ?1) AND status = 'sent'
+           AND (?2 IS NULL OR client_id = ?2) GROUP BY currency`
       )
       .bind(branchId, clientId),
     db
       .prepare(
         `SELECT p.currency, COALESCE(SUM(p.amount_cents), 0) AS cents
          FROM payments p JOIN invoices i ON i.id = p.invoice_id
-         WHERE i.branch_id = ?1 AND p.undone_at IS NULL
+         WHERE (?1 IS NULL OR i.branch_id = ?1) AND p.undone_at IS NULL
            AND strftime('%Y', p.created_at) = substr(?2, 1, 4)
            AND (?3 IS NULL OR i.client_id = ?3) GROUP BY p.currency`
       )

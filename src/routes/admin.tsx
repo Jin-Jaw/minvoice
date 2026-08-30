@@ -1130,8 +1130,8 @@ admin.get('/reports', async (c) => {
   const settings = await getSettings(c.env.DB, branchId);
   const clientId = Number(c.req.query('client')) || null;
   const [summary, months, clients] = await Promise.all([
-    reportSummary(c.env.DB, branchId, todayInTz(settings.timezone), clientId),
-    monthlyReport(c.env.DB, branchId, clientId),
+    reportSummary(c.env.DB, null, todayInTz(settings.timezone), clientId),
+    monthlyReport(c.env.DB, null, clientId),
     listClients(c.env.DB, true),
   ]);
   return c.html(

@@ -185,6 +185,70 @@ describe('shared-client branch isolation', () => {
   });
 });
 
+describe('combined company reports', () => {
+  it('includes sent invoices from both issuing companies in the report total', async () => {
+    const clientId = await createClient(DB, {
+      name: 'Shared USD Client',
+      email: null,
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    });
+    const secondBranchId = await createBranch(DB, {
+      name: 'Second Company',
+      business_address: '2 Branch Street',
+      business_email: 'billing@second.test',
+      currency: 'USD',
+      invoice_prefix: 'SECOND-',
+    });
+    const first = await createInvoice(DB, 1, {
+      client_id: clientId,
+      issue_date: '2026-08-29',
+      due_date: null,
+      subject: null,
+      notes: null,
+      currency: 'USD',
+      items: [{ description: 'First company work', quantity: 1, unit_price_cents: 1427000 }],
+    });
+    const second = await createInvoice(DB, secondBranchId, {
+      client_id: clientId,
+      issue_date: '2026-08-29',
+      due_date: null,
+      subject: null,
+      notes: null,
+      currency: 'USD',
+      items: [{ description: 'Second company work', quantity: 1, unit_price_cents: 1225700 }],
+    });
+    await markInvoiceSent(DB, first);
+    await markInvoiceSent(DB, second);
+
+    const summary = await reportSummary(DB, null, '2026-08-30');
+    expect(summary.outstanding_count).toBe(2);
+    expect(summary.by_currency).toContainEqual({
+      currency: 'USD',
+      outstanding_cents: 2652700,
+      received_ytd_cents: 0,
+    });
+    expect(await monthlyReport(DB, null)).toContainEqual({
+      ym: '2026-08',
+      currency: 'USD',
+      invoiced_count: 2,
+      invoiced_cents: 2652700,
+      received_count: 0,
+      received_cents: 0,
+    });
+
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const response = await exports.default.fetch(
+      new Request('https://invoice.test/admin/reports', { headers: { cookie: await loginCookie() } })
+    );
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('$26,527.00');
+    expect(html).toContain('2 open invoices');
+  });
+});
+
 describe('client ordering and deletion', () => {
   it('keeps a custom client order and appends new clients', async () => {
     const first = await createClient(DB, {
