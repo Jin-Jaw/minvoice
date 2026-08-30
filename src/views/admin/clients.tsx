@@ -46,16 +46,17 @@ export function ClientsPage({
 
       {error ? <div class="banner banner-error">{error}</div> : null}
 
-      {clients.length > 0 ? <p class="muted">Use each client’s ⋯ menu to move, edit, or delete it.</p> : null}
+      {clients.length > 0 ? <p class="muted">Drag the grip on the left to reorder clients. Use ⋯ to edit or delete.</p> : null}
 
       {clients.length === 0 ? (
         <div class="empty-state">
           <p>No clients yet.</p>
         </div>
       ) : (
-        <table class="table table--stack">
+        <table class="table table--stack clients-table">
           <thead>
             <tr>
+              <th class="client-drag-heading"><span class="visually-hidden">Order</span></th>
               <th>Name</th>
               <th>Email</th>
               <th>Rate</th>
@@ -63,9 +64,14 @@ export function ClientsPage({
               <th></th>
             </tr>
           </thead>
-          <tbody>
-            {clients.map((client, index) => (
-              <tr>
+          <tbody id="client-order-body">
+            {clients.map((client) => (
+              <tr data-client-id={client.id}>
+                <td class="client-drag-cell">
+                  <button type="button" class="client-drag-handle" aria-label={`Drag to reorder ${client.name}`}>
+                    <Icon name="grip" />
+                  </button>
+                </td>
                 <td data-label="Name">{client.name}</td>
                 <td data-label="Email">{client.email ?? <span class="muted">—</span>}</td>
                 <td data-label="Rate">
@@ -88,24 +94,6 @@ export function ClientsPage({
                       <Icon name="kebab" />
                     </summary>
                     <div class="row-menu-panel">
-                      {index > 0 ? (
-                        <form method="post" action={`/admin/clients/${client.id}/move`}>
-                          <input type="hidden" name="direction" value="up" />
-                          <button type="submit">
-                            <Icon name="arrow-up" />
-                            Move up
-                          </button>
-                        </form>
-                      ) : null}
-                      {index < clients.length - 1 ? (
-                        <form method="post" action={`/admin/clients/${client.id}/move`}>
-                          <input type="hidden" name="direction" value="down" />
-                          <button type="submit">
-                            <Icon name="arrow-down" />
-                            Move down
-                          </button>
-                        </form>
-                      ) : null}
                       <a href={`/admin/clients/${client.id}`}>
                         <Icon name="pencil" />
                         Edit
@@ -128,6 +116,82 @@ export function ClientsPage({
           </tbody>
         </table>
       )}
+
+      <form id="client-order-form" method="post" action="/admin/clients/reorder" hidden>
+        <input type="hidden" id="client-order-input" name="client_ids" value="" />
+      </form>
+
+      <script
+        nonce={nonce}
+        dangerouslySetInnerHTML={{
+          __html: `
+(function () {
+  var body = document.getElementById('client-order-body');
+  var form = document.getElementById('client-order-form');
+  var input = document.getElementById('client-order-input');
+  if (!body || !form || !input) return;
+
+  var activeRow = null;
+  var activeHandle = null;
+  var activePointer = null;
+  var moved = false;
+
+  function finish(save) {
+    if (!activeRow) return;
+    activeRow.classList.remove('is-dragging');
+    body.classList.remove('is-sorting');
+    if (activeHandle && activePointer !== null && activeHandle.hasPointerCapture(activePointer)) {
+      activeHandle.releasePointerCapture(activePointer);
+    }
+    activeRow = null;
+    activeHandle = null;
+    activePointer = null;
+    if (save && moved) {
+      input.value = Array.from(body.querySelectorAll('tr[data-client-id]'))
+        .map(function (row) { return row.getAttribute('data-client-id'); })
+        .join(',');
+      form.requestSubmit();
+    }
+    moved = false;
+  }
+
+  body.addEventListener('pointerdown', function (event) {
+    var handle = event.target.closest('.client-drag-handle');
+    if (!handle) return;
+    var row = handle.closest('tr[data-client-id]');
+    if (!row) return;
+    event.preventDefault();
+    activeRow = row;
+    activeHandle = handle;
+    activePointer = event.pointerId;
+    moved = false;
+    handle.setPointerCapture(event.pointerId);
+    row.classList.add('is-dragging');
+    body.classList.add('is-sorting');
+  });
+
+  body.addEventListener('pointermove', function (event) {
+    if (!activeRow || event.pointerId !== activePointer) return;
+    event.preventDefault();
+    var target = document.elementFromPoint(event.clientX, event.clientY);
+    var targetRow = target && target.closest('tr[data-client-id]');
+    if (!targetRow || targetRow === activeRow || targetRow.parentElement !== body) return;
+    var rect = targetRow.getBoundingClientRect();
+    var after = event.clientY > rect.top + rect.height / 2;
+    body.insertBefore(activeRow, after ? targetRow.nextSibling : targetRow);
+    moved = true;
+  });
+
+  body.addEventListener('pointerup', function (event) {
+    if (event.pointerId === activePointer) finish(true);
+  });
+  body.addEventListener('pointercancel', function (event) {
+    if (event.pointerId === activePointer) finish(false);
+  });
+})();
+`,
+        }}
+      ></script>
 
     </Layout>
   );

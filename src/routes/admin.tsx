@@ -46,7 +46,7 @@ import {
   markInvoiceSent,
   markInvoiceUnsent,
   monthlyReport,
-  moveClient,
+  reorderClients,
   reportSummary,
   suggestedInvoiceNumber,
   recordManualPayment,
@@ -896,6 +896,15 @@ admin.get('/clients/new', async (c) => {
   );
 });
 
+// Registered before /clients/:id so "reorder" is never parsed as a client ID.
+admin.post('/clients/reorder', async (c) => {
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  const orderedIds = (body.client_ids ?? '').split(',').filter(Boolean).map(Number);
+  if (orderedIds.some((id) => !Number.isInteger(id) || id <= 0)) return c.text('Invalid client order.', 400);
+  if (!(await reorderClients(c.env.DB, orderedIds))) return c.text('Client list changed. Refresh and try again.', 409);
+  return c.redirect('/admin/clients');
+});
+
 admin.post('/invoices/:id/source-pdf', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
@@ -948,17 +957,6 @@ admin.post('/clients/:id', async (c) => {
     locale: validLocaleTag(submittedLocale(body)) ? submittedLocale(body)!.trim() : null,
   });
 
-  return c.redirect('/admin/clients');
-});
-
-admin.post('/clients/:id/move', async (c) => {
-  const id = Number(c.req.param('id'));
-  if (!Number.isInteger(id)) return c.notFound();
-  const body = (await c.req.parseBody()) as Record<string, string>;
-  if (body.direction !== 'up' && body.direction !== 'down') return c.text('Invalid direction.', 400);
-  if (!(await moveClient(c.env.DB, id, body.direction))) {
-    if (!(await getClient(c.env.DB, id))) return c.notFound();
-  }
   return c.redirect('/admin/clients');
 });
 

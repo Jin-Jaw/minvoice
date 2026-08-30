@@ -539,6 +539,51 @@ table.table tbody tr[data-href] {
   cursor: pointer;
 }
 
+.client-drag-heading,
+.client-drag-cell {
+  width: 42px;
+  padding-left: 10px !important;
+  padding-right: 0 !important;
+  text-align: center;
+}
+
+.client-drag-handle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--ink-faint);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.client-drag-handle:hover,
+.client-drag-handle:focus-visible {
+  color: var(--ink);
+  background: var(--paper-deep);
+  border-color: var(--line);
+}
+
+.client-drag-handle:active {
+  cursor: grabbing;
+}
+
+.clients-table tbody.is-sorting {
+  user-select: none;
+}
+
+.clients-table tr.is-dragging {
+  background: var(--green-tint);
+  box-shadow: inset 3px 0 0 var(--green);
+  opacity: 0.72;
+}
+
 .text-right,
 table.table th.text-right,
 table.table td.text-right {
@@ -1733,6 +1778,19 @@ a .ref {
   table.table--stack td.row-actions {
     width: auto;
     justify-content: flex-end;
+  }
+
+  table.table--stack.clients-table tbody tr {
+    position: relative;
+    padding-left: 48px;
+  }
+
+  table.table--stack td.client-drag-cell {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 30px;
+    padding: 0 !important;
   }
 
   .stat-grid {

@@ -26,7 +26,7 @@ import {
   markInvoicePaidFromWebhook,
   markInvoiceSent,
   markReminderSent,
-  moveClient,
+  reorderClients,
   monthlyReport,
   reportSummary,
   recordLoginAttempt,
@@ -196,9 +196,9 @@ describe('client ordering and deletion', () => {
     });
 
     expect((await listClients(DB)).map((client) => client.id)).toEqual([first, second, third]);
-    expect(await moveClient(DB, third, 'up')).toBe(true);
-    expect((await listClients(DB)).map((client) => client.id)).toEqual([first, third, second]);
-    expect(await moveClient(DB, first, 'up')).toBe(false);
+    expect(await reorderClients(DB, [third, first, second])).toBe(true);
+    expect((await listClients(DB)).map((client) => client.id)).toEqual([third, first, second]);
+    expect(await reorderClients(DB, [first, second])).toBe(false);
   });
 
   it('deletes unused clients but preserves clients referenced by invoices', async () => {
@@ -225,6 +225,9 @@ describe('client ordering and deletion', () => {
     const clientId = await createClient(DB, {
       name: 'Route Client', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
     });
+    const otherClientId = await createClient(DB, {
+      name: 'Other Client', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
+    });
     await createInvoice(DB, {
       client_id: clientId,
       issue_date: '2026-08-30', due_date: null, subject: null, notes: null,
@@ -235,8 +238,23 @@ describe('client ordering and deletion', () => {
       new Request('https://invoice.test/admin/clients', { headers: { cookie } })
     );
     const html = await page.text();
+    expect(html).toContain('class="client-drag-handle"');
+    expect(html).toContain('/admin/clients/reorder');
+    expect(html).not.toContain('Move up');
+    expect(html).not.toContain('Move down');
     expect(html).toContain(`/admin/clients/${clientId}/delete`);
     expect(html).toContain('Permanently delete Route Client?');
+
+    const reordered = await exports.default.fetch(
+      new Request('https://invoice.test/admin/clients/reorder', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin' },
+        body: new URLSearchParams({ client_ids: `${otherClientId},${clientId}` }),
+        redirect: 'manual',
+      })
+    );
+    expect(reordered.status).toBe(302);
+    expect((await listClients(DB)).map((client) => client.id)).toEqual([otherClientId, clientId]);
 
     const response = await exports.default.fetch(
       new Request(`https://invoice.test/admin/clients/${clientId}/delete`, {

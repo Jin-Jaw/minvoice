@@ -455,31 +455,21 @@ export async function createClient(
   return res.meta.last_row_id;
 }
 
-export async function moveClient(db: D1Database, id: number, direction: 'up' | 'down'): Promise<boolean> {
-  const client = await db
-    .prepare('SELECT id, sort_order FROM clients WHERE id = ?')
-    .bind(id)
-    .first<Pick<Client, 'id' | 'sort_order'>>();
-  if (!client) return false;
+export async function reorderClients(db: D1Database, orderedIds: number[]): Promise<boolean> {
+  const current = (
+    await db.prepare('SELECT id FROM clients ORDER BY sort_order, name COLLATE NOCASE, id').all<{ id: number }>()
+  ).results.map((row) => row.id);
+  if (orderedIds.length !== current.length || new Set(orderedIds).size !== current.length) return false;
+  if (current.length === 0) return true;
 
-  const comparison = direction === 'up' ? '<' : '>';
-  const order = direction === 'up' ? 'DESC' : 'ASC';
-  const neighbor = await db
-    .prepare(
-      `SELECT id, sort_order FROM clients
-       WHERE sort_order ${comparison} ?
-          OR (sort_order = ? AND id ${comparison} ?)
-       ORDER BY sort_order ${order}, id ${order}
-       LIMIT 1`
+  const expected = new Set(current);
+  if (orderedIds.some((id) => !expected.has(id))) return false;
+
+  await db.batch(
+    orderedIds.map((id, position) =>
+      db.prepare('UPDATE clients SET sort_order = ? WHERE id = ?').bind(position, id)
     )
-    .bind(client.sort_order, client.sort_order, client.id)
-    .first<Pick<Client, 'id' | 'sort_order'>>();
-  if (!neighbor) return false;
-
-  await db.batch([
-    db.prepare('UPDATE clients SET sort_order = ? WHERE id = ?').bind(neighbor.sort_order, client.id),
-    db.prepare('UPDATE clients SET sort_order = ? WHERE id = ?').bind(client.sort_order, neighbor.id),
-  ]);
+  );
   return true;
 }
 

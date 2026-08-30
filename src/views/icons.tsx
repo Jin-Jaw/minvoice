@@ -91,16 +91,14 @@ const PATHS = {
       <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
     </>
   ),
-  'arrow-up': (
+  grip: (
     <>
-      <path d="m18 15-6-6-6 6" />
-      <path d="M12 9v12" />
-    </>
-  ),
-  'arrow-down': (
-    <>
-      <path d="m6 9 6 6 6-6" />
-      <path d="M12 3v12" />
+      <circle cx="9" cy="5" r="1" />
+      <circle cx="15" cy="5" r="1" />
+      <circle cx="9" cy="12" r="1" />
+      <circle cx="15" cy="12" r="1" />
+      <circle cx="9" cy="19" r="1" />
+      <circle cx="15" cy="19" r="1" />
     </>
   ),
 } as const;
