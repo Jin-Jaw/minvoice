@@ -3,7 +3,8 @@
 This is Jin&Jaw's private, single-business fork of
 [Minvoice](https://github.com/ddyy/minvoice). It runs as a separate Cloudflare
 Worker at `https://invoices.jin-jaw.co.uk` and stores clients, invoices,
-payments, events, and configuration in the `jinjaw-invoices` D1 database.
+payments, expenses, private expense evidence, events, and configuration in the
+`jinjaw-invoices` D1 database.
 
 ## First production deployment
 
@@ -32,6 +33,18 @@ appropriate. This preserves the invoice, client, status, payment, and activity
 timeline in the same ledger as new invoices. Keep original source PDFs in the
 company's document archive; generated invoice PDFs can always be downloaded
 from the invoice detail page.
+
+## Expenses and evidence
+
+Record paid supplier bills, employee or contractor costs under **Expenses**.
+Choose the paying company and currency; optionally assign a related client so
+the cost appears in that client's filtered report. Voiding preserves the row
+and evidence for audit history while removing the amount from report totals.
+
+Evidence files are private admin downloads stored in D1 and included in the
+normal SQL backup. Accepted files are genuine PDF, JPG, PNG, or WebP bytes, up
+to 1.5 MB each. Upload additional pages one at a time from the expense detail
+page. Never commit exported evidence or database backups.
 
 ## Backups and recovery
 

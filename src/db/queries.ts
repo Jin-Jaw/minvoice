@@ -119,6 +119,55 @@ export type Payment = {
   stripe_payment_intent: string | null; // pi_... for dashboard deep links
 };
 
+export type Expense = {
+  id: number;
+  branch_id: number;
+  client_id: number | null;
+  expense_date: string;
+  payee: string;
+  category: string;
+  description: string | null;
+  reference: string | null;
+  amount_cents: number;
+  tax_cents: number;
+  currency: string;
+  voided_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExpenseListRow = Expense & {
+  branch_name: string;
+  client_name: string | null;
+  attachment_count: number;
+};
+
+export type ExpenseDraft = Pick<
+  Expense,
+  | 'branch_id'
+  | 'client_id'
+  | 'expense_date'
+  | 'payee'
+  | 'category'
+  | 'description'
+  | 'reference'
+  | 'amount_cents'
+  | 'tax_cents'
+  | 'currency'
+>;
+
+export type ExpenseAttachmentMeta = {
+  id: number;
+  expense_id: number;
+  mime: 'application/pdf' | 'image/png' | 'image/jpeg' | 'image/webp';
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  uploaded_at: string;
+};
+
+export type ExpenseAttachment = ExpenseAttachmentMeta & { bytes: Uint8Array };
+
 export type InvoiceWithClient = Invoice & {
   client_name: string;
   client_email: string | null;
@@ -982,6 +1031,164 @@ export async function recordManualPayment(
   ]);
 }
 
+// ---------- Expenses ----------
+
+/** Paid business costs, newest effective date first. NULL scopes mean all
+ * companies/clients; voided rows stay visible as audit history. */
+export async function listExpenses(
+  db: D1Database,
+  branchId: number | null = null,
+  clientId: number | null = null
+): Promise<ExpenseListRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT e.*, b.name AS branch_name, c.name AS client_name,
+                (SELECT COUNT(*) FROM expense_attachments a WHERE a.expense_id = e.id) AS attachment_count
+         FROM expenses e
+         JOIN branches b ON b.id = e.branch_id
+         LEFT JOIN clients c ON c.id = e.client_id
+         WHERE (?1 IS NULL OR e.branch_id = ?1) AND (?2 IS NULL OR e.client_id = ?2)
+         ORDER BY e.expense_date DESC, e.id DESC`
+      )
+      .bind(branchId, clientId)
+      .all<ExpenseListRow>()
+  ).results;
+}
+
+export async function getExpense(db: D1Database, id: number): Promise<ExpenseListRow | null> {
+  return db
+    .prepare(
+      `SELECT e.*, b.name AS branch_name, c.name AS client_name,
+              (SELECT COUNT(*) FROM expense_attachments a WHERE a.expense_id = e.id) AS attachment_count
+       FROM expenses e
+       JOIN branches b ON b.id = e.branch_id
+       LEFT JOIN clients c ON c.id = e.client_id
+       WHERE e.id = ?`
+    )
+    .bind(id)
+    .first<ExpenseListRow>();
+}
+
+export async function createExpense(db: D1Database, expense: ExpenseDraft): Promise<number> {
+  const result = await db
+    .prepare(
+      `INSERT INTO expenses
+       (branch_id, client_id, expense_date, payee, category, description, reference,
+        amount_cents, tax_cents, currency)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      expense.branch_id,
+      expense.client_id,
+      expense.expense_date,
+      expense.payee,
+      expense.category,
+      expense.description,
+      expense.reference,
+      expense.amount_cents,
+      expense.tax_cents,
+      expense.currency
+    )
+    .run();
+  return result.meta.last_row_id;
+}
+
+export async function updateExpense(db: D1Database, id: number, expense: ExpenseDraft): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE expenses SET branch_id = ?, client_id = ?, expense_date = ?, payee = ?, category = ?,
+       description = ?, reference = ?, amount_cents = ?, tax_cents = ?, currency = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .bind(
+      expense.branch_id,
+      expense.client_id,
+      expense.expense_date,
+      expense.payee,
+      expense.category,
+      expense.description,
+      expense.reference,
+      expense.amount_cents,
+      expense.tax_cents,
+      expense.currency,
+      id
+    )
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/** Soft-void keeps the record and evidence but removes it from totals. */
+export async function setExpenseVoided(db: D1Database, id: number, voided: boolean): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE expenses SET voided_at = CASE WHEN ? THEN datetime('now') ELSE NULL END,
+       updated_at = datetime('now') WHERE id = ?`
+    )
+    .bind(voided ? 1 : 0, id)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function listExpenseAttachments(db: D1Database, expenseId: number): Promise<ExpenseAttachmentMeta[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT id, expense_id, mime, filename, size_bytes, sha256, uploaded_at
+         FROM expense_attachments WHERE expense_id = ? ORDER BY id`
+      )
+      .bind(expenseId)
+      .all<ExpenseAttachmentMeta>()
+  ).results;
+}
+
+export async function getExpenseAttachment(
+  db: D1Database,
+  expenseId: number,
+  attachmentId: number
+): Promise<ExpenseAttachment | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, expense_id, bytes, mime, filename, size_bytes, sha256, uploaded_at
+       FROM expense_attachments WHERE id = ? AND expense_id = ?`
+    )
+    .bind(attachmentId, expenseId)
+    .first<Omit<ExpenseAttachment, 'bytes'> & { bytes: ArrayBuffer | number[] }>();
+  if (!row) return null;
+  return {
+    ...row,
+    bytes: row.bytes instanceof ArrayBuffer ? new Uint8Array(row.bytes) : Uint8Array.from(row.bytes),
+  };
+}
+
+/** Returns false when the same bytes are already attached to this expense. */
+export async function addExpenseAttachment(
+  db: D1Database,
+  expenseId: number,
+  file: Pick<ExpenseAttachment, 'bytes' | 'mime' | 'filename' | 'size_bytes' | 'sha256'>
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT OR IGNORE INTO expense_attachments
+       (expense_id, bytes, mime, filename, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(expenseId, file.bytes, file.mime, file.filename, file.size_bytes, file.sha256)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function deleteExpenseAttachment(
+  db: D1Database,
+  expenseId: number,
+  attachmentId: number
+): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM expense_attachments WHERE id = ? AND expense_id = ?')
+    .bind(attachmentId, expenseId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
 // ---------- Reports ----------
 
 export type MonthlyReportRow = {
@@ -991,12 +1198,15 @@ export type MonthlyReportRow = {
   invoiced_cents: number;
   received_count: number;
   received_cents: number;
+  expense_count: number;
+  expense_cents: number;
 };
 
 export type CurrencySums = {
   currency: string;
   outstanding_cents: number; // sent, not yet paid
   received_ytd_cents: number;
+  expense_ytd_cents: number;
 };
 
 export type ReportSummary = {
@@ -1019,7 +1229,7 @@ export async function monthlyReport(
   clientId: number | null = null
 ): Promise<MonthlyReportRow[]> {
   // ?1 = optional branch scope (NULL means every company), ?2 = optional shared-client filter
-  const [inv, pay] = await db.batch<{ ym: string; currency: string; n: number; total: number }>([
+  const [inv, pay, expense] = await db.batch<{ ym: string; currency: string; n: number; total: number }>([
     db.prepare(
       `SELECT strftime('%Y-%m', issue_date) AS ym, currency, COUNT(*) AS n, COALESCE(SUM(total_cents), 0) AS total
        FROM invoices WHERE (?1 IS NULL OR branch_id = ?1) AND status IN ('sent', 'paid')
@@ -1031,6 +1241,14 @@ export async function monthlyReport(
        WHERE (?1 IS NULL OR i.branch_id = ?1) AND p.undone_at IS NULL
          AND (?2 IS NULL OR i.client_id = ?2) GROUP BY ym, p.currency`
     ).bind(branchId, clientId),
+    db.prepare(
+      `SELECT strftime('%Y-%m', expense_date) AS ym, currency, COUNT(*) AS n,
+              COALESCE(SUM(amount_cents), 0) AS total
+       FROM expenses
+       WHERE (?1 IS NULL OR branch_id = ?1) AND voided_at IS NULL
+         AND (?2 IS NULL OR client_id = ?2)
+       GROUP BY ym, currency`
+    ).bind(branchId, clientId),
   ]);
 
   const months = new Map<string, MonthlyReportRow>();
@@ -1038,7 +1256,16 @@ export async function monthlyReport(
     const key = `${ym}|${currency}`;
     let r = months.get(key);
     if (!r) {
-      r = { ym, currency, invoiced_count: 0, invoiced_cents: 0, received_count: 0, received_cents: 0 };
+      r = {
+        ym,
+        currency,
+        invoiced_count: 0,
+        invoiced_cents: 0,
+        received_count: 0,
+        received_cents: 0,
+        expense_count: 0,
+        expense_cents: 0,
+      };
       months.set(key, r);
     }
     return r;
@@ -1052,6 +1279,11 @@ export async function monthlyReport(
     const m = row(r.ym, r.currency);
     m.received_count = r.n;
     m.received_cents = r.total;
+  }
+  for (const r of expense.results) {
+    const m = row(r.ym, r.currency);
+    m.expense_count = r.n;
+    m.expense_cents = r.total;
   }
   return [...months.values()].sort((a, b) =>
     a.ym === b.ym ? (a.currency < b.currency ? -1 : 1) : a.ym < b.ym ? 1 : -1
@@ -1114,7 +1346,7 @@ export async function reportSummary(
   const branchId = hasExplicitBranch ? branchOrToday : 1;
   const today = hasExplicitBranch ? (todayOrClient as string) : branchOrToday;
   const clientId = hasExplicitBranch ? explicitClientId : ((todayOrClient as number | null) ?? null);
-  const [counts, outstanding, received] = await db.batch([
+  const [counts, outstanding, received, expenses] = await db.batch([
     db
       .prepare(
         `SELECT
@@ -1141,6 +1373,15 @@ export async function reportSummary(
            AND (?3 IS NULL OR i.client_id = ?3) GROUP BY p.currency`
       )
       .bind(branchId, today, clientId),
+    db
+      .prepare(
+        `SELECT currency, COALESCE(SUM(amount_cents), 0) AS cents
+         FROM expenses
+         WHERE (?1 IS NULL OR branch_id = ?1) AND voided_at IS NULL
+           AND strftime('%Y', expense_date) = substr(?2, 1, 4)
+           AND (?3 IS NULL OR client_id = ?3) GROUP BY currency`
+      )
+      .bind(branchId, today, clientId),
   ]);
 
   const row = counts.results[0] as { outstanding_count: number; overdue_count: number } | undefined;
@@ -1150,7 +1391,7 @@ export async function reportSummary(
   const sums = (currency: string): CurrencySums => {
     let s = byCurrency.get(currency);
     if (!s) {
-      s = { currency, outstanding_cents: 0, received_ytd_cents: 0 };
+      s = { currency, outstanding_cents: 0, received_ytd_cents: 0, expense_ytd_cents: 0 };
       byCurrency.set(currency, s);
     }
     return s;
@@ -1160,6 +1401,9 @@ export async function reportSummary(
   }
   for (const r of received.results as { currency: string; cents: number }[]) {
     sums(r.currency).received_ytd_cents = r.cents;
+  }
+  for (const r of expenses.results as { currency: string; cents: number }[]) {
+    sums(r.currency).expense_ytd_cents = r.cents;
   }
   return {
     outstanding_count: row.outstanding_count,

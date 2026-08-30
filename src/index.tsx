@@ -96,13 +96,19 @@ app.use('*', async (c, next) => {
 
 app.get('/', (c) => c.redirect('/admin'));
 
-// Cap admin request bodies BEFORE any handler buffers them: the largest
-// legitimate admin body is the 500 KB logo upload plus multipart overhead.
-// Without this, parseBody() would buffer arbitrarily large uploads into
-// Worker memory before the size check runs.
-app.use(
-  '/admin/*',
-  bodyLimit({ maxSize: 1024 * 1024, onError: (c) => c.text('Request body too large (1 MB limit).', 413) })
+// Cap admin request bodies BEFORE any handler buffers them. Expense evidence
+// gets a narrowly scoped 2 MB envelope (the verified file itself is capped at
+// 1.5 MB for D1); every other admin action keeps the tighter 1 MB limit.
+const standardAdminBodyLimit = bodyLimit({
+  maxSize: 1024 * 1024,
+  onError: (c) => c.text('Request body too large (1 MB limit).', 413),
+});
+const expenseEvidenceBodyLimit = bodyLimit({
+  maxSize: 2 * 1024 * 1024,
+  onError: (c) => c.text('Request body too large (2 MB limit).', 413),
+});
+app.use('/admin/*', (c, next) =>
+  (c.req.path.startsWith('/admin/expenses') ? expenseEvidenceBodyLimit : standardAdminBodyLimit)(c, next)
 );
 
 // CSRF: reject cross-site state-changing requests to any admin route (incl.

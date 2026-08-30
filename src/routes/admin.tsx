@@ -16,18 +16,24 @@ import { sealIfKeyed, unbox, validMasterKey } from '../lib/secretbox';
 import { isLocalRequest } from '../lib/admin-auth';
 import { parseSchedule } from '../lib/reminders';
 import { invoicePdfFilename } from '../lib/invoice-filename';
+import { isIsoDate, prepareExpenseAttachment } from '../lib/expenses';
 import {
+  addExpenseAttachment,
   buildTimeline,
   completeSetup,
   createBranch,
   createClient,
+  createExpense,
   deleteClient,
+  deleteExpenseAttachment,
   deleteLogo,
   getLogo,
   createInvoice,
   deleteInvoice,
   deleteViewEvent,
   getClient,
+  getExpense,
+  getExpenseAttachment,
   getInvoiceById,
   getInvoiceEvents,
   getInvoiceItems,
@@ -40,6 +46,8 @@ import {
   listAllInvoices,
   listBranches,
   listClients,
+  listExpenseAttachments,
+  listExpenses,
   listInvoices,
   getInvoiceSourcePdfMeta,
   markInvoiceSourcePdfStale,
@@ -55,13 +63,17 @@ import {
   setInvoiceStatus,
   setLogo,
   setInvoiceSourcePdf,
+  setExpenseVoided,
   updateClient,
+  updateExpense,
   updateInvoice,
   setNextInvoiceNumber,
   setResendApiKey,
   updateEmailSettings,
   updateSettings,
   type ItemDraft,
+  type ExpenseDraft,
+  type ExpenseListRow,
 } from '../db/queries';
 import { DashboardPage, INVOICE_FILTERS, type InvoiceFilter } from '../views/admin/dashboard';
 import { generateInvoicePdf } from '../services/pdf';
@@ -74,6 +86,7 @@ import { ReportsPage } from '../views/admin/reports';
 import { SettingsPage } from '../views/admin/settings';
 import { SetupPage } from '../views/admin/setup';
 import { BranchesPage } from '../views/admin/branches';
+import { ExpenseFormPage, ExpensesPage, type ExpenseFormValues } from '../views/admin/expenses';
 
 export const admin = new Hono<AppEnv>();
 
@@ -182,6 +195,78 @@ function submittedLocale(body: Record<string, string>): string | undefined {
 function arr(v: string | string[] | undefined): string[] {
   if (v === undefined) return [];
   return Array.isArray(v) ? v : [v];
+}
+
+type ExpenseBody = Record<string, string | File>;
+
+function expenseFormValues(body: ExpenseBody, fallback: { branchId: number; date: string; currency: string }): ExpenseFormValues {
+  const str = (name: string) => typeof body[name] === 'string' ? String(body[name]) : '';
+  return {
+    branch_id: str('branch_id') || String(fallback.branchId),
+    client_id: str('client_id'),
+    expense_date: str('expense_date') || fallback.date,
+    payee: str('payee'),
+    category: str('category') || 'Software & services',
+    description: str('description'),
+    reference: str('reference'),
+    amount: str('amount'),
+    tax_amount: str('tax_amount'),
+    currency: str('currency').toUpperCase() || fallback.currency,
+  };
+}
+
+function expenseValuesFromRow(expense: ExpenseListRow): ExpenseFormValues {
+  return {
+    branch_id: String(expense.branch_id),
+    client_id: expense.client_id ? String(expense.client_id) : '',
+    expense_date: expense.expense_date,
+    payee: expense.payee,
+    category: expense.category,
+    description: expense.description ?? '',
+    reference: expense.reference ?? '',
+    amount: (expense.amount_cents / 100).toFixed(2),
+    tax_amount: expense.tax_cents ? (expense.tax_cents / 100).toFixed(2) : '',
+    currency: expense.currency,
+  };
+}
+
+function parseExpenseDraft(
+  values: ExpenseFormValues,
+  validBranchIds: Set<number>,
+  validClientIds: Set<number>
+): { draft?: ExpenseDraft; error?: string } {
+  const branchId = Number(values.branch_id);
+  const clientId = values.client_id ? Number(values.client_id) : null;
+  const amount = parseAmountToCents(values.amount);
+  const tax = values.tax_amount.trim() ? parseAmountToCents(values.tax_amount) : 0;
+  const payee = values.payee.trim();
+  const category = values.category.trim();
+  const description = values.description.trim();
+  const reference = values.reference.trim();
+  if (!validBranchIds.has(branchId)) return { error: 'Choose a valid company.' };
+  if (clientId !== null && !validClientIds.has(clientId)) return { error: 'Choose a valid related client.' };
+  if (!isIsoDate(values.expense_date)) return { error: 'Choose a valid payment date.' };
+  if (!payee || payee.length > 160) return { error: 'Enter who was paid (maximum 160 characters).' };
+  if (!category || category.length > 80) return { error: 'Enter an expense category (maximum 80 characters).' };
+  if (amount === null || amount <= 0) return { error: 'Enter a total paid greater than zero.' };
+  if (tax === null || tax < 0 || tax > amount) return { error: 'Tax included must be between zero and the total paid.' };
+  if (!isSupportedCurrency(values.currency)) return { error: 'Choose a supported three-letter currency.' };
+  if (description.length > 2000) return { error: 'Description must be 2,000 characters or fewer.' };
+  if (reference.length > 120) return { error: 'Reference must be 120 characters or fewer.' };
+  return {
+    draft: {
+      branch_id: branchId,
+      client_id: clientId,
+      expense_date: values.expense_date,
+      payee,
+      category,
+      description: description || null,
+      reference: reference || null,
+      amount_cents: amount,
+      tax_cents: tax,
+      currency: values.currency,
+    },
+  };
 }
 
 /**
@@ -1016,6 +1101,193 @@ admin.post('/branches', async (c) => {
   return c.redirect(`/admin/settings?branch=${branchId}`);
 });
 
+// ---------- Expenses ----------
+
+admin.get('/expenses', async (c) => {
+  const branches = await listBranches(c.env.DB);
+  const requestedBranch = Number(c.req.query('company'));
+  const branchId = branches.some((branch) => branch.id === requestedBranch) ? requestedBranch : null;
+  return c.html(
+    <ExpensesPage
+      expenses={await listExpenses(c.env.DB, branchId)}
+      branches={branches}
+      branchId={branchId}
+      nonce={c.get('secureHeadersNonce')}
+    />
+  );
+});
+
+// Registered before /expenses/:id so "new" is never parsed as an ID.
+admin.get('/expenses/new', async (c) => {
+  const branchId = c.get('branchId');
+  const [branches, clients, settings] = await Promise.all([
+    listBranches(c.env.DB),
+    listClients(c.env.DB),
+    getSettings(c.env.DB, branchId),
+  ]);
+  return c.html(
+    <ExpenseFormPage
+      branches={branches}
+      clients={clients}
+      values={expenseFormValues({}, {
+        branchId,
+        date: todayInTz(settings.timezone),
+        currency: settings.currency,
+      })}
+      nonce={c.get('secureHeadersNonce')}
+    />
+  );
+});
+
+admin.post('/expenses', async (c) => {
+  const raw = (await c.req.parseBody()) as ExpenseBody;
+  const branchId = c.get('branchId');
+  const [branches, clients, settings] = await Promise.all([
+    listBranches(c.env.DB),
+    listClients(c.env.DB),
+    getSettings(c.env.DB, branchId),
+  ]);
+  const values = expenseFormValues(raw, {
+    branchId,
+    date: todayInTz(settings.timezone),
+    currency: settings.currency,
+  });
+  const parsed = parseExpenseDraft(
+    values,
+    new Set(branches.map((branch) => branch.id)),
+    new Set(clients.map((client) => client.id))
+  );
+  let evidence: Awaited<ReturnType<typeof prepareExpenseAttachment>>['file'];
+  if (raw.evidence instanceof File && raw.evidence.size > 0) {
+    const prepared = await prepareExpenseAttachment(raw.evidence);
+    if (prepared.error) parsed.error = prepared.error;
+    evidence = prepared.file;
+  }
+  if (!parsed.draft || parsed.error) {
+    return c.html(
+      <ExpenseFormPage
+        branches={branches}
+        clients={clients}
+        values={values}
+        error={parsed.error ?? 'Check the expense details and try again.'}
+        nonce={c.get('secureHeadersNonce')}
+      />,
+      400
+    );
+  }
+  const id = await createExpense(c.env.DB, parsed.draft);
+  if (evidence) await addExpenseAttachment(c.env.DB, id, evidence);
+  return c.redirect(`/admin/expenses/${id}?saved=1`);
+});
+
+admin.get('/expenses/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return c.notFound();
+  const expense = await getExpense(c.env.DB, id);
+  if (!expense) return c.notFound();
+  const [attachments, branches, clients] = await Promise.all([
+    listExpenseAttachments(c.env.DB, id),
+    listBranches(c.env.DB),
+    listClients(c.env.DB, true),
+  ]);
+  return c.html(
+    <ExpenseFormPage
+      expense={expense}
+      attachments={attachments}
+      branches={branches}
+      clients={clients}
+      values={expenseValuesFromRow(expense)}
+      saved={c.req.query('saved') === '1'}
+      duplicate={c.req.query('duplicate') === '1'}
+      nonce={c.get('secureHeadersNonce')}
+    />
+  );
+});
+
+admin.post('/expenses/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return c.notFound();
+  const expense = await getExpense(c.env.DB, id);
+  if (!expense) return c.notFound();
+  const raw = (await c.req.parseBody()) as ExpenseBody;
+  const [branches, clients] = await Promise.all([listBranches(c.env.DB), listClients(c.env.DB, true)]);
+  const values = expenseFormValues(raw, {
+    branchId: expense.branch_id,
+    date: expense.expense_date,
+    currency: expense.currency,
+  });
+  const parsed = parseExpenseDraft(
+    values,
+    new Set(branches.map((branch) => branch.id)),
+    new Set(clients.map((client) => client.id))
+  );
+  if (!parsed.draft || parsed.error) {
+    return c.html(
+      <ExpenseFormPage
+        expense={expense}
+        attachments={await listExpenseAttachments(c.env.DB, id)}
+        branches={branches}
+        clients={clients}
+        values={values}
+        error={parsed.error ?? 'Check the expense details and try again.'}
+        nonce={c.get('secureHeadersNonce')}
+      />,
+      400
+    );
+  }
+  await updateExpense(c.env.DB, id, parsed.draft);
+  return c.redirect(`/admin/expenses/${id}?saved=1`);
+});
+
+admin.post('/expenses/:id/void', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0 || !(await getExpense(c.env.DB, id))) return c.notFound();
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  await setExpenseVoided(c.env.DB, id, body.action !== 'restore');
+  return c.redirect('/admin/expenses');
+});
+
+admin.post('/expenses/:id/attachments', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0 || !(await getExpense(c.env.DB, id))) return c.notFound();
+  const body = await c.req.parseBody();
+  const evidence = body.evidence;
+  if (!(evidence instanceof File)) return c.text('Choose an evidence file.', 400);
+  const prepared = await prepareExpenseAttachment(evidence);
+  if (!prepared.file) return c.text(prepared.error ?? 'Invalid evidence file.', 400);
+  const added = await addExpenseAttachment(c.env.DB, id, prepared.file);
+  return c.redirect(`/admin/expenses/${id}${added ? '?saved=1' : '?duplicate=1'}#evidence`);
+});
+
+admin.get('/expenses/:id/attachments/:attachmentId', async (c) => {
+  const id = Number(c.req.param('id'));
+  const attachmentId = Number(c.req.param('attachmentId'));
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) return c.notFound();
+  const attachment = await getExpenseAttachment(c.env.DB, id, attachmentId);
+  if (!attachment) return c.notFound();
+  const asciiName = attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  const encodedName = encodeURIComponent(attachment.filename).replace(/'/g, '%27');
+  return new Response(attachment.bytes as unknown as BodyInit, {
+    headers: {
+      'Content-Type': attachment.mime,
+      'Content-Length': String(attachment.size_bytes),
+      'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+});
+
+admin.post('/expenses/:id/attachments/:attachmentId/delete', async (c) => {
+  const id = Number(c.req.param('id'));
+  const attachmentId = Number(c.req.param('attachmentId'));
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId) || !(await getExpense(c.env.DB, id))) {
+    return c.notFound();
+  }
+  if (!(await deleteExpenseAttachment(c.env.DB, id, attachmentId))) return c.notFound();
+  return c.redirect(`/admin/expenses/${id}?saved=1#evidence`);
+});
+
 // ---------- CSV export ----------
 
 function csvField(v: unknown): string {
@@ -1088,6 +1360,29 @@ admin.get('/export/payments.csv', async (c) => {
     ]),
   ];
   return csvResponse(rows, 'payments.csv');
+});
+
+admin.get('/export/expenses.csv', async (c) => {
+  const expenses = await listExpenses(c.env.DB, null);
+  const rows: unknown[][] = [
+    ['date', 'company', 'paid_to', 'category', 'description', 'reference', 'client', 'amount', 'tax_included', 'currency', 'status', 'evidence_files', 'recorded_at'],
+    ...expenses.map((expense) => [
+      expense.expense_date,
+      expense.branch_name,
+      expense.payee,
+      expense.category,
+      expense.description,
+      expense.reference,
+      expense.client_name,
+      (expense.amount_cents / 100).toFixed(2),
+      (expense.tax_cents / 100).toFixed(2),
+      expense.currency,
+      expense.voided_at ? 'void' : 'recorded',
+      expense.attachment_count,
+      expense.created_at,
+    ]),
+  ];
+  return csvResponse(rows, 'expenses.csv');
 });
 
 // Remove a recorded pay-link view (own views, email scanners) from History.

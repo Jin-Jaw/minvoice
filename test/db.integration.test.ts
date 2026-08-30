@@ -12,8 +12,12 @@ import {
   clearLoginAttempts,
   createBranch,
   createClient,
+  createExpense,
   createInvoice,
   deleteClient,
+  addExpenseAttachment,
+  getExpense,
+  getExpenseAttachment,
   enqueueReminder,
   getClient,
   getInvoice,
@@ -21,6 +25,8 @@ import {
   getPayments,
   getSettings,
   listClients,
+  listExpenseAttachments,
+  listExpenses,
   listInvoices,
   listDueOutbox,
   markInvoicePaidFromWebhook,
@@ -32,6 +38,8 @@ import {
   recordLoginAttempt,
   markInvoiceSourcePdfStale,
   setInvoiceSourcePdf,
+  setExpenseVoided,
+  updateExpense,
   updateInvoice,
   updateClient,
   type WebhookPayment,
@@ -106,6 +114,8 @@ beforeEach(async () => {
     DB.prepare('DELETE FROM email_outbox'),
     DB.prepare('DELETE FROM login_attempts'),
     DB.prepare('DELETE FROM webhook_events'),
+    DB.prepare('DELETE FROM expense_attachments'),
+    DB.prepare('DELETE FROM expenses'),
     DB.prepare('DELETE FROM payments'),
     DB.prepare('DELETE FROM invoice_events'),
     DB.prepare('DELETE FROM invoice_items'),
@@ -228,6 +238,7 @@ describe('combined company reports', () => {
       currency: 'USD',
       outstanding_cents: 2652700,
       received_ytd_cents: 0,
+      expense_ytd_cents: 0,
     });
     expect(await monthlyReport(DB, null)).toContainEqual({
       ym: '2026-08',
@@ -236,6 +247,8 @@ describe('combined company reports', () => {
       invoiced_cents: 2652700,
       received_count: 0,
       received_cents: 0,
+      expense_count: 0,
+      expense_cents: 0,
     });
 
     await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
@@ -246,6 +259,139 @@ describe('combined company reports', () => {
     const html = await response.text();
     expect(html).toContain('$26,527.00');
     expect(html).toContain('2 open invoices');
+  });
+});
+
+describe('expense ledger and evidence', () => {
+  const draftExpense = (over: Partial<Parameters<typeof createExpense>[1]> = {}): Parameters<typeof createExpense>[1] => ({
+    branch_id: 1,
+    client_id: null,
+    expense_date: '2026-08-15',
+    payee: 'Example Supplier',
+    category: 'Software & services',
+    description: 'Annual subscription',
+    reference: 'SUP-42',
+    amount_cents: 25000,
+    tax_cents: 4000,
+    currency: 'GBP',
+    ...over,
+  });
+
+  it('reports active expenses per company, client, month, and currency without mixing currencies', async () => {
+    const clientId = await createClient(DB, {
+      name: 'Expense Client', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
+    });
+    const secondBranchId = await createBranch(DB, {
+      name: 'Arabia', business_address: 'Riyadh', business_email: null, currency: 'USD', invoice_prefix: 'AR-',
+    });
+    const gbpId = await createExpense(DB, draftExpense({ client_id: clientId }));
+    await createExpense(DB, draftExpense({
+      branch_id: secondBranchId,
+      expense_date: '2026-08-20',
+      payee: 'USD Supplier',
+      amount_cents: 10000,
+      tax_cents: 0,
+      currency: 'USD',
+    }));
+
+    expect(await reportSummary(DB, null, '2026-08-30')).toMatchObject({
+      outstanding_count: 0,
+      by_currency: [
+        { currency: 'GBP', expense_ytd_cents: 25000 },
+        { currency: 'USD', expense_ytd_cents: 10000 },
+      ],
+    });
+    expect(await monthlyReport(DB, null)).toEqual([
+      {
+        ym: '2026-08', currency: 'GBP', invoiced_count: 0, invoiced_cents: 0,
+        received_count: 0, received_cents: 0, expense_count: 1, expense_cents: 25000,
+      },
+      {
+        ym: '2026-08', currency: 'USD', invoiced_count: 0, invoiced_cents: 0,
+        received_count: 0, received_cents: 0, expense_count: 1, expense_cents: 10000,
+      },
+    ]);
+    expect(await monthlyReport(DB, null, clientId)).toEqual([
+      {
+        ym: '2026-08', currency: 'GBP', invoiced_count: 0, invoiced_cents: 0,
+        received_count: 0, received_cents: 0, expense_count: 1, expense_cents: 25000,
+      },
+    ]);
+
+    await setExpenseVoided(DB, gbpId, true);
+    expect((await getExpense(DB, gbpId))?.voided_at).not.toBeNull();
+    expect(await monthlyReport(DB, null, clientId)).toEqual([]);
+    expect(await listExpenses(DB)).toHaveLength(2); // audit row remains visible
+
+    await setExpenseVoided(DB, gbpId, false);
+    await updateExpense(DB, gbpId, draftExpense({ payee: 'Corrected Supplier', amount_cents: 26000 }));
+    expect(await getExpense(DB, gbpId)).toMatchObject({ payee: 'Corrected Supplier', amount_cents: 26000, voided_at: null });
+  });
+
+  it('stores multiple evidence files privately and scopes downloads to the expense', async () => {
+    const expenseId = await createExpense(DB, draftExpense());
+    const otherExpenseId = await createExpense(DB, draftExpense({ payee: 'Other Supplier' }));
+    const bytes = new TextEncoder().encode('%PDF-1.7\nprivate evidence');
+    expect(await addExpenseAttachment(DB, expenseId, {
+      bytes,
+      mime: 'application/pdf',
+      filename: 'supplier-invoice.pdf',
+      size_bytes: bytes.byteLength,
+      sha256: 'a'.repeat(64),
+    })).toBe(true);
+    expect(await addExpenseAttachment(DB, expenseId, {
+      bytes,
+      mime: 'application/pdf',
+      filename: 'duplicate.pdf',
+      size_bytes: bytes.byteLength,
+      sha256: 'a'.repeat(64),
+    })).toBe(false);
+    const [meta] = await listExpenseAttachments(DB, expenseId);
+    expect((await getExpenseAttachment(DB, expenseId, meta.id))?.bytes).toEqual(bytes);
+    expect(await getExpenseAttachment(DB, otherExpenseId, meta.id)).toBeNull();
+
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const response = await exports.default.fetch(
+      new Request(`https://invoice.test/admin/expenses/${expenseId}/attachments/${meta.id}`, {
+        headers: { cookie: await loginCookie() },
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-disposition')).toContain('attachment;');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+  });
+
+  it('rejects a spoofed image upload and accepts a genuine PDF through the admin form', async () => {
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const cookie = await loginCookie();
+    const baseFields = {
+      branch_id: '1',
+      expense_date: '2026-08-22',
+      payee: 'Uploaded Supplier',
+      category: 'Professional fees',
+      amount: '123.45',
+      tax_amount: '0',
+      currency: 'GBP',
+    };
+    const requestWith = (file: File) => {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(baseFields)) form.set(key, value);
+      form.set('evidence', file);
+      return exports.default.fetch(new Request('https://invoice.test/admin/expenses', {
+        method: 'POST', headers: { cookie, 'sec-fetch-site': 'same-origin' }, body: form, redirect: 'manual',
+      }));
+    };
+
+    const rejected = await requestWith(new File(['<script>alert(1)</script>'], 'fake.png', { type: 'image/png' }));
+    expect(rejected.status).toBe(400);
+    expect(await rejected.text()).toContain('genuine PDF');
+    expect(await listExpenses(DB)).toHaveLength(0);
+
+    const accepted = await requestWith(new File(['%PDF-1.7\nvalid'], 'bill.pdf', { type: 'application/pdf' }));
+    expect(accepted.status).toBe(302);
+    const [expense] = await listExpenses(DB);
+    expect(expense).toMatchObject({ payee: 'Uploaded Supplier', amount_cents: 12345, attachment_count: 1 });
   });
 });
 
@@ -930,8 +1076,8 @@ describe('multi-currency invoices and reports', () => {
     const summary = await reportSummary(DB, today);
     expect(summary.outstanding_count).toBe(1);
     expect(summary.by_currency).toEqual([
-      { currency: 'EUR', outstanding_cents: 0, received_ytd_cents: 5000 },
-      { currency: 'GBP', outstanding_cents: 10000, received_ytd_cents: 0 },
+      { currency: 'EUR', outstanding_cents: 0, received_ytd_cents: 5000, expense_ytd_cents: 0 },
+      { currency: 'GBP', outstanding_cents: 10000, received_ytd_cents: 0, expense_ytd_cents: 0 },
     ]);
 
     const invoiced = (await monthlyReport(DB))

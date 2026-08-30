@@ -33,13 +33,23 @@ function groupByYear(rows: MonthlyReportRow[]): YearGroup[] {
     g.rows.push(r);
     let t = g.totals.find((t) => t.currency === r.currency);
     if (!t) {
-      t = { currency: r.currency, invoiced_count: 0, invoiced_cents: 0, received_count: 0, received_cents: 0 };
+      t = {
+        currency: r.currency,
+        invoiced_count: 0,
+        invoiced_cents: 0,
+        received_count: 0,
+        received_cents: 0,
+        expense_count: 0,
+        expense_cents: 0,
+      };
       g.totals.push(t);
     }
     t.invoiced_count += r.invoiced_count;
     t.invoiced_cents += r.invoiced_cents;
     t.received_count += r.received_count;
     t.received_cents += r.received_cents;
+    t.expense_count += r.expense_count;
+    t.expense_cents += r.expense_cents;
   }
   for (const g of groups) g.totals.sort((a, b) => (a.currency < b.currency ? -1 : 1));
   return groups;
@@ -68,7 +78,7 @@ export function ReportsPage({
     ? [...summary.by_currency].sort((a, b) =>
         a.currency === currency ? -1 : b.currency === currency ? 1 : a.currency < b.currency ? -1 : 1
       )
-    : [{ currency, outstanding_cents: 0, received_ytd_cents: 0 }];
+    : [{ currency, outstanding_cents: 0, received_ytd_cents: 0, expense_ytd_cents: 0 }];
   // Currency column/labels only appear once a second currency exists
   const multiCurrency = new Set([...months.map((r) => r.currency), ...sums.map((s) => s.currency)]).size > 1;
 
@@ -95,6 +105,9 @@ export function ReportsPage({
           <a class="btn btn-secondary btn-sm" href="/admin/export/payments.csv">
             Export payments CSV
           </a>
+          <a class="btn btn-secondary btn-sm" href="/admin/export/expenses.csv">
+            Export expenses CSV
+          </a>
         </div>
       </div>
 
@@ -120,6 +133,20 @@ export function ReportsPage({
           ))}
           <span class="muted">all providers</span>
         </div>
+        <div class="card stat">
+          <span class="stat-label">Expenses this year</span>
+          {sums.map((s) => (
+            <span class="stat-value">{formatCents(s.expense_ytd_cents, s.currency)}</span>
+          ))}
+          <span class="muted">paid costs</span>
+        </div>
+        <div class="card stat">
+          <span class="stat-label">Net cash this year</span>
+          {sums.map((s) => (
+            <span class="stat-value">{formatCents(s.received_ytd_cents - s.expense_ytd_cents, s.currency)}</span>
+          ))}
+          <span class="muted">received minus expenses</span>
+        </div>
       </div>
 
       {years.length === 0 ? (
@@ -139,6 +166,9 @@ export function ReportsPage({
                   <th class="text-right">Invoiced</th>
                   <th class="text-right">Payments</th>
                   <th class="text-right">Received</th>
+                  <th class="text-right">Expenses</th>
+                  <th class="text-right">Spent</th>
+                  <th class="text-right">Net cash</th>
                 </tr>
               </thead>
               <tbody>
@@ -158,6 +188,17 @@ export function ReportsPage({
                     <td class="text-right" data-label="Received">
                       {r.received_cents ? formatCents(r.received_cents, r.currency) : <span class="muted">—</span>}
                     </td>
+                    <td class="text-right" data-label="Expenses">
+                      {r.expense_count || <span class="muted">—</span>}
+                    </td>
+                    <td class="text-right" data-label="Spent">
+                      {r.expense_cents ? formatCents(r.expense_cents, r.currency) : <span class="muted">—</span>}
+                    </td>
+                    <td class="text-right" data-label="Net cash">
+                      {r.received_cents || r.expense_cents
+                        ? formatCents(r.received_cents - r.expense_cents, r.currency)
+                        : <span class="muted">—</span>}
+                    </td>
                   </tr>
                 ))}
                 {g.totals.map((t) => (
@@ -175,6 +216,15 @@ export function ReportsPage({
                     </td>
                     <td class="text-right" data-label="Received">
                       {formatCents(t.received_cents, t.currency)}
+                    </td>
+                    <td class="text-right" data-label="Expenses">
+                      {t.expense_count}
+                    </td>
+                    <td class="text-right" data-label="Spent">
+                      {formatCents(t.expense_cents, t.currency)}
+                    </td>
+                    <td class="text-right" data-label="Net cash">
+                      {formatCents(t.received_cents - t.expense_cents, t.currency)}
                     </td>
                   </tr>
                 ))}

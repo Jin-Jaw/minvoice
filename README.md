@@ -46,6 +46,9 @@ Everything beyond the Worker itself is optional:
   (at-least-once — a rare duplicate beats a silent never)
 - **Documents** — a print-optimized invoice view (one-click print, `PAID`/`VOID` stamps) and a
   generated PDF (pdf-lib) attached to invoice emails
+- **Expenses** — company-aware paid-cost ledger with supplier/employee, category, optional client
+  allocation, tax/reference fields, soft void/restore, CSV export, and private PDF/JPG/PNG/WebP
+  evidence (multiple files per expense, byte-verified before storage)
 - **History** — every invoice keeps an activity timeline: edits, sends, payments (with undo),
   and pay-link views with city-level geolocation (bot- and scanner-filtered, admin views excluded)
 - **Email** — Cloudflare Email Sending or Resend, selectable in Settings
@@ -55,8 +58,8 @@ Everything beyond the Worker itself is optional:
 - **Payment reminders** — opt-in daily cron emails overdue clients on an editable schedule
   (default 1, 7, and 14 days past due, up to 10 reminders, burst-protected); every reminder is
   logged to the invoice history and delivered through a durable outbox that retries failures
-- **Admin** — dashboard with status tabs and client filter, payments list, monthly reports
-  (filterable by client), CSV export,
+- **Admin** — dashboard with status tabs and client filter, payments and expenses lists, monthly
+  income/expense/net-cash reports (filterable by client), CSV export,
   first-launch setup wizard, configuration warnings for missing secrets, encrypted-at-rest
   storage for API keys entered in-app, and logo upload
   (PNG/JPEG stored in your database — no external image host needed; a logo URL still works)
@@ -93,6 +96,8 @@ Invariants worth knowing before you change anything:
   emails fire only on the actual transition.
 - Payments are soft-deleted (undo keeps history); storage is UTC with a business-timezone setting
   driving display and date logic.
+- Expenses are soft-voided so corrections remain visible. Supporting files stay behind admin
+  authentication and are forced to download with MIME sniffing disabled.
 - `/admin` requires a valid Cloudflare Access JWT verified in-Worker: if Access is misconfigured
   or disabled at the edge, admin **fails closed** with 403.
 
