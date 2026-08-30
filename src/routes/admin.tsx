@@ -456,7 +456,8 @@ admin.get('/invoices/:id', async (c) => {
       timeline={timeline}
       timezone={settings.timezone}
       emailEnabled={settings.email_provider !== 'none'}
-      hasOriginalPdf={!!pdfMeta}
+      hasArchivedPdf={!!pdfMeta}
+      pdfIsUpdated={!!pdfMeta?.generated && !pdfMeta.stale}
       pdfNeedsRegen={!!pdfMeta && (pdfMeta.stale || !pdfMeta.generated)}
       notice={
         emailedTo

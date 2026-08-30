@@ -30,6 +30,8 @@ import {
   monthlyReport,
   reportSummary,
   recordLoginAttempt,
+  markInvoiceSourcePdfStale,
+  setInvoiceSourcePdf,
   updateInvoice,
   updateClient,
   type WebhookPayment,
@@ -726,6 +728,41 @@ describe('client default rate currencies', () => {
     expect(response.status).toBe(400);
     expect(await response.text()).toContain('USD, GBP, or EUR');
     expect(await DB.prepare('SELECT COUNT(*) FROM clients').first<number>('COUNT(*)')).toBe(0);
+  });
+});
+
+describe('invoice PDF archive controls', () => {
+  it('hides the Original PDF card after regeneration and restores it when the archive becomes stale', async () => {
+    const id = await seedSentInvoice();
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const cookie = await loginCookie();
+    const page = async () => {
+      const response = await exports.default.fetch(
+        new Request(`https://invoice.test/admin/invoices/${id}`, { headers: { cookie } })
+      );
+      expect(response.status).toBe(200);
+      return response.text();
+    };
+
+    const withoutArchive = await page();
+    expect(withoutArchive).toContain('<h2>Original PDF</h2>');
+
+    await setInvoiceSourcePdf(DB, id, new Uint8Array([37, 80, 68, 70, 45]), 'original.pdf');
+    const withOriginal = await page();
+    expect(withOriginal).toContain('<h2>Original PDF</h2>');
+    expect(withOriginal).toContain('Download original PDF');
+    expect(withOriginal).toContain('Regenerate PDF');
+
+    await setInvoiceSourcePdf(DB, id, new Uint8Array([37, 80, 68, 70, 45]), 'updated.pdf', true);
+    const updated = await page();
+    expect(updated).not.toContain('<h2>Original PDF</h2>');
+    expect(updated).not.toContain('Download original PDF');
+    expect(updated).toContain('Download PDF');
+
+    await markInvoiceSourcePdfStale(DB, id);
+    const stale = await page();
+    expect(stale).toContain('<h2>Original PDF</h2>');
+    expect(stale).toContain('Regenerate PDF');
   });
 });
 

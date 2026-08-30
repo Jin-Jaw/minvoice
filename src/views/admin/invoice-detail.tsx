@@ -23,7 +23,8 @@ export function InvoiceDetailPage({
   timeline,
   timezone,
   emailEnabled,
-  hasOriginalPdf,
+  hasArchivedPdf,
+  pdfIsUpdated,
   pdfNeedsRegen,
   notice,
   error,
@@ -37,7 +38,9 @@ export function InvoiceDetailPage({
   timezone: string;
   /** false when Settings → Email = none: email actions degrade to mark-sent */
   emailEnabled: boolean;
-  hasOriginalPdf: boolean;
+  hasArchivedPdf: boolean;
+  /** The archived document was generated from current invoice data. */
+  pdfIsUpdated: boolean;
   /** Archive is a manual upload or behind the invoice — offer Regenerate. */
   pdfNeedsRegen?: boolean;
   notice?: string;
@@ -158,7 +161,7 @@ export function InvoiceDetailPage({
           </a>
           <a class="btn btn-secondary" href={`/admin/invoices/${invoice.id}/pdf`}>
             <Icon name="download" />
-            {hasOriginalPdf ? 'Download original PDF' : 'Download PDF'}
+            {hasArchivedPdf && !pdfIsUpdated ? 'Download original PDF' : 'Download PDF'}
           </a>
         </div>
       </div>
@@ -168,36 +171,36 @@ export function InvoiceDetailPage({
       {notice ? <div class="banner banner-success">{notice}</div> : null}
       {error ? <div class="banner banner-error">{error}</div> : null}
 
-      <div class="card">
-        <h2>Original PDF</h2>
-        {hasOriginalPdf ? (
-          <>
-            <p class="muted">The exact originally issued PDF is archived and used for downloads and invoice emails.</p>
-            {pdfNeedsRegen ? (
-              <form
-                method="post"
-                action={`/admin/invoices/${invoice.id}/regenerate-pdf`}
-                data-confirm="Regenerate the invoice PDF from the current data? The archived original is replaced — downloads, emails, and resends will use the new document."
-              >
-                <button type="submit" class="btn btn-secondary btn-sm">
-                  Regenerate PDF
-                </button>
-              </form>
-            ) : (
-              <p class="muted">Up to date with the invoice — editing the invoice regenerates it on the next email.</p>
-            )}
-          </>
-        ) : (
-          <form method="post" action={`/admin/invoices/${invoice.id}/source-pdf`} enctype="multipart/form-data">
-            <div class="form-group">
-              <label for="source_pdf">Archive the originally issued PDF</label>
-              <input type="file" id="source_pdf" name="source_pdf" accept="application/pdf,.pdf" required />
-              <span class="muted">Up to 750 KB. Once saved, downloads and emails use this exact document.</span>
-            </div>
-            <button type="submit" class="btn btn-secondary">Archive original PDF</button>
-          </form>
-        )}
-      </div>
+      {!pdfIsUpdated ? (
+        <div class="card">
+          <h2>Original PDF</h2>
+          {hasArchivedPdf ? (
+            <>
+              <p class="muted">The exact originally issued PDF is archived and used for downloads and invoice emails.</p>
+              {pdfNeedsRegen ? (
+                <form
+                  method="post"
+                  action={`/admin/invoices/${invoice.id}/regenerate-pdf`}
+                  data-confirm="Regenerate the invoice PDF from the current data? The archived original is replaced — downloads, emails, and resends will use the new document."
+                >
+                  <button type="submit" class="btn btn-secondary btn-sm">
+                    Regenerate PDF
+                  </button>
+                </form>
+              ) : null}
+            </>
+          ) : (
+            <form method="post" action={`/admin/invoices/${invoice.id}/source-pdf`} enctype="multipart/form-data">
+              <div class="form-group">
+                <label for="source_pdf">Archive the originally issued PDF</label>
+                <input type="file" id="source_pdf" name="source_pdf" accept="application/pdf,.pdf" required />
+                <span class="muted">Up to 750 KB. Once saved, downloads and emails use this exact document.</span>
+              </div>
+              <button type="submit" class="btn btn-secondary">Archive original PDF</button>
+            </form>
+          )}
+        </div>
+      ) : null}
 
       <div class="card">
         <h2>Client</h2>
