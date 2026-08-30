@@ -66,6 +66,7 @@ export type Client = {
   default_currency: ClientRateCurrency | null; // currency used with the client default rate
   payment_terms_days: number | null; // NULL = inherit settings terms
   locale: string | null; // NULL = inherit settings locale (customer-facing language)
+  sort_order: number;
   created_at: string;
 };
 
@@ -421,8 +422,8 @@ export async function invoiceNumberExists(db: D1Database, branchId: number, numb
 
 export async function listClients(db: D1Database, includeArchived = false): Promise<Client[]> {
   const sql = includeArchived
-    ? 'SELECT * FROM clients ORDER BY name'
-    : 'SELECT * FROM clients WHERE archived = 0 ORDER BY name';
+    ? 'SELECT * FROM clients ORDER BY sort_order, name COLLATE NOCASE, id'
+    : 'SELECT * FROM clients WHERE archived = 0 ORDER BY sort_order, name COLLATE NOCASE, id';
   return (await db.prepare(sql).all<Client>()).results;
 }
 
@@ -437,7 +438,9 @@ export async function createClient(
 ): Promise<number> {
   const res = await db
     .prepare(
-      'INSERT INTO clients (name, email, address, default_rate_cents, default_currency, payment_terms_days, locale) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      `INSERT INTO clients
+       (name, email, address, default_rate_cents, default_currency, payment_terms_days, locale, sort_order)
+       SELECT ?, ?, ?, ?, ?, ?, ?, COALESCE(MAX(sort_order), -1) + 1 FROM clients`
     )
     .bind(
       c.name,
@@ -450,6 +453,49 @@ export async function createClient(
     )
     .run();
   return res.meta.last_row_id;
+}
+
+export async function moveClient(db: D1Database, id: number, direction: 'up' | 'down'): Promise<boolean> {
+  const client = await db
+    .prepare('SELECT id, sort_order FROM clients WHERE id = ?')
+    .bind(id)
+    .first<Pick<Client, 'id' | 'sort_order'>>();
+  if (!client) return false;
+
+  const comparison = direction === 'up' ? '<' : '>';
+  const order = direction === 'up' ? 'DESC' : 'ASC';
+  const neighbor = await db
+    .prepare(
+      `SELECT id, sort_order FROM clients
+       WHERE sort_order ${comparison} ?
+          OR (sort_order = ? AND id ${comparison} ?)
+       ORDER BY sort_order ${order}, id ${order}
+       LIMIT 1`
+    )
+    .bind(client.sort_order, client.sort_order, client.id)
+    .first<Pick<Client, 'id' | 'sort_order'>>();
+  if (!neighbor) return false;
+
+  await db.batch([
+    db.prepare('UPDATE clients SET sort_order = ? WHERE id = ?').bind(neighbor.sort_order, client.id),
+    db.prepare('UPDATE clients SET sort_order = ? WHERE id = ?').bind(client.sort_order, neighbor.id),
+  ]);
+  return true;
+}
+
+export async function deleteClient(db: D1Database, id: number): Promise<'deleted' | 'in_use' | 'not_found'> {
+  const result = await db
+    .prepare(
+      `DELETE FROM clients
+       WHERE id = ?
+         AND NOT EXISTS (SELECT 1 FROM invoices WHERE invoices.client_id = clients.id)`
+    )
+    .bind(id)
+    .run();
+  if (result.meta.changes > 0) return 'deleted';
+
+  const existing = await db.prepare('SELECT 1 AS found FROM clients WHERE id = ?').bind(id).first();
+  return existing ? 'in_use' : 'not_found';
 }
 
 export async function updateClient(

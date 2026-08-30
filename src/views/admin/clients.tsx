@@ -46,6 +46,8 @@ export function ClientsPage({
 
       {error ? <div class="banner banner-error">{error}</div> : null}
 
+      {clients.length > 0 ? <p class="muted">Use each client’s ⋯ menu to move, edit, or delete it.</p> : null}
+
       {clients.length === 0 ? (
         <div class="empty-state">
           <p>No clients yet.</p>
@@ -62,7 +64,7 @@ export function ClientsPage({
             </tr>
           </thead>
           <tbody>
-            {clients.map((client) => (
+            {clients.map((client, index) => (
               <tr>
                 <td data-label="Name">{client.name}</td>
                 <td data-label="Email">{client.email ?? <span class="muted">—</span>}</td>
@@ -80,8 +82,46 @@ export function ClientsPage({
                     <span class="badge badge-paid">active</span>
                   )}
                 </td>
-                <td>
-                  <a href={`/admin/clients/${client.id}`}>Edit</a>
+                <td class="row-actions">
+                  <details class="row-menu">
+                    <summary aria-label={`Actions for ${client.name}`}>
+                      <Icon name="kebab" />
+                    </summary>
+                    <div class="row-menu-panel">
+                      {index > 0 ? (
+                        <form method="post" action={`/admin/clients/${client.id}/move`}>
+                          <input type="hidden" name="direction" value="up" />
+                          <button type="submit">
+                            <Icon name="arrow-up" />
+                            Move up
+                          </button>
+                        </form>
+                      ) : null}
+                      {index < clients.length - 1 ? (
+                        <form method="post" action={`/admin/clients/${client.id}/move`}>
+                          <input type="hidden" name="direction" value="down" />
+                          <button type="submit">
+                            <Icon name="arrow-down" />
+                            Move down
+                          </button>
+                        </form>
+                      ) : null}
+                      <a href={`/admin/clients/${client.id}`}>
+                        <Icon name="pencil" />
+                        Edit
+                      </a>
+                      <form
+                        method="post"
+                        action={`/admin/clients/${client.id}/delete`}
+                        data-confirm={`Permanently delete ${client.name}? This cannot be undone.`}
+                      >
+                        <button type="submit" class="danger">
+                          <Icon name="trash" />
+                          Delete
+                        </button>
+                      </form>
+                    </div>
+                  </details>
                 </td>
               </tr>
             ))}

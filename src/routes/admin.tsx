@@ -21,6 +21,7 @@ import {
   completeSetup,
   createBranch,
   createClient,
+  deleteClient,
   deleteLogo,
   getLogo,
   createInvoice,
@@ -45,6 +46,7 @@ import {
   markInvoiceSent,
   markInvoiceUnsent,
   monthlyReport,
+  moveClient,
   reportSummary,
   suggestedInvoiceNumber,
   recordManualPayment,
@@ -857,8 +859,11 @@ admin.post('/invoices/:id/payments/:pid/note', async (c) => {
 
 admin.get('/clients', async (c) => {
   const clients = await listClients(c.env.DB, true);
+  const error = c.req.query('error') === 'in-use'
+    ? 'This client has invoices and cannot be deleted. Archive it instead to preserve the invoice history.'
+    : undefined;
   return c.html(
-    <ClientsPage currentPath="/admin/clients" clients={clients} nonce={c.get('secureHeadersNonce')} />
+    <ClientsPage currentPath="/admin/clients" clients={clients} error={error} nonce={c.get('secureHeadersNonce')} />
   );
 });
 
@@ -943,6 +948,26 @@ admin.post('/clients/:id', async (c) => {
     locale: validLocaleTag(submittedLocale(body)) ? submittedLocale(body)!.trim() : null,
   });
 
+  return c.redirect('/admin/clients');
+});
+
+admin.post('/clients/:id/move', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.notFound();
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  if (body.direction !== 'up' && body.direction !== 'down') return c.text('Invalid direction.', 400);
+  if (!(await moveClient(c.env.DB, id, body.direction))) {
+    if (!(await getClient(c.env.DB, id))) return c.notFound();
+  }
+  return c.redirect('/admin/clients');
+});
+
+admin.post('/clients/:id/delete', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.notFound();
+  const result = await deleteClient(c.env.DB, id);
+  if (result === 'not_found') return c.notFound();
+  if (result === 'in_use') return c.redirect('/admin/clients?error=in-use');
   return c.redirect('/admin/clients');
 });
 

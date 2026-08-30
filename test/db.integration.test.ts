@@ -13,6 +13,7 @@ import {
   createBranch,
   createClient,
   createInvoice,
+  deleteClient,
   enqueueReminder,
   getClient,
   getInvoice,
@@ -25,6 +26,7 @@ import {
   markInvoicePaidFromWebhook,
   markInvoiceSent,
   markReminderSent,
+  moveClient,
   monthlyReport,
   reportSummary,
   recordLoginAttempt,
@@ -178,6 +180,73 @@ describe('shared-client branch isolation', () => {
     const secondReport = await reportSummary(DB, secondBranchId, '2026-08-29');
     expect(firstReport.outstanding_count).toBe(1);
     expect(secondReport.outstanding_count).toBe(0);
+  });
+});
+
+describe('client ordering and deletion', () => {
+  it('keeps a custom client order and appends new clients', async () => {
+    const first = await createClient(DB, {
+      name: 'Zulu', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
+    });
+    const second = await createClient(DB, {
+      name: 'Alpha', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
+    });
+    const third = await createClient(DB, {
+      name: 'Middle', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
+    });
+
+    expect((await listClients(DB)).map((client) => client.id)).toEqual([first, second, third]);
+    expect(await moveClient(DB, third, 'up')).toBe(true);
+    expect((await listClients(DB)).map((client) => client.id)).toEqual([first, third, second]);
+    expect(await moveClient(DB, first, 'up')).toBe(false);
+  });
+
+  it('deletes unused clients but preserves clients referenced by invoices', async () => {
+    const unused = await createClient(DB, {
+      name: 'Unused', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
+    });
+    expect(await deleteClient(DB, unused)).toBe('deleted');
+    expect(await getClient(DB, unused)).toBeNull();
+
+    const used = await createClient(DB, {
+      name: 'Used', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
+    });
+    await createInvoice(DB, {
+      client_id: used,
+      issue_date: '2026-08-30', due_date: null, subject: null, notes: null,
+      items: [{ description: 'Work', quantity: 1, unit_price_cents: 10000 }],
+    });
+    expect(await deleteClient(DB, used)).toBe('in_use');
+    expect(await getClient(DB, used)).not.toBeNull();
+  });
+
+  it('renders reorder/delete controls and protects used clients at the route', async () => {
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const clientId = await createClient(DB, {
+      name: 'Route Client', email: null, address: null, default_rate_cents: null, payment_terms_days: null,
+    });
+    await createInvoice(DB, {
+      client_id: clientId,
+      issue_date: '2026-08-30', due_date: null, subject: null, notes: null,
+      items: [{ description: 'Work', quantity: 1, unit_price_cents: 10000 }],
+    });
+    const cookie = await loginCookie();
+    const page = await exports.default.fetch(
+      new Request('https://invoice.test/admin/clients', { headers: { cookie } })
+    );
+    const html = await page.text();
+    expect(html).toContain(`/admin/clients/${clientId}/delete`);
+    expect(html).toContain('Permanently delete Route Client?');
+
+    const response = await exports.default.fetch(
+      new Request(`https://invoice.test/admin/clients/${clientId}/delete`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin' },
+        redirect: 'manual',
+      })
+    );
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('/admin/clients?error=in-use');
   });
 });
 
