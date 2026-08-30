@@ -168,6 +168,12 @@ export type ExpenseAttachmentMeta = {
 
 export type ExpenseAttachment = ExpenseAttachmentMeta & { bytes: Uint8Array };
 
+export type ExpenseInvoiceImport = Omit<ExpenseAttachment, 'id' | 'expense_id' | 'uploaded_at'> & {
+  token: string;
+  created_at: string;
+  expires_at: string;
+};
+
 export type InvoiceWithClient = Invoice & {
   client_name: string;
   client_email: string | null;
@@ -1187,6 +1193,102 @@ export async function deleteExpenseAttachment(
     .bind(attachmentId, expenseId)
     .run();
   return (result.meta.changes ?? 0) > 0;
+}
+
+export async function storeExpenseInvoiceImport(
+  db: D1Database,
+  token: string,
+  file: Pick<ExpenseAttachment, 'bytes' | 'mime' | 'filename' | 'size_bytes' | 'sha256'>,
+  ttlHours = 24
+): Promise<void> {
+  if (file.mime !== 'application/pdf') throw new Error('Only PDF invoices can be staged for extraction.');
+  await db
+    .prepare(
+      `INSERT INTO expense_invoice_imports
+       (token, bytes, mime, filename, size_bytes, sha256, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?))`
+    )
+    .bind(token, file.bytes, file.mime, file.filename, file.size_bytes, file.sha256, `+${ttlHours} hours`)
+    .run();
+}
+
+export async function getExpenseInvoiceImport(db: D1Database, token: string): Promise<ExpenseInvoiceImport | null> {
+  const row = await db
+    .prepare(
+      `SELECT token, bytes, mime, filename, size_bytes, sha256, created_at, expires_at
+       FROM expense_invoice_imports WHERE token = ? AND expires_at > datetime('now')`
+    )
+    .bind(token)
+    .first<Omit<ExpenseInvoiceImport, 'bytes'> & { bytes: ArrayBuffer | number[] }>();
+  if (!row) return null;
+  return {
+    ...row,
+    bytes: row.bytes instanceof ArrayBuffer ? new Uint8Array(row.bytes) : Uint8Array.from(row.bytes),
+  };
+}
+
+export async function deleteExpenseInvoiceImport(db: D1Database, token: string): Promise<boolean> {
+  const result = await db.prepare('DELETE FROM expense_invoice_imports WHERE token = ?').bind(token).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * Confirming an import writes the expense and transfers its staged PDF in one
+ * D1 batch. D1 batches are transactional; the explicit change checks also
+ * handle a double-submit whose first request already consumed the token.
+ */
+export async function createExpenseFromInvoiceImport(
+  db: D1Database,
+  token: string,
+  expense: ExpenseDraft
+): Promise<number | null> {
+  const [created, attached, consumed] = await db.batch([
+    db.prepare(
+      `INSERT INTO expenses
+       (branch_id, client_id, expense_date, payee, category, description, reference,
+        amount_cents, tax_cents, currency)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      expense.branch_id,
+      expense.client_id,
+      expense.expense_date,
+      expense.payee,
+      expense.category,
+      expense.description,
+      expense.reference,
+      expense.amount_cents,
+      expense.tax_cents,
+      expense.currency
+    ),
+    db.prepare(
+      `INSERT INTO expense_attachments
+       (expense_id, bytes, mime, filename, size_bytes, sha256)
+       SELECT last_insert_rowid(), bytes, mime, filename, size_bytes, sha256
+       FROM expense_invoice_imports
+       WHERE token = ? AND expires_at > datetime('now')`
+    ).bind(token),
+    db.prepare('DELETE FROM expense_invoice_imports WHERE token = ? AND expires_at > datetime(\'now\')').bind(token),
+  ]);
+
+  const expenseId = created.meta.last_row_id;
+  if (
+    (created.meta.changes ?? 0) === 1 &&
+    (attached.meta.changes ?? 0) === 1 &&
+    (consumed.meta.changes ?? 0) === 1 &&
+    expenseId > 0
+  ) return expenseId;
+
+  // This can only occur on expiry/double-submit. Remove a transient row that
+  // never acquired its evidence so it cannot affect the financial reports.
+  if ((created.meta.changes ?? 0) === 1 && expenseId > 0) {
+    await db.prepare('DELETE FROM expenses WHERE id = ?').bind(expenseId).run();
+  }
+  return null;
+}
+
+export async function purgeExpiredExpenseInvoiceImports(db: D1Database): Promise<number> {
+  const result = await db.prepare("DELETE FROM expense_invoice_imports WHERE expires_at <= datetime('now')").run();
+  return result.meta.changes ?? 0;
 }
 
 // ---------- Reports ----------

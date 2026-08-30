@@ -45,7 +45,8 @@
     "hono": "4.13.5",
     "jose": "^5.9.0",
     "pdf-lib": "^1.17.1",
-    "stripe": "^17.0.0"
+    "stripe": "^17.0.0",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.22.0",

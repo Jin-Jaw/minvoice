@@ -15,6 +15,7 @@ import {
   getSettings,
   purgeOldLoginAttempts,
   purgeOldOutbox,
+  purgeExpiredExpenseInvoiceImports,
   recordLoginAttempt,
 } from './db/queries';
 import { processEmailOutbox } from './services/outbox';
@@ -278,6 +279,7 @@ export default {
         await processEmailOutbox(env);
         await purgeOldOutbox(env.DB, MAX_OUTBOX_ATTEMPTS);
         await purgeOldLoginAttempts(env.DB);
+        await purgeExpiredExpenseInvoiceImports(env.DB);
       })()
     );
   },

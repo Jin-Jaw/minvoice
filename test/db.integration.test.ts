@@ -5,6 +5,7 @@ import {
   waitOnExecutionContext,
 } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import worker from '../src/index';
 import {
   awaitingPaymentReview,
@@ -114,6 +115,7 @@ beforeEach(async () => {
     DB.prepare('DELETE FROM email_outbox'),
     DB.prepare('DELETE FROM login_attempts'),
     DB.prepare('DELETE FROM webhook_events'),
+    DB.prepare('DELETE FROM expense_invoice_imports'),
     DB.prepare('DELETE FROM expense_attachments'),
     DB.prepare('DELETE FROM expenses'),
     DB.prepare('DELETE FROM payments'),
@@ -392,6 +394,77 @@ describe('expense ledger and evidence', () => {
     expect(accepted.status).toBe(302);
     const [expense] = await listExpenses(DB);
     expect(expense).toMatchObject({ payee: 'Uploaded Supplier', amount_cents: 12345, attachment_count: 1 });
+  });
+
+  it('imports a supplier PDF through review and only affects reports after confirmation', async () => {
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const document = await PDFDocument.create();
+    const font = await document.embedFont(StandardFonts.Helvetica);
+    const page = document.addPage([595, 842]);
+    page.drawText('Route Test Supplier Ltd', { x: 40, y: 790, size: 12, font });
+    page.drawText('INVOICE # RT-2026-17', { x: 40, y: 760, size: 11, font });
+    page.drawText('Bill To: Jin&Jaw LTD', { x: 40, y: 730, size: 10, font });
+    page.drawText('Invoice Date: August 14, 2026', { x: 40, y: 700, size: 10, font });
+    page.drawText('Tax: GBP 20.00', { x: 350, y: 240, size: 10, font });
+    page.drawText('GRAND TOTAL GBP 120.00', { x: 350, y: 210, size: 10, font });
+    const pdfBytes = await document.save();
+    const cookie = await loginCookie();
+    const upload = new FormData();
+    upload.set('invoice', new File([pdfBytes], 'route-test-invoice.pdf', { type: 'application/pdf' }));
+
+    const uploaded = await exports.default.fetch(new Request('https://invoice.test/admin/expenses/import', {
+      method: 'POST', headers: { cookie, 'sec-fetch-site': 'same-origin' }, body: upload, redirect: 'manual',
+    }));
+    expect(uploaded.status).toBe(302);
+    const reviewPath = uploaded.headers.get('location')!;
+    expect(reviewPath).toMatch(/^\/admin\/expenses\/import\/[a-f0-9]{64}\/review$/);
+    expect(await listExpenses(DB)).toHaveLength(0);
+    expect((await reportSummary(DB, null, '2026-08-30')).by_currency).toEqual([]);
+
+    const review = await exports.default.fetch(new Request(`https://invoice.test${reviewPath}`, { headers: { cookie } }));
+    expect(review.status).toBe(200);
+    const html = await review.text();
+    expect(html).toContain('Review imported expense');
+    expect(html).toContain('value="Route Test Supplier Ltd"');
+    expect(html).toContain('value="2026-08-14"');
+    expect(html).toContain('value="120.00"');
+    expect(html).toContain('value="RT-2026-17"');
+    expect(html).toContain('Save expense and PDF');
+
+    const token = reviewPath.split('/')[4];
+    const confirmation = new URLSearchParams({
+      branch_id: '1', client_id: '', expense_date: '2026-08-14', payee: 'Route Test Supplier Ltd',
+      category: 'Professional fees', description: '', reference: 'RT-2026-17', amount: '120.00',
+      tax_amount: '20.00', currency: 'GBP',
+    });
+    const confirmed = await exports.default.fetch(new Request(`https://invoice.test/admin/expenses/import/${token}/confirm`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin' },
+      body: confirmation,
+      redirect: 'manual',
+    }));
+    expect(confirmed.status).toBe(302);
+    expect(confirmed.headers.get('location')).toMatch(/^\/admin\/expenses\/\d+\?saved=1$/);
+    const [expense] = await listExpenses(DB);
+    expect(expense).toMatchObject({
+      payee: 'Route Test Supplier Ltd', expense_date: '2026-08-14', amount_cents: 12000,
+      tax_cents: 2000, currency: 'GBP', reference: 'RT-2026-17', attachment_count: 1,
+    });
+    const [attachment] = await listExpenseAttachments(DB, expense.id);
+    expect((await getExpenseAttachment(DB, expense.id, attachment.id))?.bytes).toEqual(pdfBytes);
+    expect(await DB.prepare('SELECT COUNT(*) AS n FROM expense_invoice_imports').first<{ n: number }>()).toEqual({ n: 0 });
+    expect((await reportSummary(DB, null, '2026-08-30')).by_currency).toMatchObject([
+      { currency: 'GBP', expense_ytd_cents: 12000 },
+    ]);
+
+    const repeated = await exports.default.fetch(new Request(`https://invoice.test/admin/expenses/import/${token}/confirm`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin' },
+      body: confirmation,
+      redirect: 'manual',
+    }));
+    expect(repeated.headers.get('location')).toBe('/admin/expenses/import?expired=1');
+    expect(await listExpenses(DB)).toHaveLength(1);
   });
 });
 

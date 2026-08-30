@@ -18,14 +18,22 @@ import { parseSchedule } from '../lib/reminders';
 import { invoicePdfFilename } from '../lib/invoice-filename';
 import { isIsoDate, prepareExpenseAttachment } from '../lib/expenses';
 import {
+  detectExpenseBranch,
+  EXPENSE_IMPORT_TTL_HOURS,
+  extractExpenseInvoiceText,
+  parseExpenseInvoice,
+} from '../lib/expense-invoice-import';
+import {
   addExpenseAttachment,
   buildTimeline,
   completeSetup,
   createBranch,
   createClient,
   createExpense,
+  createExpenseFromInvoiceImport,
   deleteClient,
   deleteExpenseAttachment,
+  deleteExpenseInvoiceImport,
   deleteLogo,
   getLogo,
   createInvoice,
@@ -34,6 +42,7 @@ import {
   getClient,
   getExpense,
   getExpenseAttachment,
+  getExpenseInvoiceImport,
   getInvoiceById,
   getInvoiceEvents,
   getInvoiceItems,
@@ -64,6 +73,7 @@ import {
   setLogo,
   setInvoiceSourcePdf,
   setExpenseVoided,
+  storeExpenseInvoiceImport,
   updateClient,
   updateExpense,
   updateInvoice,
@@ -86,7 +96,12 @@ import { ReportsPage } from '../views/admin/reports';
 import { SettingsPage } from '../views/admin/settings';
 import { SetupPage } from '../views/admin/setup';
 import { BranchesPage } from '../views/admin/branches';
-import { ExpenseFormPage, ExpensesPage, type ExpenseFormValues } from '../views/admin/expenses';
+import {
+  ExpenseFormPage,
+  ExpenseInvoiceImportPage,
+  ExpensesPage,
+  type ExpenseFormValues,
+} from '../views/admin/expenses';
 
 export const admin = new Hono<AppEnv>();
 
@@ -267,6 +282,61 @@ function parseExpenseDraft(
       currency: values.currency,
     },
   };
+}
+
+function newExpenseImportToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function validExpenseImportToken(token: string): boolean {
+  return /^[a-f0-9]{64}$/.test(token);
+}
+
+async function expenseImportReviewResponse(
+  c: Context<AppEnv>,
+  staged: NonNullable<Awaited<ReturnType<typeof getExpenseInvoiceImport>>>,
+  submittedValues?: ExpenseFormValues,
+  error?: string,
+  status: 200 | 400 = 200
+): Promise<Response> {
+  const extraction = await extractExpenseInvoiceText(staged.bytes);
+  const [branches, clients, settings] = await Promise.all([
+    listBranches(c.env.DB),
+    listClients(c.env.DB),
+    getSettings(c.env.DB, c.get('branchId')),
+  ]);
+  const parsed = parseExpenseInvoice(extraction.lines, branches.map((branch) => branch.name));
+  const detectedBranch = detectExpenseBranch(extraction.lines, branches);
+  const values = submittedValues ?? {
+    branch_id: String(detectedBranch ?? c.get('branchId')),
+    client_id: '',
+    expense_date: parsed.expenseDate ?? todayInTz(settings.timezone),
+    payee: parsed.payee ?? '',
+    category: parsed.category,
+    description: '',
+    reference: parsed.reference ?? '',
+    amount: parsed.amountCents === null ? '' : (parsed.amountCents / 100).toFixed(2),
+    tax_amount: parsed.taxCents === null ? '' : (parsed.taxCents / 100).toFixed(2),
+    currency: parsed.currency ?? settings.currency,
+  };
+  return c.html(
+    <ExpenseFormPage
+      branches={branches}
+      clients={clients}
+      values={values}
+      error={error}
+      importReview={{
+        token: staged.token,
+        filename: staged.filename,
+        pageCount: extraction.pageCount,
+        warnings: parsed.warnings,
+      }}
+      nonce={c.get('secureHeadersNonce')}
+    />,
+    status
+  );
 }
 
 /**
@@ -1117,7 +1187,115 @@ admin.get('/expenses', async (c) => {
   );
 });
 
-// Registered before /expenses/:id so "new" is never parsed as an ID.
+// Registered before /expenses/:id so fixed path segments are never parsed as IDs.
+admin.get('/expenses/import', (c) => c.html(
+  <ExpenseInvoiceImportPage
+    error={c.req.query('expired') === '1' ? 'That unconfirmed import expired. Upload the PDF again.' : undefined}
+    nonce={c.get('secureHeadersNonce')}
+  />
+));
+
+admin.post('/expenses/import', async (c) => {
+  const body = await c.req.parseBody();
+  const uploaded = body.invoice;
+  if (!(uploaded instanceof File)) {
+    return c.html(<ExpenseInvoiceImportPage error="Choose a supplier invoice PDF." nonce={c.get('secureHeadersNonce')} />, 400);
+  }
+  const prepared = await prepareExpenseAttachment(uploaded);
+  if (!prepared.file) {
+    return c.html(<ExpenseInvoiceImportPage error={prepared.error ?? 'Choose a valid PDF.'} nonce={c.get('secureHeadersNonce')} />, 400);
+  }
+  if (prepared.file.mime !== 'application/pdf') {
+    return c.html(<ExpenseInvoiceImportPage error="Invoice extraction currently supports PDF files only." nonce={c.get('secureHeadersNonce')} />, 400);
+  }
+
+  try {
+    // Parse before staging so corrupt, encrypted, image-only, and excessive-page
+    // documents never consume database storage.
+    await extractExpenseInvoiceText(prepared.file.bytes);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '';
+    const safeMessage = /^(?:Invoice PDFs can contain|No selectable invoice text was found|The PDF contains too much text)/.test(detail)
+      ? detail
+      : 'This PDF could not be read. It may be damaged or password-protected.';
+    return c.html(<ExpenseInvoiceImportPage error={safeMessage} nonce={c.get('secureHeadersNonce')} />, 400);
+  }
+
+  const token = newExpenseImportToken();
+  await storeExpenseInvoiceImport(c.env.DB, token, prepared.file, EXPENSE_IMPORT_TTL_HOURS);
+  return c.redirect(`/admin/expenses/import/${token}/review`);
+});
+
+admin.get('/expenses/import/:token/review', async (c) => {
+  const token = c.req.param('token');
+  if (!validExpenseImportToken(token)) return c.notFound();
+  const staged = await getExpenseInvoiceImport(c.env.DB, token);
+  if (!staged) return c.redirect('/admin/expenses/import?expired=1');
+  return expenseImportReviewResponse(c, staged);
+});
+
+admin.get('/expenses/import/:token/file', async (c) => {
+  const token = c.req.param('token');
+  if (!validExpenseImportToken(token)) return c.notFound();
+  const staged = await getExpenseInvoiceImport(c.env.DB, token);
+  if (!staged) return c.notFound();
+  const asciiName = staged.filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  const encodedName = encodeURIComponent(staged.filename).replace(/'/g, '%27');
+  return new Response(staged.bytes as unknown as BodyInit, {
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Length': String(staged.size_bytes),
+      'Content-Disposition': `inline; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+});
+
+admin.post('/expenses/import/:token/cancel', async (c) => {
+  const token = c.req.param('token');
+  if (!validExpenseImportToken(token)) return c.notFound();
+  await deleteExpenseInvoiceImport(c.env.DB, token);
+  return c.redirect('/admin/expenses');
+});
+
+admin.post('/expenses/import/:token/confirm', async (c) => {
+  const token = c.req.param('token');
+  if (!validExpenseImportToken(token)) return c.notFound();
+  const staged = await getExpenseInvoiceImport(c.env.DB, token);
+  if (!staged) return c.redirect('/admin/expenses/import?expired=1');
+  const raw = (await c.req.parseBody()) as ExpenseBody;
+  const branchId = c.get('branchId');
+  const [branches, clients, settings] = await Promise.all([
+    listBranches(c.env.DB),
+    listClients(c.env.DB),
+    getSettings(c.env.DB, branchId),
+  ]);
+  const values = expenseFormValues(raw, {
+    branchId,
+    date: todayInTz(settings.timezone),
+    currency: settings.currency,
+  });
+  const parsed = parseExpenseDraft(
+    values,
+    new Set(branches.map((branch) => branch.id)),
+    new Set(clients.map((client) => client.id))
+  );
+  if (!parsed.draft || parsed.error) {
+    return expenseImportReviewResponse(
+      c,
+      staged,
+      values,
+      parsed.error ?? 'Check the expense details and try again.',
+      400
+    );
+  }
+
+  const id = await createExpenseFromInvoiceImport(c.env.DB, token, parsed.draft);
+  if (!id) return c.redirect('/admin/expenses/import?expired=1');
+  return c.redirect(`/admin/expenses/${id}?saved=1`);
+});
+
 admin.get('/expenses/new', async (c) => {
   const branchId = c.get('branchId');
   const [branches, clients, settings] = await Promise.all([

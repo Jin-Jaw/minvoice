@@ -47,6 +47,10 @@ export function ExpensesPage({
               </select>
             </form>
           ) : null}
+          <a class="btn btn-secondary" href="/admin/expenses/import">
+            <Icon name="upload" />
+            Import invoice
+          </a>
           <a class="btn btn-primary" href="/admin/expenses/new">
             <Icon name="plus" />
             New expense
@@ -118,6 +122,37 @@ export function ExpensesPage({
   );
 }
 
+export function ExpenseInvoiceImportPage({ error, nonce }: { error?: string; nonce?: string }) {
+  return (
+    <Layout title="Import expense invoice" currentPath="/admin/expenses" nonce={nonce}>
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Import expense invoice</h1>
+          <p class="muted">Upload a supplier invoice and review the extracted details before it enters your reports.</p>
+        </div>
+      </div>
+
+      {error ? <div class="banner banner-error">{error}</div> : null}
+
+      <div class="card">
+        <form method="post" action="/admin/expenses/import" enctype="multipart/form-data">
+          <div class="form-group">
+            <label for="expense_invoice_pdf">Supplier invoice PDF</label>
+            <input id="expense_invoice_pdf" name="invoice" type="file" accept="application/pdf,.pdf" required />
+            <span class="muted">
+              Text-based PDF · up to {MAX_EXPENSE_ATTACHMENT_BYTES / 1024 / 1024} MB. The original is saved privately as expense evidence after confirmation.
+            </span>
+          </div>
+          <div class="actions">
+            <button type="submit" class="btn btn-primary"><Icon name="upload" />Extract details</button>
+            <a class="btn btn-secondary" href="/admin/expenses">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </Layout>
+  );
+}
+
 export function ExpenseFormPage({
   expense,
   attachments = [],
@@ -127,6 +162,7 @@ export function ExpenseFormPage({
   error,
   saved,
   duplicate,
+  importReview,
   nonce,
 }: {
   expense?: ExpenseListRow;
@@ -137,15 +173,24 @@ export function ExpenseFormPage({
   error?: string;
   saved?: boolean;
   duplicate?: boolean;
+  importReview?: {
+    token: string;
+    filename: string;
+    pageCount: number;
+    warnings: string[];
+  };
   nonce?: string;
 }) {
   const editing = !!expense;
+  const importing = !!importReview;
+  const pageTitle = editing ? 'Edit expense' : importing ? 'Review imported expense' : 'New expense';
   return (
-    <Layout title={editing ? `Edit ${expense.payee}` : 'New expense'} currentPath="/admin/expenses" nonce={nonce}>
+    <Layout title={editing ? `Edit ${expense.payee}` : importing ? 'Review imported expense' : 'New expense'} currentPath="/admin/expenses" nonce={nonce}>
       <div class="page-head">
         <div>
-          <h1 class="page-title">{editing ? 'Edit expense' : 'New expense'}</h1>
+          <h1 class="page-title">{pageTitle}</h1>
           {editing ? <p class="muted">Recorded {formatDateHuman(expense.expense_date)} for {expense.branch_name}</p> : null}
+          {importing ? <p class="muted">Check every field, then save the expense and its original PDF together.</p> : null}
         </div>
         {editing ? <span class={`badge ${expense.voided_at ? 'badge-void' : 'badge-paid'}`}>{expense.voided_at ? 'void' : 'recorded'}</span> : null}
       </div>
@@ -153,9 +198,24 @@ export function ExpenseFormPage({
       {error ? <div class="banner banner-error">{error}</div> : null}
       {saved ? <div class="banner banner-success">Expense saved.</div> : null}
       {duplicate ? <div class="banner banner-warning">That exact file is already attached.</div> : null}
+      {importReview ? (
+        <div class={importReview.warnings.length ? 'banner banner-warning' : 'banner banner-success'}>
+          <div>
+            <strong>{importReview.warnings.length ? 'Review needed' : 'Details extracted'}</strong>
+            <span> from <a href={`/admin/expenses/import/${importReview.token}/file`} target="_blank" rel="noopener">{importReview.filename}</a> ({importReview.pageCount} page{importReview.pageCount === 1 ? '' : 's'}).</span>
+          </div>
+          {importReview.warnings.length ? (
+            <ul>{importReview.warnings.map((warning) => <li>{warning}</li>)}</ul>
+          ) : <div>The original PDF will be retained privately as evidence.</div>}
+        </div>
+      ) : null}
 
       <div class="card">
-        <form method="post" action={editing ? `/admin/expenses/${expense.id}` : '/admin/expenses'} enctype="multipart/form-data">
+        <form
+          method="post"
+          action={editing ? `/admin/expenses/${expense.id}` : importing ? `/admin/expenses/import/${importReview.token}/confirm` : '/admin/expenses'}
+          enctype="multipart/form-data"
+        >
           <div class="form-row">
             <div class="form-group">
               <label for="expense_branch">Company</label>
@@ -166,8 +226,9 @@ export function ExpenseFormPage({
               </select>
             </div>
             <div class="form-group">
-              <label for="expense_date">Payment date</label>
+              <label for="expense_date">{importing ? 'Invoice / expense date' : 'Expense date'}</label>
               <input id="expense_date" name="expense_date" type="date" value={values.expense_date} required />
+              {importing ? <span class="muted">Extracted from the supplier invoice. Change it if needed.</span> : null}
             </div>
           </div>
 
@@ -227,7 +288,7 @@ export function ExpenseFormPage({
             <textarea id="expense_description" name="description" maxlength={2000}>{values.description}</textarea>
           </div>
 
-          {!editing ? (
+          {!editing && !importing ? (
             <div class="form-group">
               <label for="expense_evidence">Evidence <span class="muted">(optional)</span></label>
               <input id="expense_evidence" name="evidence" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" />
@@ -236,8 +297,10 @@ export function ExpenseFormPage({
           ) : null}
 
           <div class="actions">
-            <button type="submit" class="btn btn-primary">{editing ? 'Save expense' : 'Record expense'}</button>
-            <a class="btn btn-secondary" href="/admin/expenses">Cancel</a>
+            <button type="submit" class="btn btn-primary">{editing ? 'Save expense' : importing ? 'Save expense and PDF' : 'Record expense'}</button>
+            {importing ? (
+              <button type="submit" class="btn btn-secondary" formaction={`/admin/expenses/import/${importReview.token}/cancel`} formnovalidate>Cancel import</button>
+            ) : <a class="btn btn-secondary" href="/admin/expenses">Cancel</a>}
           </div>
         </form>
       </div>
