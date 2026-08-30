@@ -189,7 +189,6 @@ td.amount { font-weight: 600; }
   color: var(--soft);
   break-inside: avoid;
 }
-.pay-link { color: var(--accent); text-decoration: none; word-break: break-all; text-align: right; max-width: 55%; }
 .stamp {
   position: absolute;
   top: 120px;
@@ -328,7 +327,6 @@ td.amount { font-weight: 600; }
 
           <div class="doc-footer">
             <span>{t.footerThanks(settings.business_name || null)}</span>
-            <a class="pay-link" href={payUrl}>{payUrl}</a>
           </div>
 
         </div>

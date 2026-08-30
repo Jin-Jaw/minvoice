@@ -144,8 +144,7 @@ describe('Register document layout', () => {
       items,
       settings,
       env.ASSETS,
-      null,
-      'https://example.test/pay/abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef1234'
+      null
     );
     const doc = await PDFDocument.load(bytes);
     expect(doc.getPageCount()).toBeGreaterThan(1);
@@ -168,7 +167,8 @@ describe('Register document layout', () => {
     expect(html).not.toContain('ZZ-NEVER-PRINT-ZZ'); // subject never prints
     expect(html).toContain('Beispielstraße 12'); // client address in Billed-to
     expect(html).toContain('IBAN: GB00 TEST 0000 0000'); // notes in the payment panel
-    expect(html).toContain('https://example.test/pay/token123'); // pay-link footer
+    expect(html.match(/https:\/\/example\.test\/pay\/token123/g)).toHaveLength(1); // toolbar only; never on the document
+    expect(html).not.toContain('class="pay-link"');
     expect(html).toContain('/logo/1'); // uploaded branch logo
     expect(html).not.toContain(' style="'); // CSP: no inline style attributes
   });

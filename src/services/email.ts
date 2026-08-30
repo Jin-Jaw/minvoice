@@ -434,8 +434,7 @@ export async function sendTestEmail(env: Bindings, db: D1Database, branchId: num
     items,
     settings,
     env.ASSETS,
-    logo,
-    `${env.APP_BASE_URL}/pay/${invoice.public_token}`
+    logo
   );
   await sendInvoiceEmail(env, invoice, settings, pdf, { hasLogo: !!logo });
   return settings.business_email;

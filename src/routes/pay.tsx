@@ -126,8 +126,7 @@ pay.get('/:token/pdf', async (c) => {
       items,
       settings,
       c.env.ASSETS,
-      logo,
-      `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+      logo
     ),
     invoicePdfFilename(settings.branch_id, invoice.issue_date)
   );

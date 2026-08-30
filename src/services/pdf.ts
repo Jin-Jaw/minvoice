@@ -111,8 +111,7 @@ export async function generateInvoicePdf(
   items: InvoiceItem[],
   settings: Settings,
   assets?: Fetcher,
-  logo?: Logo | null,
-  payUrl?: string
+  logo?: Logo | null
 ): Promise<Uint8Array> {
   const tag = resolveLocale(settings.locale, invoice.client_locale);
   const t = getStrings(tag);
@@ -146,7 +145,6 @@ export async function generateInvoicePdf(
     invoice.due_date ? date(invoice.due_date) : '',
     invoice.paid_at ? date(invoice.paid_at.slice(0, 10)) : '',
     money(invoice.total_cents),
-    payUrl ?? '',
     ...items.map((it) => it.description),
   ].join('');
   const needsUnicodeFonts = ![...documentText].every(
@@ -356,7 +354,7 @@ export async function generateInvoicePdf(
     }
   }
 
-  // ---- Footer pinned to every page: hairline, thanks left, pay link right ----
+  // ---- Footer pinned to every page: hairline and company thanks only ----
   const pages = doc.getPages();
   for (const p of pages) {
     ctx.page = p;
@@ -365,13 +363,6 @@ export async function generateInvoicePdf(
     ctx.y = 50;
     const thanks = t.footerThanks(settings.business_name || null);
     text(thanks, MARGIN, { size: 9, color: SOFT });
-    if (payUrl) {
-      const thanksW = ctx.regular.widthOfTextAtSize(sanitize(thanks, ctx.regular), 9);
-      const linkW = ctx.regular.widthOfTextAtSize(sanitize(payUrl, ctx.regular), 7.5);
-      // Long tokens overflow the shared baseline — drop the link a line down.
-      if (MARGIN + thanksW + 16 + linkW > COL.amountRight) ctx.y = 38;
-      text(payUrl, 0, { size: 7.5, color: ACCENT, rightAlignTo: COL.amountRight });
-    }
   }
 
   return doc.save();

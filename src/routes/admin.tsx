@@ -618,8 +618,7 @@ admin.post('/invoices/:id/status', async (c) => {
                 items,
                 settings,
                 c.env.ASSETS,
-                logo,
-                `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+                logo
               );
               if (sourcePdf) {
                 const filename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
@@ -774,8 +773,7 @@ admin.post('/invoices/:id/email-copy', async (c) => {
         items,
         settings,
         c.env.ASSETS,
-        logo,
-        `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+        logo
       );
       if (sourcePdf) {
         const filename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
@@ -820,8 +818,7 @@ admin.post('/invoices/:id/regenerate-pdf', async (c) => {
     items,
     settings,
     c.env.ASSETS,
-    logo,
-    `${c.env.APP_BASE_URL}/pay/${invoice.public_token}`
+    logo
   );
   const filename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
   await setInvoiceSourcePdf(c.env.DB, id, pdf, filename, true);
