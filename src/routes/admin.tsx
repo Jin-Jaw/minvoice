@@ -473,6 +473,9 @@ admin.get('/', async (c) => {
       emailed={c.req.query('emailed')}
       emailError={c.req.query('email_error')}
       emailEnabled={settings.email_provider !== 'none'}
+      gmailConnected={!!settings.gmail_address && !!settings.gmail_refresh_token}
+      gmailChecked={c.req.query('gmail_checked')}
+      gmailError={c.req.query('gmail_error')}
       today={todayInTz(settings.timezone)}
       warnings={(await configWarnings(c.env, settings))
         .filter((w) => w.category !== 'auth')
@@ -1857,12 +1860,16 @@ admin.post('/settings/gmail', async (c) => {
 });
 
 admin.post('/settings/gmail/check', async (c) => {
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  const returnToDashboard = body.return_to === '/admin';
   try {
     const result = await scanGmailPayments(c.env);
     const summary = `${result.checked} checked, ${result.paid} paid, ${result.review} review, ${result.ignored} ignored`;
+    if (returnToDashboard) return c.redirect(`/admin?gmail_checked=${encodeURIComponent(summary)}`);
     return c.redirect(`/admin/settings?gmail_checked=${encodeURIComponent(summary)}#gmail`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (returnToDashboard) return c.redirect(`/admin?gmail_error=${encodeURIComponent(message.slice(0, 200))}`);
     return c.redirect(`/admin/settings?gmail_error=${encodeURIComponent(message.slice(0, 200))}#gmail`);
   }
 });

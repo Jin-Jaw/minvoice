@@ -71,6 +71,9 @@ export function DashboardPage({
   emailed,
   emailError,
   emailEnabled,
+  gmailConnected,
+  gmailChecked,
+  gmailError,
   currentPath,
   nonce,
 }: {
@@ -89,6 +92,10 @@ export function DashboardPage({
   /** Delivery error surfaced without leaving the invoice list. */
   emailError?: string;
   emailEnabled: boolean;
+  gmailConnected: boolean;
+  /** Result of an on-demand Gmail payment check. */
+  gmailChecked?: string;
+  gmailError?: string;
   currentPath: string;
   nonce?: string;
 }) {
@@ -119,6 +126,18 @@ export function DashboardPage({
       <div class="page-head">
         <h1 class="page-title">Invoices</h1>
         <div class="actions">
+          <form method="post" action="/admin/settings/gmail/check">
+            <input type="hidden" name="return_to" value="/admin" />
+            <button
+              type="submit"
+              class="btn btn-secondary"
+              disabled={!gmailConnected}
+              title={gmailConnected ? 'Check trusted payment emails now' : 'Connect Gmail in Settings first'}
+            >
+              <Icon name="check-circle" />
+              Check Gmail now
+            </button>
+          </form>
           <a class="btn btn-primary" href="/admin/invoices/new">
             <Icon name="plus" />
             New invoice
@@ -130,6 +149,8 @@ export function DashboardPage({
       {paid ? <div class="banner banner-success">Invoice {paid} marked as paid.</div> : null}
       {emailed ? <div class="banner banner-success">Invoice emailed to {emailed}.</div> : null}
       {emailError ? <div class="banner banner-error">Email failed to send: {emailError}</div> : null}
+      {gmailChecked ? <div class="banner banner-success">Gmail check complete: {gmailChecked}.</div> : null}
+      {gmailError ? <div class="banner banner-error">Gmail check failed: {gmailError}</div> : null}
 
       <div class="banner">Showing invoices from both companies. Choose the issuing company when creating a new invoice.</div>
 
