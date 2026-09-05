@@ -8,6 +8,7 @@ const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const MAX_MESSAGES_PER_RUN = 25;
 const MAX_JSON_BYTES = 512 * 1024;
+const TRANSFER_FEE_TOLERANCE = 0.01;
 
 type GoogleTokenResponse = {
   access_token?: string;
@@ -141,16 +142,6 @@ function header(message: GmailMessage, name: string): string {
   return message.payload?.headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
 }
 
-function amountTokens(totalCents: number): string[] {
-  const plain = (totalCents / 100).toFixed(2);
-  const grouped = (totalCents / 100).toLocaleString('en-GB', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-    useGrouping: true,
-  });
-  return [...new Set([plain, grouped])];
-}
-
 const CURRENCY_SYMBOLS: Record<string, string[]> = {
   GBP: ['£'],
   EUR: ['€'],
@@ -163,35 +154,75 @@ function regexEscape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function containsExactPaymentAmount(text: string, invoice: GmailPaymentCandidate): boolean {
-  const code = invoice.currency.toUpperCase();
-  for (const amount of amountTokens(invoice.total_cents)) {
-    const escapedAmount = regexEscape(amount);
-    const amountEnd = '(?![0-9.,])';
-    if (
-      new RegExp(`(?:^|[^A-Z0-9])${regexEscape(code)}\\s*${escapedAmount}${amountEnd}`, 'i').test(text) ||
-      new RegExp(`(?:^|[^0-9.,])${escapedAmount}\\s*${regexEscape(code)}(?![A-Z0-9])`, 'i').test(text)
-    ) return true;
-    for (const symbol of CURRENCY_SYMBOLS[code] ?? []) {
-      if (new RegExp(`(?:^|[^A-Z])${regexEscape(symbol)}\\s*${escapedAmount}${amountEnd}`, 'i').test(text)) return true;
+type CurrencyAmount = { currency: string; cents: number };
+
+const AMOUNT_PATTERN = '[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{2})?';
+
+function toCents(value: string): number | null {
+  const amount = Number(value.replace(/,/g, ''));
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) : null;
+}
+
+function paymentAmounts(text: string): CurrencyAmount[] {
+  const found: CurrencyAmount[] = [];
+  for (const currency of Object.keys(CURRENCY_SYMBOLS)) {
+    const escapedCode = regexEscape(currency);
+    const patterns = [
+      new RegExp(`(?:^|[^A-Z0-9])${escapedCode}\\s*(${AMOUNT_PATTERN})(?![0-9]|[.,][0-9])`, 'gi'),
+      new RegExp(`(?:^|[^0-9.,])(${AMOUNT_PATTERN})\\s*${escapedCode}(?![A-Z0-9])`, 'gi'),
+    ];
+    for (const symbol of CURRENCY_SYMBOLS[currency] ?? []) {
+      patterns.push(new RegExp(`(?:^|[^A-Z])${regexEscape(symbol)}\\s*(${AMOUNT_PATTERN})(?![0-9]|[.,][0-9])`, 'gi'));
+    }
+    for (const pattern of patterns) {
+      for (const match of text.matchAll(pattern)) {
+        const cents = toCents(match[1]);
+        if (cents !== null) found.push({ currency, cents });
+      }
     }
   }
-  return false;
+  return found;
+}
+
+function withinTransferFee(receivedCents: number, invoiceCents: number): boolean {
+  return Math.abs(receivedCents - invoiceCents) <= Math.ceil(invoiceCents * TRANSFER_FEE_TOLERANCE);
+}
+
+function containsInvoiceNumber(text: string, invoice: GmailPaymentCandidate): boolean {
+  return new RegExp(`(?:^|[^A-Z0-9])${regexEscape(invoice.number)}(?=$|[^A-Z0-9])`, 'i').test(text);
 }
 
 export function matchGmailPayment(
   text: string,
   invoices: GmailPaymentCandidate[]
 ): { kind: 'paid'; invoice: GmailPaymentCandidate } | { kind: 'ignored' | 'review'; detail: string } {
-  const matches = invoices.filter(
-    (invoice) =>
-      invoice.status === 'sent' &&
-      new RegExp(`(?:^|[^A-Z0-9])${regexEscape(invoice.number)}(?=$|[^A-Z0-9])`, 'i').test(text) &&
-      containsExactPaymentAmount(text, invoice)
+  const amounts = paymentAmounts(text);
+  if (amounts.length === 0) {
+    return { kind: 'ignored', detail: 'no recognised payment amount and currency' };
+  }
+
+  const sent = invoices.filter((invoice) => invoice.status === 'sent');
+  const referenced = sent.filter((invoice) => containsInvoiceNumber(text, invoice));
+  if (referenced.length > 1) return { kind: 'review', detail: 'multiple invoice numbers in one payment message' };
+  if (referenced.length === 1) {
+    const invoice = referenced[0];
+    const sameCurrency = amounts.filter((amount) => amount.currency === invoice.currency.toUpperCase());
+    if (sameCurrency.length === 0 || sameCurrency.some((amount) => withinTransferFee(amount.cents, invoice.total_cents))) {
+      return { kind: 'paid', invoice };
+    }
+    return { kind: 'ignored', detail: 'referenced invoice amount exceeds the 1% transfer-fee allowance' };
+  }
+
+  const feeAdjusted = sent.filter((invoice) =>
+    amounts.some(
+      (amount) =>
+        amount.currency === invoice.currency.toUpperCase() &&
+        withinTransferFee(amount.cents, invoice.total_cents)
+    )
   );
-  if (matches.length === 1) return { kind: 'paid', invoice: matches[0] };
-  if (matches.length > 1) return { kind: 'review', detail: 'multiple exact invoice matches' };
-  return { kind: 'ignored', detail: 'no exact sent-invoice number, amount, and currency match' };
+  if (feeAdjusted.length === 1) return { kind: 'paid', invoice: feeAdjusted[0] };
+  if (feeAdjusted.length > 1) return { kind: 'review', detail: 'payment amount is close to multiple sent invoices' };
+  return { kind: 'ignored', detail: 'no sent-invoice reference or unique amount within the 1% transfer-fee allowance' };
 }
 
 function trustedSenderQuery(query: string): boolean {
@@ -251,7 +282,7 @@ async function recordGmailPayment(
         .bind(messageDate, invoice.id, invoice.total_cents, invoice.currency),
       db
         .prepare(
-          `UPDATE gmail_payment_events SET result = 'paid', detail = 'exact invoice number, amount, and currency match'
+          `UPDATE gmail_payment_events SET result = 'paid', detail = 'invoice reference or unique amount within transfer-fee allowance'
            WHERE message_id = ? AND EXISTS (SELECT 1 FROM payments WHERE provider_ref = ?)`
         )
         .bind(messageId, providerRef),

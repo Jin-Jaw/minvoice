@@ -494,9 +494,10 @@ export function SettingsPage({
       <div class="card" id="gmail">
         <h2>Gmail payment confirmations</h2>
         <p class="muted">
-          Read matching Gmail messages and automatically close a sent invoice only when its invoice
-          number, exact total, and currency all appear together. Email bodies are not stored, messages
-          are not marked read, and ambiguous matches stay open for review.
+          Read matching Gmail messages and automatically close a sent invoice when its reference is
+          present, including currency-converted receipts, or when one same-currency invoice is within
+          a 1% transfer-fee allowance. Email bodies are not stored, messages are not marked read, and
+          ambiguous matches stay open for review.
         </p>
 
         {settings.gmail_address ? (
@@ -526,7 +527,7 @@ export function SettingsPage({
                 checked={!!settings.gmail_enabled}
                 disabled={!settings.gmail_address}
               />
-              <span class="provider-toggle-name">Automatically mark exact matches paid</span>
+              <span class="provider-toggle-name">Automatically mark trusted payment matches paid</span>
             </label>
           </div>
           <div class="form-group">

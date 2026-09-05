@@ -227,9 +227,10 @@ npm run deploy
 
 The app can connect one Gmail mailbox with the read-only
 `gmail.readonly` scope and check it every five minutes for payment confirmations. It never marks
-messages read and never stores their subject or body. A sent invoice is marked paid only when one
-message contains exactly one invoice number plus that invoice's exact total and currency. Anything
-missing or ambiguous stays open for review.
+messages read and never stores their subject or body. A sent invoice is marked paid when a trusted
+message contains one invoice reference and a recognised payment amount (including currency-converted
+receipts), or when its same-currency amount uniquely matches within a 1% transfer-fee allowance.
+Anything missing or ambiguous stays open for review.
 
 1. In Google Cloud, enable the Gmail API and create an OAuth 2.0 **Web application** client.
 2. Add `https://your-invoice-host/admin/settings/gmail/callback` as an authorized redirect URI.
