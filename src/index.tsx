@@ -276,7 +276,7 @@ export default {
   scheduled(controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
     ctx.waitUntil(
       (async () => {
-        if (controller.cron === '*/5 * * * *') {
+        if (controller.cron === '0 * * * *') {
           try {
             const result = await scanGmailPayments(env);
             if (result.checked || result.paid || result.review) {

@@ -51,5 +51,5 @@
   },
   // Daily overdue-reminder check (15:00 UTC). Does nothing unless payment
   // reminders are switched on in Settings → Email.
-  "triggers": { "crons": ["*/5 * * * *", "0 15 * * *"] }
+  "triggers": { "crons": ["0 * * * *", "0 15 * * *"] }
 }
