@@ -8,7 +8,7 @@ const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const MAX_MESSAGES_PER_RUN = 25;
 const MAX_JSON_BYTES = 512 * 1024;
-const TRANSFER_FEE_TOLERANCE = 0.01;
+const TRANSFER_FEE_TOLERANCE = 0.02;
 
 type GoogleTokenResponse = {
   access_token?: string;
@@ -210,7 +210,7 @@ export function matchGmailPayment(
     if (sameCurrency.length === 0 || sameCurrency.some((amount) => withinTransferFee(amount.cents, invoice.total_cents))) {
       return { kind: 'paid', invoice };
     }
-    return { kind: 'ignored', detail: 'referenced invoice amount exceeds the 1% transfer-fee allowance' };
+    return { kind: 'ignored', detail: 'referenced invoice amount exceeds the 2% transfer-fee allowance' };
   }
 
   const feeAdjusted = sent.filter((invoice) =>
@@ -222,7 +222,7 @@ export function matchGmailPayment(
   );
   if (feeAdjusted.length === 1) return { kind: 'paid', invoice: feeAdjusted[0] };
   if (feeAdjusted.length > 1) return { kind: 'review', detail: 'payment amount is close to multiple sent invoices' };
-  return { kind: 'ignored', detail: 'no sent-invoice reference or unique amount within the 1% transfer-fee allowance' };
+  return { kind: 'ignored', detail: 'no sent-invoice reference or unique amount within the 2% transfer-fee allowance' };
 }
 
 function trustedSenderQuery(query: string): boolean {

@@ -63,7 +63,15 @@ describe('matchGmailPayment', () => {
         invoice(),
         invoice({ id: 43, number: 'INV-0043', total_cents: 50000 }),
       ])
-    ).toEqual({ kind: 'ignored', detail: 'referenced invoice amount exceeds the 1% transfer-fee allowance' });
+    ).toEqual({ kind: 'ignored', detail: 'referenced invoice amount exceeds the 2% transfer-fee allowance' });
+  });
+
+  it('accepts a unique same-currency payment up to the 2% transfer-fee limit', () => {
+    expect(matchGmailPayment('Payment received: GBP 1,210.00', [invoice()]).kind).toBe('paid');
+  });
+
+  it('rejects a same-currency payment beyond the 2% transfer-fee limit', () => {
+    expect(matchGmailPayment('Payment received: GBP 1,200.00', [invoice()]).kind).toBe('ignored');
   });
 
   it('does not match an invoice number embedded inside a longer token', () => {

@@ -496,7 +496,7 @@ export function SettingsPage({
         <p class="muted">
           Read matching Gmail messages and automatically close a sent invoice when its reference is
           present, including currency-converted receipts, or when one same-currency invoice is within
-          a 1% transfer-fee allowance. Email bodies are not stored, messages are not marked read, and
+          a 2% transfer-fee allowance. Email bodies are not stored, messages are not marked read, and
           ambiguous matches stay open for review.
         </p>
 
