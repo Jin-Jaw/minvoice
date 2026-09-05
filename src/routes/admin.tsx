@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { getCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { AppEnv } from '../env';
 import {
   formatCents,
@@ -13,7 +13,8 @@ import { configWarnings, secretConfigured } from '../lib/config';
 import { accentUsable, safeAccent } from '../lib/color';
 import { effectiveProviderEnv, encryptStoredSecrets, keySource } from '../lib/providers';
 import { sealIfKeyed, unbox, validMasterKey } from '../lib/secretbox';
-import { isLocalRequest } from '../lib/admin-auth';
+import { isLocalRequest, timingSafeEqual } from '../lib/admin-auth';
+import { exchangeGmailCode, gmailAuthorizationUrl, scanGmailPayments } from '../services/gmail-payments';
 import { parseSchedule } from '../lib/reminders';
 import { invoicePdfFilename } from '../lib/invoice-filename';
 import { isIsoDate, prepareExpenseAttachment } from '../lib/expenses';
@@ -79,6 +80,9 @@ import {
   updateInvoice,
   setNextInvoiceNumber,
   setResendApiKey,
+  setGmailConnection,
+  updateGmailSettings,
+  clearGmailConnection,
   updateEmailSettings,
   updateSettings,
   type ItemDraft,
@@ -1656,6 +1660,10 @@ admin.get('/settings', async (c) => {
   const resendKept = c.req.query('resend_kept') === '1';
   const secretSaveBlocked = c.req.query('secret_key_required') === '1';
   const accentKeptQ = c.req.query('accent_kept') === '1';
+  const gmailConnected = c.req.query('gmail_connected') === '1';
+  const gmailDisconnected = c.req.query('gmail_disconnected') === '1';
+  const gmailError = c.req.query('gmail_error') ?? null;
+  const gmailChecked = c.req.query('gmail_checked') ?? null;
   // Masked-field hints show the last 4 chars of the real key, so boxed values
   // are opened first; undecryptable ones fall back to '' (alert explains why).
   const tail = async (v: string) => {
@@ -1681,6 +1689,10 @@ admin.get('/settings', async (c) => {
       resendKept={resendKept}
       secretSaveBlocked={secretSaveBlocked}
       accentKept={accentKeptQ}
+      gmailConnected={gmailConnected}
+      gmailDisconnected={gmailDisconnected}
+      gmailError={gmailError}
+      gmailChecked={gmailChecked}
       alerts={await configWarnings(c.env, settings)}
       theme={themeCookie(c)}
       nonce={c.get('secureHeadersNonce')}
@@ -1781,4 +1793,81 @@ admin.post('/settings/test-email', async (c) => {
     const msg = e instanceof Error ? e.message : String(e);
     return c.redirect(`/admin/settings?email_test_err=${encodeURIComponent(msg.slice(0, 200))}`);
   }
+});
+
+const GMAIL_STATE_COOKIE = 'gmail_oauth_state';
+
+admin.get('/settings/gmail/connect', (c) => {
+  if (!validMasterKey(c.env.SETTINGS_MASTER_KEY)) {
+    return c.redirect('/admin/settings?gmail_error=' + encodeURIComponent('SETTINGS_MASTER_KEY is required before Gmail can be connected.') + '#gmail');
+  }
+  try {
+    const state = crypto.randomUUID();
+    setCookie(c, GMAIL_STATE_COOKIE, state, {
+      path: '/admin/settings/gmail',
+      httpOnly: true,
+      secure: new URL(c.req.url).protocol === 'https:',
+      sameSite: 'Lax',
+      maxAge: 10 * 60,
+    });
+    return c.redirect(gmailAuthorizationUrl(c.env, state));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.redirect(`/admin/settings?gmail_error=${encodeURIComponent(message.slice(0, 200))}#gmail`);
+  }
+});
+
+admin.get('/settings/gmail/callback', async (c) => {
+  const expected = getCookie(c, GMAIL_STATE_COOKIE) ?? '';
+  const actual = c.req.query('state') ?? '';
+  deleteCookie(c, GMAIL_STATE_COOKIE, { path: '/admin/settings/gmail' });
+  if (!expected || !actual || !(await timingSafeEqual(expected, actual))) {
+    return c.redirect('/admin/settings?gmail_error=' + encodeURIComponent('Gmail connection state was missing or expired. Try connecting again.') + '#gmail');
+  }
+  if (c.req.query('error')) {
+    return c.redirect('/admin/settings?gmail_error=' + encodeURIComponent('Google access was not granted.') + '#gmail');
+  }
+  const code = c.req.query('code');
+  if (!code) return c.redirect('/admin/settings?gmail_error=' + encodeURIComponent('Google did not return an authorization code.') + '#gmail');
+  try {
+    const connection = await exchangeGmailCode(c.env, code);
+    await setGmailConnection(c.env.DB, {
+      refreshToken: await sealIfKeyed(c.env.SETTINGS_MASTER_KEY, connection.refreshToken),
+      address: connection.address,
+    });
+    return c.redirect('/admin/settings?gmail_connected=1#gmail');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.redirect(`/admin/settings?gmail_error=${encodeURIComponent(message.slice(0, 200))}#gmail`);
+  }
+});
+
+admin.post('/settings/gmail', async (c) => {
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  const query = (body.gmail_query ?? '').trim();
+  if (query.length > 500 || !/(?:^|\s|\{)from:[^\s{}]+@[^\s{}]+/i.test(query)) {
+    return c.redirect('/admin/settings?gmail_error=' + encodeURIComponent('The Gmail search must be under 500 characters and include a trusted from: sender email address.') + '#gmail');
+  }
+  const current = await getSettings(c.env.DB, c.get('branchId'));
+  await updateGmailSettings(c.env.DB, {
+    enabled: !!body.gmail_enabled && !!current.gmail_address && !!current.gmail_refresh_token,
+    query,
+  });
+  return c.redirect('/admin/settings?saved=1#gmail');
+});
+
+admin.post('/settings/gmail/check', async (c) => {
+  try {
+    const result = await scanGmailPayments(c.env);
+    const summary = `${result.checked} checked, ${result.paid} paid, ${result.review} review, ${result.ignored} ignored`;
+    return c.redirect(`/admin/settings?gmail_checked=${encodeURIComponent(summary)}#gmail`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.redirect(`/admin/settings?gmail_error=${encodeURIComponent(message.slice(0, 200))}#gmail`);
+  }
+});
+
+admin.post('/settings/gmail/disconnect', async (c) => {
+  await clearGmailConnection(c.env.DB);
+  return c.redirect('/admin/settings?gmail_disconnected=1#gmail');
 });

@@ -19,6 +19,7 @@ import {
   recordLoginAttempt,
 } from './db/queries';
 import { processEmailOutbox } from './services/outbox';
+import { scanGmailPayments } from './services/gmail-payments';
 import { LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MINUTES, MAX_OUTBOX_ATTEMPTS } from './lib/outbox';
 import { generateInvoicePdf, pdfResponse } from './services/pdf';
 import { sendErrorAlert } from './services/email';
@@ -272,9 +273,25 @@ export default {
   // Daily cron (wrangler.jsonc triggers): enqueue due reminders (opt-in via
   // Settings), drain the email outbox (delivers reminders + retries any
   // email notifications that failed their immediate attempt), then housekeeping.
-  scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
+  scheduled(controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
     ctx.waitUntil(
       (async () => {
+        if (controller.cron === '*/5 * * * *') {
+          try {
+            const result = await scanGmailPayments(env);
+            if (result.checked || result.paid || result.review) {
+              console.log(JSON.stringify({ message: 'gmail payment scan complete', ...result }));
+            }
+          } catch (error) {
+            console.error(
+              JSON.stringify({
+                message: 'gmail payment scan failed',
+                error: error instanceof Error ? error.message : String(error),
+              })
+            );
+          }
+          return;
+        }
         await sendOverdueReminders(env);
         await processEmailOutbox(env);
         await purgeOldOutbox(env.DB, MAX_OUTBOX_ATTEMPTS);

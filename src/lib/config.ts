@@ -62,6 +62,20 @@ export async function configWarnings(
       push('email', 'No email From address set (Settings) — invoice and receipt emails will fail.');
     }
   }
+  if (settings.gmail_enabled) {
+    if (!secretConfigured(env.GMAIL_CLIENT_ID) || !secretConfigured(env.GMAIL_CLIENT_SECRET)) {
+      push('email', 'Gmail payment matching is enabled but its Google OAuth client secrets are missing.');
+    }
+    if (!settings.gmail_address || !settings.gmail_refresh_token) {
+      push('email', 'Gmail payment matching is enabled but no Gmail account is connected.');
+    }
+    if (!/(?:^|\s|\{)from:[^\s{}]+@[^\s{}]+/i.test(settings.gmail_query)) {
+      push('email', 'Gmail payment matching needs a trusted from: sender email address before it can run.');
+    }
+    if (!validMasterKey(env.SETTINGS_MASTER_KEY)) {
+      push('auth', 'Gmail requires SETTINGS_MASTER_KEY so its refresh token stays encrypted at rest.');
+    }
+  }
   if (authMode(env) === 'password') {
     push('auth', 'Admin login is password-based — configure Cloudflare Access for stronger auth (it takes over automatically).');
   }

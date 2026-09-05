@@ -34,6 +34,10 @@ export function SettingsPage({
   resendKept,
   secretSaveBlocked,
   accentKept,
+  gmailConnected,
+  gmailDisconnected,
+  gmailError,
+  gmailChecked,
   alerts = [],
   theme = 'auto',
   nonce,
@@ -51,6 +55,10 @@ export function SettingsPage({
   resendKept?: boolean;
   secretSaveBlocked?: boolean;
   accentKept?: boolean;
+  gmailConnected?: boolean;
+  gmailDisconnected?: boolean;
+  gmailError?: string | null;
+  gmailChecked?: string | null;
   alerts?: ConfigWarning[];
   /** From the per-browser theme cookie, not Settings (D1) — see /settings/appearance */
   theme?: 'auto' | 'light' | 'dark';
@@ -108,12 +116,17 @@ export function SettingsPage({
           again. The previous provider was kept.
         </div>
       ) : null}
+      {gmailConnected ? <div class="banner banner-success">Gmail connected with read-only access.</div> : null}
+      {gmailDisconnected ? <div class="banner banner-success">Gmail disconnected from this app.</div> : null}
+      {gmailError ? <div class="banner banner-error">Gmail: {gmailError}</div> : null}
+      {gmailChecked ? <div class="banner banner-success">Gmail check complete: {gmailChecked}.</div> : null}
 
       <nav class="filter-tabs settings-nav">
         {alerts.length ? <a href="#alerts">Alerts</a> : null}
         <a href="#business">Business</a>
         <a href="#invoicing">Invoicing</a>
         <a href="#email">Email</a>
+        <a href="#gmail">Gmail payments</a>
         <a href="#payments">Payments</a>
         <a href="#appearance">Appearance</a>
       </nav>
@@ -476,6 +489,73 @@ export function SettingsPage({
             </span>
           </div>
         </form>
+      </div>
+
+      <div class="card" id="gmail">
+        <h2>Gmail payment confirmations</h2>
+        <p class="muted">
+          Read matching Gmail messages and automatically close a sent invoice only when its invoice
+          number, exact total, and currency all appear together. Email bodies are not stored, messages
+          are not marked read, and ambiguous matches stay open for review.
+        </p>
+
+        {settings.gmail_address ? (
+          <div class="banner banner-success mt-2">Connected to {settings.gmail_address}</div>
+        ) : (
+          <div class="banner banner-warning mt-2">No Gmail account connected.</div>
+        )}
+
+        <div class="actions mt-2">
+          <a href="/admin/settings/gmail/connect" class="btn btn-secondary">
+            {settings.gmail_address ? 'Reconnect Gmail' : 'Connect Gmail'}
+          </a>
+          {settings.gmail_address ? (
+            <form method="post" action="/admin/settings/gmail/disconnect">
+              <button type="submit" class="btn btn-danger">Disconnect</button>
+            </form>
+          ) : null}
+        </div>
+
+        <form method="post" action="/admin/settings/gmail" class="mt-2">
+          <div class="form-group provider-toggle">
+            <label>
+              <input
+                type="checkbox"
+                id="gmail_enabled"
+                name="gmail_enabled"
+                checked={!!settings.gmail_enabled}
+                disabled={!settings.gmail_address}
+              />
+              <span class="provider-toggle-name">Automatically mark exact matches paid</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label for="gmail_query">Trusted payment-email search</label>
+            <input
+              type="text"
+              id="gmail_query"
+              name="gmail_query"
+              value={settings.gmail_query}
+              placeholder={'from:payments@your-bank.example newer_than:30d {"payment received" paid}'}
+              maxlength={500}
+              required
+            />
+            <span class="muted">
+              Gmail search syntax. A <code>from:</code> sender email address is mandatory so arbitrary inbox
+              messages cannot change invoice records.
+            </span>
+          </div>
+          <div class="actions">
+            <button type="submit" class="btn btn-primary">Save Gmail settings</button>
+            {settings.gmail_last_checked_at ? <span class="muted">Last checked {settings.gmail_last_checked_at} UTC</span> : null}
+          </div>
+        </form>
+
+        {settings.gmail_address ? (
+          <form method="post" action="/admin/settings/gmail/check" class="mt-2">
+            <button type="submit" class="btn btn-secondary">Check Gmail now</button>
+          </form>
+        ) : null}
       </div>
 
       <div class="card" id="appearance">

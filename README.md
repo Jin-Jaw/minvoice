@@ -223,6 +223,31 @@ npx wrangler secret put RESEND_API_KEY          # if using Resend for email
 npm run deploy
 ```
 
+### Gmail payment confirmations (optional)
+
+The app can connect one Gmail mailbox with the read-only
+`gmail.readonly` scope and check it every five minutes for payment confirmations. It never marks
+messages read and never stores their subject or body. A sent invoice is marked paid only when one
+message contains exactly one invoice number plus that invoice's exact total and currency. Anything
+missing or ambiguous stays open for review.
+
+1. In Google Cloud, enable the Gmail API and create an OAuth 2.0 **Web application** client.
+2. Add `https://your-invoice-host/admin/settings/gmail/callback` as an authorized redirect URI.
+3. Store the client credentials and an encryption key as Worker secrets:
+
+```sh
+npx wrangler secret put GMAIL_CLIENT_ID
+npx wrangler secret put GMAIL_CLIENT_SECRET
+npx wrangler secret put SETTINGS_MASTER_KEY
+```
+
+4. Deploy, then open **Settings → Gmail payments → Connect Gmail**.
+5. Save a Gmail query containing a trusted `from:` filter, for example
+   `from:payments@your-bank.example newer_than:30d {"payment received" paid}`.
+
+The OAuth refresh token is envelope-encrypted in D1. Processed Gmail message ids are retained for
+deduplication and audit, but email content is not persisted.
+
 Register webhooks pointing at your domain:
 
 - Stripe → `https://yourhost/webhooks/stripe`, events `checkout.session.completed` and

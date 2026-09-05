@@ -37,9 +37,9 @@
   "observability": {
     "enabled": true
   },
-  // Daily overdue-reminder check (15:00 UTC). Does nothing unless payment
-  // reminders are switched on in Settings → Email.
-  "triggers": { "crons": ["0 15 * * *"] },
+  // Gmail payment checks every five minutes; daily reminders at 15:00 UTC.
+  // Each job is a no-op until its corresponding Settings toggle is enabled.
+  "triggers": { "crons": ["*/5 * * * *", "0 15 * * *"] },
 
   // Staging: sandbox providers, separate D1, own hostname. Deploy with
   // `npm run deploy:test`. Bindings don't inherit — everything is respecified.
@@ -65,7 +65,7 @@
         "PAYPAL_API_BASE": "https://api-m.sandbox.paypal.com"
       },
       "observability": { "enabled": true },
-      "triggers": { "crons": ["0 15 * * *"] }
+      "triggers": { "crons": ["*/5 * * * *", "0 15 * * *"] }
     }
   }
 }

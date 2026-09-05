@@ -45,19 +45,25 @@ describe('sendTestEmail', () => {
       },
     } as unknown as SendEmail;
 
+    const sampleMonth = new Intl.DateTimeFormat('en-GB', {
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'Europe/London',
+    }).format(new Date());
+    const sampleFilename = `JinJawLTD_Invoice_${sampleMonth.replace(' ', '_')}.pdf`;
     const to = await sendTestEmail({ ...env, EMAIL }, DB, 1);
     expect(to).toBe('owner@example.test');
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('owner@example.test');
-    expect(sent[0].subject).toBe('August 2026 Invoice from Test Biz');
+    expect(sent[0].subject).toBe(`${sampleMonth} Invoice from Test Biz`);
     expect(sent[0].from?.email).toBe('contact@jin-jaw.co.uk');
     // The real PDF rides along (ASCII sample -> fast WinAnsi path -> compact file)
     expect(sent[0].attachments).toHaveLength(1);
-    expect(sent[0].attachments![0].filename).toBe('JinJawLTD_Invoice_August_2026.pdf');
+    expect(sent[0].attachments![0].filename).toBe(sampleFilename);
     expect(sent[0].attachments![0].content.length).toBeGreaterThan(1000);
     expect(sent[0].text).toContain('Test Biz has sent you an invoice for');
     expect(sent[0].text).not.toContain('A PDF copy is attached');
-    expect(sent[0].html).toContain('JinJawLTD_Invoice_August_2026.pdf attached below');
+    expect(sent[0].html).toContain(`${sampleFilename} attached below`);
     expect(sent[0].html).not.toContain('123 Map Street');
     expect(sent[0].html).toContain('src="https://jin-jaw.co.uk/assets/jinjaw-square.png"');
     expect(sent[0].html).toContain('object-fit: cover; border-radius: 8px;');

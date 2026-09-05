@@ -37,6 +37,11 @@ export type Settings = {
   paypal_webhook_id: string;
   paypal_environment: 'live' | 'sandbox';
   resend_api_key: string;
+  gmail_enabled: number;
+  gmail_refresh_token: string;
+  gmail_address: string;
+  gmail_query: string;
+  gmail_last_checked_at: string | null;
   payment_terms_days: number; // 0 = no default due date
   setup_complete: number; // 0 -> first-launch wizard gates /admin
 };
@@ -252,6 +257,11 @@ export async function updateSettings(
     | 'paypal_webhook_id'
     | 'paypal_environment'
     | 'resend_api_key'
+    | 'gmail_enabled'
+    | 'gmail_refresh_token'
+    | 'gmail_address'
+    | 'gmail_query'
+    | 'gmail_last_checked_at'
     | 'reminders_enabled'
     | 'reminder_schedule'
     | 'last_seen_origin'
@@ -380,12 +390,47 @@ export const SECRET_SETTINGS_COLUMNS = [
   'stripe_webhook_secret',
   'paypal_client_secret',
   'resend_api_key',
+  'gmail_refresh_token',
 ] as const;
 export type SecretSettingsColumn = (typeof SECRET_SETTINGS_COLUMNS)[number];
 
 export async function setSecretSetting(db: D1Database, column: SecretSettingsColumn, value: string): Promise<void> {
   // column is compile-time constrained to the whitelist above
   await db.prepare(`UPDATE settings SET ${column} = ? WHERE id = 1`).bind(value).run();
+}
+
+export async function setGmailConnection(
+  db: D1Database,
+  connection: { refreshToken: string; address: string }
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE settings
+       SET gmail_refresh_token = ?, gmail_address = ?, gmail_enabled = 1
+       WHERE id = 1`
+    )
+    .bind(connection.refreshToken, connection.address)
+    .run();
+}
+
+export async function updateGmailSettings(
+  db: D1Database,
+  settings: { enabled: boolean; query: string }
+): Promise<void> {
+  await db
+    .prepare('UPDATE settings SET gmail_enabled = ?, gmail_query = ? WHERE id = 1')
+    .bind(settings.enabled ? 1 : 0, settings.query)
+    .run();
+}
+
+export async function clearGmailConnection(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE settings
+       SET gmail_enabled = 0, gmail_refresh_token = '', gmail_address = '', gmail_last_checked_at = NULL
+       WHERE id = 1`
+    )
+    .run();
 }
 
 export async function setNextInvoiceNumber(db: D1Database, branchId: number, n: number): Promise<void> {
