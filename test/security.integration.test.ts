@@ -128,4 +128,81 @@ describe('browser and public-route hardening', () => {
       await DB.prepare('DELETE FROM branches WHERE id = ?').bind(branch!.id).run();
     }
   });
+
+  it('switches workspaces explicitly and keeps invoices and clients isolated', async () => {
+    const authCookie = await loginCookie();
+    const propertyBranch = await DB.prepare(
+      `SELECT id FROM branches WHERE workspace_id = 2 AND active = 1 ORDER BY id LIMIT 1`
+    ).first<{ id: number }>();
+    expect(propertyBranch).not.toBeNull();
+
+    const jinjawClientId = await createClient(DB, {
+      name: 'JinJaw Only Client',
+      email: 'jinjaw-only@example.test',
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    }, 1);
+    const propertyClientId = await createClient(DB, {
+      name: 'Property Only Client',
+      email: 'property-only@example.test',
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    }, 2);
+
+    await createInvoice(DB, 1, {
+      client_id: jinjawClientId,
+      issue_date: '2026-09-21',
+      due_date: null,
+      subject: 'JinJaw Only Invoice',
+      notes: null,
+      items: [{ description: 'JinJaw work', quantity: 1, unit_price_cents: 10000 }],
+    });
+    await createInvoice(DB, propertyBranch!.id, {
+      client_id: propertyClientId,
+      issue_date: '2026-09-21',
+      due_date: null,
+      subject: 'Property Only Invoice',
+      notes: null,
+      items: [{ description: 'Property work', quantity: 1, unit_price_cents: 20000 }],
+    });
+
+    const switchResponse = await exports.default.fetch(
+      new Request('https://invoice.test/admin/workspace', {
+        method: 'POST',
+        headers: {
+          cookie: authCookie,
+          'content-type': 'application/x-www-form-urlencoded',
+          'sec-fetch-site': 'same-origin',
+        },
+        body: 'workspace_id=2',
+        redirect: 'manual',
+      })
+    );
+    expect(switchResponse.status).toBe(302);
+    expect(switchResponse.headers.get('location')).toBe('/admin?workspace=2');
+
+    const propertyInvoices = await exports.default.fetch(
+      new Request('https://invoice.test/admin?workspace=2', { headers: { cookie: authCookie } })
+    );
+    const propertyInvoiceHtml = await propertyInvoices.text();
+    expect(propertyInvoices.status).toBe(200);
+    expect(propertyInvoiceHtml).toContain('Property Only Invoice');
+    expect(propertyInvoiceHtml).not.toContain('JinJaw Only Invoice');
+
+    const propertyClients = await exports.default.fetch(
+      new Request('https://invoice.test/admin/clients?workspace=2', { headers: { cookie: authCookie } })
+    );
+    const propertyClientHtml = await propertyClients.text();
+    expect(propertyClientHtml).toContain('Property Only Client');
+    expect(propertyClientHtml).not.toContain('JinJaw Only Client');
+
+    const jinjawInvoices = await exports.default.fetch(
+      new Request('https://invoice.test/admin?workspace=1', { headers: { cookie: authCookie } })
+    );
+    const jinjawInvoiceHtml = await jinjawInvoices.text();
+    expect(jinjawInvoiceHtml).toContain('JinJaw Only Invoice');
+    expect(jinjawInvoiceHtml).not.toContain('Property Only Invoice');
+  });
 });

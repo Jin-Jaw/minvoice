@@ -33,11 +33,15 @@ export const branchContext = createMiddleware<AppEnv>(async (c, next) => {
   const workspaces = await listWorkspaces(c.env.DB);
   if (workspaces.length === 0) return c.text('No workspace is configured.', 503);
 
-  const requestedWorkspace = Number(getCookie(c, WORKSPACE_COOKIE));
+  const queryWorkspace = Number(c.req.query('workspace'));
+  const cookieWorkspace = Number(getCookie(c, WORKSPACE_COOKIE));
+  const requestedWorkspace = Number.isInteger(queryWorkspace) && queryWorkspace > 0
+    ? queryWorkspace
+    : cookieWorkspace;
   const workspace = workspaces.find((candidate) => candidate.id === requestedWorkspace) ?? workspaces[0];
   c.set('workspaceId', workspace.id);
   c.set('workspaceName', workspace.name);
-  if (workspace.id !== requestedWorkspace) selectWorkspace(c, workspace.id);
+  if (workspace.id !== cookieWorkspace) selectWorkspace(c, workspace.id);
 
   const branches = await listBranches(c.env.DB, workspace.id);
   if (branches.length === 0) return c.text('No invoice branch is configured.', 503);

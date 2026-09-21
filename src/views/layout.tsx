@@ -81,7 +81,7 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
               </button>
               <nav class="site-nav" id="site-nav">
                 {NAV_LINKS.map((l) => (
-                  <a href={l.href} class={currentPath === l.href ? 'active' : ''}>
+                  <a href={l.href} class={currentPath === l.href ? 'active' : ''} data-workspace-nav>
                     {l.label}
                   </a>
                 ))}
@@ -130,7 +130,7 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
   document.addEventListener('change', function (event) {
     var control = event.target;
     if (control instanceof HTMLSelectElement && control.hasAttribute('data-submit-on-change')) {
-      control.form && control.form.submit();
+      control.form && control.form.requestSubmit();
     }
     if (control instanceof HTMLInputElement && control.type === 'file' && control.hasAttribute('data-auto-upload') && control.files && control.files.length) {
       control.form && control.form.requestSubmit();
@@ -156,9 +156,18 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
     });
   });
 
-  var workspace = document.cookie.match(/(?:^|; )jj_invoice_workspace=(\d+)/);
+  var workspaceParam = new URLSearchParams(window.location.search).get('workspace');
+  var workspaceCookie = document.cookie.match(/(?:^|; )jj_invoice_workspace=(\d+)/);
+  var workspace = workspaceParam || (workspaceCookie && workspaceCookie[1]);
   var workspaceSelect = document.getElementById('workspace-select');
-  if (workspace && workspaceSelect) workspaceSelect.value = workspace[1];
+  if (workspace && workspaceSelect) workspaceSelect.value = workspace;
+  if (workspace) {
+    document.querySelectorAll('[data-workspace-nav]').forEach(function (link) {
+      var url = new URL(link.href, window.location.origin);
+      url.searchParams.set('workspace', workspace);
+      link.href = url.pathname + url.search;
+    });
+  }
 })();
 `,
             }}

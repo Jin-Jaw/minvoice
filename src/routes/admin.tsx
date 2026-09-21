@@ -118,7 +118,7 @@ admin.post('/workspace', async (c) => {
   if (!branch) return c.text('That workspace has no company configured.', 409);
   selectWorkspace(c, workspace.id);
   selectBranch(c, branch.id);
-  return c.redirect('/admin');
+  return c.redirect(`/admin?workspace=${workspace.id}`);
 });
 
 // ---------- First-launch setup wizard ----------
