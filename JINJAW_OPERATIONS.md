@@ -69,6 +69,13 @@ client and financial data.
 
 ## Routine maintenance
 
+Every push to `main` runs type-checking, tests, and a Worker dry run in GitHub
+Actions. Production deploys only after all three checks pass. The deploy job
+applies pending D1 migrations, publishes the Worker, and verifies that the
+settings encryption key exists. GitHub stores the Cloudflare credentials as
+the `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository secrets;
+never add either value to the repository.
+
 - `npm ci` — install the audited lockfile.
 - `npm test` — run the unit and D1 integration suite.
 - `npm run typecheck` — type-check Worker and tests.
