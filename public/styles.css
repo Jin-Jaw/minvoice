@@ -201,6 +201,21 @@ h2 {
   text-decoration: none;
 }
 
+.workspace-switcher {
+  margin: 0;
+}
+
+.workspace-switcher select {
+  width: auto;
+  min-width: 180px;
+  max-width: 240px;
+  padding: 8px 34px 8px 11px;
+  border-color: var(--line-strong);
+  background-color: var(--paper);
+  font-size: 14px;
+  font-weight: 650;
+}
+
 .site-nav {
   display: flex;
   align-items: center;
@@ -1554,6 +1569,88 @@ textarea::placeholder {
 .evidence-upload .form-group {
   flex: 1;
   margin-bottom: 0;
+}
+
+.expense-evidence-cell {
+  min-width: 145px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  border-radius: var(--radius-sm);
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.expense-evidence-cell.is-dragging,
+.evidence-dropzone.is-dragging {
+  background: var(--green-tint);
+  box-shadow: 0 0 0 2px var(--green);
+}
+
+.badge-missing {
+  color: var(--rust);
+  background: color-mix(in srgb, var(--rust) 10%, transparent);
+}
+
+.quick-evidence-form {
+  margin: 0;
+}
+
+.quick-evidence-form input,
+.evidence-dropzone input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.quick-evidence-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--green-deep);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.quick-evidence-action:hover {
+  text-decoration: underline;
+}
+
+.evidence-dropzone {
+  display: block;
+  border: 2px dashed var(--line-strong);
+  border-radius: var(--radius);
+  padding: 0;
+  background: var(--paper);
+}
+
+.evidence-dropzone > label {
+  min-height: 132px;
+  margin: 0;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--ink-soft);
+  text-align: center;
+  cursor: pointer;
+}
+
+.evidence-dropzone > label strong {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.evidence-dropzone > label span {
+  font-size: 13px;
+  font-weight: 400;
 }
 
 /* Inline action rows (record payment, sent date, pay link): button sits on

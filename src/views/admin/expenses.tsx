@@ -85,11 +85,26 @@ export function ExpensesPage({
                 <td data-label="Category">{expense.category}</td>
                 <td data-label="Company">{expense.branch_name}</td>
                 <td data-label="Evidence">
-                  {expense.attachment_count ? (
-                    <a href={`/admin/expenses/${expense.id}#evidence`}>
-                      {expense.attachment_count} file{expense.attachment_count === 1 ? '' : 's'}
-                    </a>
-                  ) : <span class="muted">—</span>}
+                  <div class={`expense-evidence-cell ${expense.attachment_count ? '' : 'is-missing'}`} data-evidence-drop>
+                    {expense.attachment_count ? (
+                      <a href={`/admin/expenses/${expense.id}#evidence`}>
+                        {expense.attachment_count} file{expense.attachment_count === 1 ? '' : 's'}
+                      </a>
+                    ) : <span class="badge badge-missing">Missing invoice</span>}
+                    <form method="post" action={`/admin/expenses/${expense.id}/attachments`} enctype="multipart/form-data" class="quick-evidence-form">
+                      <input
+                        id={`quick-evidence-${expense.id}`}
+                        name="evidence"
+                        type="file"
+                        required
+                        data-auto-upload
+                        accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp"
+                      />
+                      <label class="quick-evidence-action" for={`quick-evidence-${expense.id}`}>
+                        <Icon name="upload" /> Upload evidence
+                      </label>
+                    </form>
+                  </div>
                 </td>
                 <td class="text-right" data-label="Amount">{formatCents(expense.amount_cents, expense.currency)}</td>
                 <td class="row-actions">
@@ -329,14 +344,14 @@ export function ExpenseFormPage({
                 </div>
               ))}
             </div>
-          ) : <p>No evidence attached yet.</p>}
-          <form method="post" action={`/admin/expenses/${expense.id}/attachments`} enctype="multipart/form-data" class="evidence-upload">
-            <div class="form-group">
-              <label for="additional_evidence">Add evidence</label>
-              <input id="additional_evidence" name="evidence" type="file" required accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" />
-              <span class="muted">PDF, JPG, PNG, or WebP · maximum 1.5 MB per file.</span>
-            </div>
-            <button type="submit" class="btn btn-secondary">Upload file</button>
+          ) : <div class="banner banner-warning"><strong>Missing invoice.</strong> Drop the supplier invoice below to complete this expense record.</div>}
+          <form method="post" action={`/admin/expenses/${expense.id}/attachments`} enctype="multipart/form-data" class="evidence-upload evidence-dropzone" data-evidence-drop>
+            <input id="additional_evidence" name="evidence" type="file" required data-auto-upload accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" />
+            <label for="additional_evidence">
+              <Icon name="upload" />
+              <strong>Drop an invoice or receipt here</strong>
+              <span>or choose a PDF, JPG, PNG, or WebP · maximum 1.5 MB</span>
+            </label>
           </form>
         </div>
       ) : null}

@@ -43,6 +43,7 @@ export type Settings = {
 
 export type Branch = {
   id: number;
+  workspace_id: number;
   name: string;
   business_address: string;
   business_email: string | null;
@@ -56,8 +57,16 @@ export type Branch = {
   created_at: string;
 };
 
+export type Workspace = {
+  id: number;
+  name: string;
+  slug: string;
+  created_at: string;
+};
+
 export type Client = {
   id: number;
+  workspace_id: number;
   name: string;
   email: string | null;
   address: string | null;
@@ -191,8 +200,21 @@ export function isOverdue(
 
 // ---------- Settings ----------
 
-export async function listBranches(db: D1Database): Promise<Branch[]> {
-  return (await db.prepare('SELECT * FROM branches WHERE active = 1 ORDER BY id').all<Branch>()).results;
+export async function listWorkspaces(db: D1Database): Promise<Workspace[]> {
+  return (await db.prepare('SELECT * FROM workspaces ORDER BY id').all<Workspace>()).results;
+}
+
+export async function getWorkspace(db: D1Database, workspaceId: number): Promise<Workspace | null> {
+  return db.prepare('SELECT * FROM workspaces WHERE id = ?').bind(workspaceId).first<Workspace>();
+}
+
+export async function listBranches(db: D1Database, workspaceId: number | null = null): Promise<Branch[]> {
+  return (
+    await db
+      .prepare('SELECT * FROM branches WHERE active = 1 AND (? IS NULL OR workspace_id = ?) ORDER BY id')
+      .bind(workspaceId, workspaceId)
+      .all<Branch>()
+  ).results;
 }
 
 export async function getBranch(db: D1Database, branchId: number): Promise<Branch | null> {
@@ -201,14 +223,21 @@ export async function getBranch(db: D1Database, branchId: number): Promise<Branc
 
 export async function createBranch(
   db: D1Database,
-  branch: Pick<Branch, 'name' | 'business_address' | 'business_email' | 'currency' | 'invoice_prefix'>
+  workspaceOrBranch: number | Pick<Branch, 'name' | 'business_address' | 'business_email' | 'currency' | 'invoice_prefix'>,
+  explicitBranch?: Pick<Branch, 'name' | 'business_address' | 'business_email' | 'currency' | 'invoice_prefix'>
 ): Promise<number> {
+  const workspaceId = typeof workspaceOrBranch === 'number' ? workspaceOrBranch : 1;
+  const branch = typeof workspaceOrBranch === 'number' ? explicitBranch! : workspaceOrBranch;
   const result = await db
     .prepare(
-      `INSERT INTO branches (name, business_address, business_email, currency, invoice_prefix, accent_color)
-       SELECT ?, ?, ?, ?, ?, accent_color FROM branches WHERE id = 1`
+      `INSERT INTO branches (workspace_id, name, business_address, business_email, currency, invoice_prefix, accent_color)
+       VALUES (?, ?, ?, ?, ?, ?, COALESCE(
+         (SELECT accent_color FROM branches WHERE workspace_id = ? ORDER BY id LIMIT 1),
+         (SELECT accent_color FROM branches ORDER BY id LIMIT 1),
+         '#1e5b43'
+       ))`
     )
-    .bind(branch.name, branch.business_address, branch.business_email, branch.currency, branch.invoice_prefix)
+    .bind(workspaceId, branch.name, branch.business_address, branch.business_email, branch.currency, branch.invoice_prefix, workspaceId)
     .run();
   return result.meta.last_row_id;
 }
@@ -475,44 +504,47 @@ export async function invoiceNumberExists(db: D1Database, branchId: number, numb
 
 // ---------- Clients ----------
 
-export async function listClients(db: D1Database, includeArchived = false): Promise<Client[]> {
+export async function listClients(db: D1Database, includeArchived = false, workspaceId = 1): Promise<Client[]> {
   const sql = includeArchived
-    ? 'SELECT * FROM clients ORDER BY sort_order, name COLLATE NOCASE, id'
-    : 'SELECT * FROM clients WHERE archived = 0 ORDER BY sort_order, name COLLATE NOCASE, id';
-  return (await db.prepare(sql).all<Client>()).results;
+    ? 'SELECT * FROM clients WHERE workspace_id = ? ORDER BY sort_order, name COLLATE NOCASE, id'
+    : 'SELECT * FROM clients WHERE workspace_id = ? AND archived = 0 ORDER BY sort_order, name COLLATE NOCASE, id';
+  return (await db.prepare(sql).bind(workspaceId).all<Client>()).results;
 }
 
-export async function getClient(db: D1Database, id: number): Promise<Client | null> {
-  return db.prepare('SELECT * FROM clients WHERE id = ?').bind(id).first<Client>();
+export async function getClient(db: D1Database, id: number, workspaceId = 1): Promise<Client | null> {
+  return db.prepare('SELECT * FROM clients WHERE id = ? AND workspace_id = ?').bind(id, workspaceId).first<Client>();
 }
 
 export async function createClient(
   db: D1Database,
   c: Pick<Client, 'name' | 'email' | 'address' | 'default_rate_cents' | 'payment_terms_days'> &
-    Partial<Pick<Client, 'default_currency' | 'locale'>>
+    Partial<Pick<Client, 'default_currency' | 'locale'>>,
+  workspaceId = 1
 ): Promise<number> {
   const res = await db
     .prepare(
       `INSERT INTO clients
-       (name, email, address, default_rate_cents, default_currency, payment_terms_days, locale, sort_order)
-       SELECT ?, ?, ?, ?, ?, ?, ?, COALESCE(MAX(sort_order), -1) + 1 FROM clients`
+       (workspace_id, name, email, address, default_rate_cents, default_currency, payment_terms_days, locale, sort_order)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(MAX(sort_order), -1) + 1 FROM clients WHERE workspace_id = ?`
     )
     .bind(
+      workspaceId,
       c.name,
       c.email,
       c.address,
       c.default_rate_cents,
       c.default_currency ?? null,
       c.payment_terms_days,
-      c.locale ?? null
+      c.locale ?? null,
+      workspaceId
     )
     .run();
   return res.meta.last_row_id;
 }
 
-export async function reorderClients(db: D1Database, orderedIds: number[]): Promise<boolean> {
+export async function reorderClients(db: D1Database, orderedIds: number[], workspaceId = 1): Promise<boolean> {
   const current = (
-    await db.prepare('SELECT id FROM clients ORDER BY sort_order, name COLLATE NOCASE, id').all<{ id: number }>()
+    await db.prepare('SELECT id FROM clients WHERE workspace_id = ? ORDER BY sort_order, name COLLATE NOCASE, id').bind(workspaceId).all<{ id: number }>()
   ).results.map((row) => row.id);
   if (orderedIds.length !== current.length || new Set(orderedIds).size !== current.length) return false;
   if (current.length === 0) return true;
@@ -522,24 +554,24 @@ export async function reorderClients(db: D1Database, orderedIds: number[]): Prom
 
   await db.batch(
     orderedIds.map((id, position) =>
-      db.prepare('UPDATE clients SET sort_order = ? WHERE id = ?').bind(position, id)
+      db.prepare('UPDATE clients SET sort_order = ? WHERE id = ? AND workspace_id = ?').bind(position, id, workspaceId)
     )
   );
   return true;
 }
 
-export async function deleteClient(db: D1Database, id: number): Promise<'deleted' | 'in_use' | 'not_found'> {
+export async function deleteClient(db: D1Database, id: number, workspaceId = 1): Promise<'deleted' | 'in_use' | 'not_found'> {
   const result = await db
     .prepare(
       `DELETE FROM clients
-       WHERE id = ?
+       WHERE id = ? AND workspace_id = ?
          AND NOT EXISTS (SELECT 1 FROM invoices WHERE invoices.client_id = clients.id)`
     )
-    .bind(id)
+    .bind(id, workspaceId)
     .run();
   if (result.meta.changes > 0) return 'deleted';
 
-  const existing = await db.prepare('SELECT 1 AS found FROM clients WHERE id = ?').bind(id).first();
+  const existing = await db.prepare('SELECT 1 AS found FROM clients WHERE id = ? AND workspace_id = ?').bind(id, workspaceId).first();
   return existing ? 'in_use' : 'not_found';
 }
 
@@ -549,11 +581,12 @@ export async function updateClient(
   c: Pick<
     Client,
     'name' | 'email' | 'address' | 'archived' | 'default_rate_cents' | 'default_currency' | 'payment_terms_days' | 'locale'
-  >
+  >,
+  workspaceId = 1
 ): Promise<void> {
   await db
     .prepare(
-      'UPDATE clients SET name = ?, email = ?, address = ?, archived = ?, default_rate_cents = ?, default_currency = ?, payment_terms_days = ?, locale = ? WHERE id = ?'
+      'UPDATE clients SET name = ?, email = ?, address = ?, archived = ?, default_rate_cents = ?, default_currency = ?, payment_terms_days = ?, locale = ? WHERE id = ? AND workspace_id = ?'
     )
     .bind(
       c.name,
@@ -564,7 +597,8 @@ export async function updateClient(
       c.default_currency,
       c.payment_terms_days,
       c.locale,
-      id
+      id,
+      workspaceId
     )
     .run();
 }
@@ -586,15 +620,17 @@ export async function listInvoices(db: D1Database, branchId: number): Promise<In
   ).results;
 }
 
-export async function listAllInvoices(db: D1Database): Promise<InvoiceWithClient[]> {
+export async function listAllInvoices(db: D1Database, workspaceId = 1): Promise<InvoiceWithClient[]> {
   return (
     await db
       .prepare(
-        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.address AS client_address, c.locale AS client_locale,
+         `SELECT i.*, c.name AS client_name, c.email AS client_email, c.address AS client_address, c.locale AS client_locale,
                 b.name AS branch_name
          FROM invoices i JOIN clients c ON c.id = i.client_id JOIN branches b ON b.id = i.branch_id
+         WHERE b.workspace_id = ?
          ORDER BY i.issue_date DESC, CAST(i.number AS INTEGER) DESC, i.created_at DESC, i.id DESC`
       )
+      .bind(workspaceId)
       .all<InvoiceWithClient>()
   ).results;
 }
@@ -1044,7 +1080,8 @@ export async function recordManualPayment(
 export async function listExpenses(
   db: D1Database,
   branchId: number | null = null,
-  clientId: number | null = null
+  clientId: number | null = null,
+  workspaceId = 1
 ): Promise<ExpenseListRow[]> {
   return (
     await db
@@ -1054,15 +1091,15 @@ export async function listExpenses(
          FROM expenses e
          JOIN branches b ON b.id = e.branch_id
          LEFT JOIN clients c ON c.id = e.client_id
-         WHERE (?1 IS NULL OR e.branch_id = ?1) AND (?2 IS NULL OR e.client_id = ?2)
+         WHERE b.workspace_id = ?3 AND (?1 IS NULL OR e.branch_id = ?1) AND (?2 IS NULL OR e.client_id = ?2)
          ORDER BY e.expense_date DESC, e.id DESC`
       )
-      .bind(branchId, clientId)
+      .bind(branchId, clientId, workspaceId)
       .all<ExpenseListRow>()
   ).results;
 }
 
-export async function getExpense(db: D1Database, id: number): Promise<ExpenseListRow | null> {
+export async function getExpense(db: D1Database, id: number, workspaceId = 1): Promise<ExpenseListRow | null> {
   return db
     .prepare(
       `SELECT e.*, b.name AS branch_name, c.name AS client_name,
@@ -1070,9 +1107,9 @@ export async function getExpense(db: D1Database, id: number): Promise<ExpenseLis
        FROM expenses e
        JOIN branches b ON b.id = e.branch_id
        LEFT JOIN clients c ON c.id = e.client_id
-       WHERE e.id = ?`
+       WHERE e.id = ? AND b.workspace_id = ?`
     )
-    .bind(id)
+    .bind(id, workspaceId)
     .first<ExpenseListRow>();
 }
 
@@ -1146,6 +1183,30 @@ export async function listExpenseAttachments(db: D1Database, expenseId: number):
       .bind(expenseId)
       .all<ExpenseAttachmentMeta>()
   ).results;
+}
+
+export async function listWorkspaceExpenseAttachments(
+  db: D1Database,
+  workspaceId: number
+): Promise<Array<ExpenseAttachment & { payee: string; expense_date: string }>> {
+  const rows = (
+    await db.prepare(
+      `SELECT a.*, e.payee, e.expense_date
+       FROM expense_attachments a
+       JOIN expenses e ON e.id = a.expense_id
+       JOIN branches b ON b.id = e.branch_id
+       WHERE b.workspace_id = ?
+       ORDER BY e.expense_date, e.id, a.id`
+    ).bind(workspaceId).all<Omit<ExpenseAttachment, 'bytes'> & {
+      bytes: ArrayBuffer | number[];
+      payee: string;
+      expense_date: string;
+    }>()
+  ).results;
+  return rows.map((row) => ({
+    ...row,
+    bytes: row.bytes instanceof ArrayBuffer ? new Uint8Array(row.bytes) : Uint8Array.from(row.bytes),
+  }));
 }
 
 export async function getExpenseAttachment(
@@ -1328,29 +1389,31 @@ export type ReportSummary = {
 export async function monthlyReport(
   db: D1Database,
   branchId: number | null = 1,
-  clientId: number | null = null
+  clientId: number | null = null,
+  workspaceId = 1
 ): Promise<MonthlyReportRow[]> {
   // ?1 = optional branch scope (NULL means every company), ?2 = optional shared-client filter
   const [inv, pay, expense] = await db.batch<{ ym: string; currency: string; n: number; total: number }>([
     db.prepare(
-      `SELECT strftime('%Y-%m', issue_date) AS ym, currency, COUNT(*) AS n, COALESCE(SUM(total_cents), 0) AS total
-       FROM invoices WHERE (?1 IS NULL OR branch_id = ?1) AND status IN ('sent', 'paid')
-         AND (?2 IS NULL OR client_id = ?2) GROUP BY ym, currency`
-    ).bind(branchId, clientId),
+      `SELECT strftime('%Y-%m', i.issue_date) AS ym, i.currency, COUNT(*) AS n, COALESCE(SUM(i.total_cents), 0) AS total
+       FROM invoices i JOIN branches b ON b.id = i.branch_id
+       WHERE b.workspace_id = ?3 AND (?1 IS NULL OR i.branch_id = ?1) AND i.status IN ('sent', 'paid')
+         AND (?2 IS NULL OR i.client_id = ?2) GROUP BY ym, i.currency`
+    ).bind(branchId, clientId, workspaceId),
     db.prepare(
       `SELECT strftime('%Y-%m', p.created_at) AS ym, p.currency, COUNT(*) AS n, COALESCE(SUM(p.amount_cents), 0) AS total
-       FROM payments p JOIN invoices i ON i.id = p.invoice_id
-       WHERE (?1 IS NULL OR i.branch_id = ?1) AND p.undone_at IS NULL
+       FROM payments p JOIN invoices i ON i.id = p.invoice_id JOIN branches b ON b.id = i.branch_id
+       WHERE b.workspace_id = ?3 AND (?1 IS NULL OR i.branch_id = ?1) AND p.undone_at IS NULL
          AND (?2 IS NULL OR i.client_id = ?2) GROUP BY ym, p.currency`
-    ).bind(branchId, clientId),
+    ).bind(branchId, clientId, workspaceId),
     db.prepare(
-      `SELECT strftime('%Y-%m', expense_date) AS ym, currency, COUNT(*) AS n,
-              COALESCE(SUM(amount_cents), 0) AS total
-       FROM expenses
-       WHERE (?1 IS NULL OR branch_id = ?1) AND voided_at IS NULL
-         AND (?2 IS NULL OR client_id = ?2)
-       GROUP BY ym, currency`
-    ).bind(branchId, clientId),
+      `SELECT strftime('%Y-%m', e.expense_date) AS ym, e.currency, COUNT(*) AS n,
+              COALESCE(SUM(e.amount_cents), 0) AS total
+       FROM expenses e JOIN branches b ON b.id = e.branch_id
+       WHERE b.workspace_id = ?3 AND (?1 IS NULL OR e.branch_id = ?1) AND e.voided_at IS NULL
+         AND (?2 IS NULL OR e.client_id = ?2)
+       GROUP BY ym, e.currency`
+    ).bind(branchId, clientId, workspaceId),
   ]);
 
   const months = new Map<string, MonthlyReportRow>();
@@ -1436,13 +1499,15 @@ export function reportSummary(
   db: D1Database,
   branchId: number | null,
   today: string,
-  clientId?: number | null
+  clientId?: number | null,
+  workspaceId?: number
 ): Promise<ReportSummary>;
 export async function reportSummary(
   db: D1Database,
   branchOrToday: number | string | null,
   todayOrClient?: string | number | null,
-  explicitClientId: number | null = null
+  explicitClientId: number | null = null,
+  workspaceId = 1
 ): Promise<ReportSummary> {
   const hasExplicitBranch = typeof branchOrToday !== 'string';
   const branchId = hasExplicitBranch ? branchOrToday : 1;
@@ -1452,38 +1517,39 @@ export async function reportSummary(
     db
       .prepare(
         `SELECT
-          (SELECT COUNT(*) FROM invoices
-            WHERE (?1 IS NULL OR branch_id = ?1) AND status = 'sent' AND (?3 IS NULL OR client_id = ?3)) AS outstanding_count,
-          (SELECT COUNT(*) FROM invoices
-            WHERE (?1 IS NULL OR branch_id = ?1) AND status = 'sent' AND due_date IS NOT NULL AND due_date < ?2
-              AND (?3 IS NULL OR client_id = ?3)) AS overdue_count`
+          (SELECT COUNT(*) FROM invoices i JOIN branches b ON b.id = i.branch_id
+            WHERE b.workspace_id = ?4 AND (?1 IS NULL OR i.branch_id = ?1) AND i.status = 'sent' AND (?3 IS NULL OR i.client_id = ?3)) AS outstanding_count,
+          (SELECT COUNT(*) FROM invoices i JOIN branches b ON b.id = i.branch_id
+            WHERE b.workspace_id = ?4 AND (?1 IS NULL OR i.branch_id = ?1) AND i.status = 'sent' AND i.due_date IS NOT NULL AND i.due_date < ?2
+              AND (?3 IS NULL OR i.client_id = ?3)) AS overdue_count`
       )
-      .bind(branchId, today, clientId),
+      .bind(branchId, today, clientId, workspaceId),
     db
       .prepare(
-        `SELECT currency, COALESCE(SUM(total_cents), 0) AS cents FROM invoices
-         WHERE (?1 IS NULL OR branch_id = ?1) AND status = 'sent'
-           AND (?2 IS NULL OR client_id = ?2) GROUP BY currency`
+        `SELECT i.currency, COALESCE(SUM(i.total_cents), 0) AS cents FROM invoices i
+         JOIN branches b ON b.id = i.branch_id
+         WHERE b.workspace_id = ?3 AND (?1 IS NULL OR i.branch_id = ?1) AND i.status = 'sent'
+           AND (?2 IS NULL OR i.client_id = ?2) GROUP BY i.currency`
       )
-      .bind(branchId, clientId),
+      .bind(branchId, clientId, workspaceId),
     db
       .prepare(
         `SELECT p.currency, COALESCE(SUM(p.amount_cents), 0) AS cents
-         FROM payments p JOIN invoices i ON i.id = p.invoice_id
-         WHERE (?1 IS NULL OR i.branch_id = ?1) AND p.undone_at IS NULL
+         FROM payments p JOIN invoices i ON i.id = p.invoice_id JOIN branches b ON b.id = i.branch_id
+         WHERE b.workspace_id = ?4 AND (?1 IS NULL OR i.branch_id = ?1) AND p.undone_at IS NULL
            AND strftime('%Y', p.created_at) = substr(?2, 1, 4)
            AND (?3 IS NULL OR i.client_id = ?3) GROUP BY p.currency`
       )
-      .bind(branchId, today, clientId),
+      .bind(branchId, today, clientId, workspaceId),
     db
       .prepare(
-        `SELECT currency, COALESCE(SUM(amount_cents), 0) AS cents
-         FROM expenses
-         WHERE (?1 IS NULL OR branch_id = ?1) AND voided_at IS NULL
-           AND strftime('%Y', expense_date) = substr(?2, 1, 4)
-           AND (?3 IS NULL OR client_id = ?3) GROUP BY currency`
+        `SELECT e.currency, COALESCE(SUM(e.amount_cents), 0) AS cents
+         FROM expenses e JOIN branches b ON b.id = e.branch_id
+         WHERE b.workspace_id = ?4 AND (?1 IS NULL OR e.branch_id = ?1) AND e.voided_at IS NULL
+           AND strftime('%Y', e.expense_date) = substr(?2, 1, 4)
+           AND (?3 IS NULL OR e.client_id = ?3) GROUP BY e.currency`
       )
-      .bind(branchId, today, clientId),
+      .bind(branchId, today, clientId, workspaceId),
   ]);
 
   const row = counts.results[0] as { outstanding_count: number; overdue_count: number } | undefined;

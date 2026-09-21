@@ -67,10 +67,13 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
         {variant === 'admin' ? (
           <header class="site-header">
             <div class="container">
-              <a href="/admin" class="site-brand">
-                <img src="/jinjaw-square.png" alt="" class="brand-mark" />
-                Jin&amp;Jaw Invoices
-              </a>
+              <form method="post" action="/admin/workspace" class="workspace-switcher">
+                <label for="workspace-select" class="visually-hidden">Workspace</label>
+                <select id="workspace-select" name="workspace_id" aria-label="Workspace" data-submit-on-change>
+                  <option value="1">Jin&amp;Jaw invoices</option>
+                  <option value="2">Property / Flats</option>
+                </select>
+              </form>
               <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false">
                 <span></span>
                 <span></span>
@@ -129,7 +132,33 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
     if (control instanceof HTMLSelectElement && control.hasAttribute('data-submit-on-change')) {
       control.form && control.form.submit();
     }
+    if (control instanceof HTMLInputElement && control.type === 'file' && control.hasAttribute('data-auto-upload') && control.files && control.files.length) {
+      control.form && control.form.requestSubmit();
+    }
   });
+
+  document.querySelectorAll('[data-evidence-drop]').forEach(function (zone) {
+    ['dragenter', 'dragover'].forEach(function (name) {
+      zone.addEventListener(name, function (event) {
+        event.preventDefault();
+        zone.classList.add('is-dragging');
+      });
+    });
+    ['dragleave', 'drop'].forEach(function (name) {
+      zone.addEventListener(name, function () { zone.classList.remove('is-dragging'); });
+    });
+    zone.addEventListener('drop', function (event) {
+      event.preventDefault();
+      var input = zone.querySelector('input[type="file"][data-auto-upload]');
+      if (!(input instanceof HTMLInputElement) || !event.dataTransfer || !event.dataTransfer.files.length) return;
+      input.files = event.dataTransfer.files;
+      input.form && input.form.requestSubmit();
+    });
+  });
+
+  var workspace = document.cookie.match(/(?:^|; )jj_invoice_workspace=(\d+)/);
+  var workspaceSelect = document.getElementById('workspace-select');
+  if (workspace && workspaceSelect) workspaceSelect.value = workspace[1];
 })();
 `,
             }}
