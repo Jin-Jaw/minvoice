@@ -239,7 +239,8 @@ yourself a test invoice. The dashboard warns about any missing configuration.
 
 The `env.test` block in `wrangler.jsonc.example` defines a full staging duplicate — its own D1,
 hostname, and sandbox provider credentials — so fake money can never reach your real books.
-`npm run deploy:test` / `npm run db:migrate:test`.
+Deploy it with `npx wrangler d1 migrations apply DB --remote --env test`, then
+`npx wrangler deploy --env test` and `node scripts/ensure-master-key.mjs --env test`.
 
 ### Uptime monitoring (optional)
 
@@ -275,8 +276,6 @@ welcome and are deliberately easy first contributions.
 
 - `npm run deploy` — applies pending D1 migrations (by binding name), then deploys
 - `npm test` — unit tests over the money/date/timeline/config logic
-- `npm run db:wipe:prod` — clear transactional data, keep settings (CLI-only by design)
-- `npm run db:reset:prod` — factory reset; re-arms the setup wizard
 - D1 Time Travel provides 30-day point-in-time restore; take periodic `wrangler d1 export`
   snapshots for older history
 

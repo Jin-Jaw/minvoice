@@ -51,7 +51,9 @@
     "logs": { "head_sampling_rate": 1 },
     "traces": { "enabled": true, "head_sampling_rate": 0.05 }
   },
-  // Daily overdue-reminder check (15:00 UTC). Does nothing unless payment
-  // reminders are switched on in Settings → Email.
+  // Daily at 15:00 UTC: payment reminder emails (only when switched on in
+  // Settings → Email), email outbox retries, Telegram overdue-invoice
+  // messages, and purges of old outbox rows, login attempts, expired imports
+  // and expired Telegram data.
   "triggers": { "crons": ["0 15 * * *"] }
 }

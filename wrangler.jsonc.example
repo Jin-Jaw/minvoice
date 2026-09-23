@@ -42,7 +42,10 @@
   "triggers": { "crons": ["0 15 * * *"] },
 
   // Staging: sandbox providers, separate D1, own hostname. Deploy with
-  // `npm run deploy:test`. Bindings don't inherit — everything is respecified.
+  // `npx wrangler d1 migrations apply DB --remote --env test`, then
+  // `npx wrangler deploy --env test` and
+  // `node scripts/ensure-master-key.mjs --env test`. Bindings don't inherit —
+  // everything is respecified.
   // Delete this block if you don't want a staging environment.
   "env": {
     "test": {

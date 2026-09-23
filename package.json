@@ -24,22 +24,13 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy && node scripts/ensure-master-key.mjs",
-    "promote": "git push origin main:prod",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "types": "wrangler types",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "test": "vitest run",
-    "deploy:test": "wrangler d1 migrations apply DB --remote --env test && wrangler deploy --env test && node scripts/ensure-master-key.mjs --env test",
     "deploy:dry-run": "wrangler deploy --dry-run",
-    "db:backup:prod": "node scripts/backup.mjs",
-    "db:migrate:test": "wrangler d1 migrations apply DB --remote --env test",
-    "db:wipe:local": "wrangler d1 execute DB --local --file scripts/wipe-data.sql",
-    "db:wipe:test": "wrangler d1 execute DB --remote --env test --file scripts/wipe-data.sql",
-    "db:wipe:prod": "wrangler d1 execute DB --remote --file scripts/wipe-data.sql",
-    "db:reset:local": "wrangler d1 execute DB --local --file scripts/reset-env.sql",
-    "db:reset:test": "wrangler d1 execute DB --remote --env test --file scripts/reset-env.sql",
-    "db:reset:prod": "wrangler d1 execute DB --remote --file scripts/reset-env.sql"
+    "db:backup:prod": "node scripts/backup.mjs"
   },
   "dependencies": {
     "hono": "4.13.5",
