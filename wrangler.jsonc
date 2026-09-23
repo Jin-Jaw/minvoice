@@ -16,6 +16,8 @@
       "allowed_sender_addresses": ["contact@jin-jaw.co.uk"]
     }
   ],
+  // Workers AI reads totals from receipt photos uploaded through Telegram.
+  "ai": { "binding": "AI" },
   "ratelimits": [
     {
       "name": "PDF_RATE_LIMITER",

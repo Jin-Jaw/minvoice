@@ -37,6 +37,7 @@ export function SettingsPage({
   alerts = [],
   theme = 'auto',
   nonce,
+  telegram,
 }: {
   currentPath: string;
   settings: Settings;
@@ -55,6 +56,7 @@ export function SettingsPage({
   /** From the per-browser theme cookie, not Settings (D1) — see /settings/appearance */
   theme?: 'auto' | 'light' | 'dark';
   nonce?: string;
+  telegram: { configured: boolean; connected: boolean; connectedUsername: string | null };
 }) {
   const { sources, hints } = secretMeta;
   const taxRatePercent = (settings.tax_rate_bps / 100).toFixed(2);
@@ -116,6 +118,7 @@ export function SettingsPage({
         <a href="#email">Email</a>
         <a href="#payments">Payments</a>
         <a href="#appearance">Appearance</a>
+        <a href="#telegram">Telegram</a>
       </nav>
 
       {alerts.length ? (
@@ -504,6 +507,40 @@ export function SettingsPage({
             </button>
           </div>
         </form>
+      </div>
+
+      <div class="card" id="telegram">
+        <h2>Telegram integration</h2>
+        {!telegram.configured ? (
+          <div class="banner banner-warning">
+            Add TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, and TELEGRAM_BOT_USERNAME as Worker secrets/variables
+            before connecting.
+          </div>
+        ) : telegram.connected ? (
+          <>
+            <p>
+              ✅ Connected{telegram.connectedUsername ? ` to @${telegram.connectedUsername}` : ''}. Telegram actions use
+              this company and the same invoice services as the web app.
+            </p>
+            <form method="post" action="/admin/settings/telegram/disconnect">
+              <button type="submit" class="btn btn-danger">
+                Disconnect Telegram
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            <p>
+              Connect this authenticated admin and company to the Telegram app. Your browser may ask you to confirm
+              opening Telegram; the one-time connection expires after 10 minutes.
+            </p>
+            <form method="post" action="/admin/settings/telegram/connect">
+              <button type="submit" class="btn btn-primary">
+                Open Telegram app &amp; connect
+              </button>
+            </form>
+          </>
+        )}
       </div>
 
       <script

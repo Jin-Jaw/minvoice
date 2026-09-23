@@ -53,6 +53,8 @@ export type Branch = {
   accent_color: string;
   default_payment_details: string;
   active: number;
+  /** 0 = expense/income-only company (no outgoing invoices), e.g. Property / Flats. */
+  invoicing_enabled: number;
   created_at: string;
 };
 
@@ -482,6 +484,43 @@ export async function listClients(db: D1Database, includeArchived = false): Prom
   return (await db.prepare(sql).all<Client>()).results;
 }
 
+/** Clients that have been used by (or explicitly linked to) one company. */
+export async function listClientsForBranch(
+  db: D1Database,
+  branchId: number,
+  includeArchived = false
+): Promise<Client[]> {
+  const archived = includeArchived ? '' : 'AND c.archived = 0';
+  return (
+    await db
+      .prepare(
+        `SELECT c.* FROM clients c
+     JOIN client_branches cb ON cb.client_id = c.id
+     WHERE cb.branch_id = ? ${archived}
+     ORDER BY c.sort_order, c.name COLLATE NOCASE`
+      )
+      .bind(branchId)
+      .all<Client>()
+  ).results;
+}
+
+export function getClientForBranch(db: D1Database, clientId: number, branchId: number): Promise<Client | null> {
+  return db
+    .prepare(
+      `SELECT c.* FROM clients c JOIN client_branches cb ON cb.client_id = c.id
+     WHERE c.id = ? AND cb.branch_id = ?`
+    )
+    .bind(clientId, branchId)
+    .first<Client>();
+}
+
+export async function linkClientToBranch(db: D1Database, clientId: number, branchId: number): Promise<void> {
+  await db
+    .prepare('INSERT OR IGNORE INTO client_branches (client_id, branch_id) VALUES (?, ?)')
+    .bind(clientId, branchId)
+    .run();
+}
+
 export async function getClient(db: D1Database, id: number): Promise<Client | null> {
   return db.prepare('SELECT * FROM clients WHERE id = ?').bind(id).first<Client>();
 }
@@ -741,6 +780,9 @@ export async function createInvoice(
         )
         .bind(branchId, number, i, it.description, it.quantity, it.unit_price_cents, itemAmountCents(it))
     ),
+    db
+      .prepare('INSERT OR IGNORE INTO client_branches (client_id, branch_id) VALUES (?, ?)')
+      .bind(draft.client_id, branchId),
   ]);
   return results[0].meta.last_row_id;
 }
@@ -874,7 +916,8 @@ export type InvoiceEvent = {
     | 'source_pdf_archived'
     | 'duplicated'
     | 'viewed'
-    | 'reminder';
+    | 'reminder'
+    | 'created_via_telegram';
   detail: string | null;
   created_at: string;
 };
@@ -982,6 +1025,7 @@ export function buildTimeline(
     duplicated: 'Created by duplicating',
     viewed: 'Link opened',
     reminder: 'Reminder emailed',
+    created_via_telegram: 'Created from Telegram',
   };
   for (const e of events) {
     entries.push({ at: e.created_at, label: labels[e.type], detail: e.detail, kind: e.type, eventId: e.id });
@@ -1201,7 +1245,9 @@ export async function storeExpenseInvoiceImport(
   file: Pick<ExpenseAttachment, 'bytes' | 'mime' | 'filename' | 'size_bytes' | 'sha256'>,
   ttlHours = 24
 ): Promise<void> {
-  if (file.mime !== 'application/pdf') throw new Error('Only PDF invoices can be staged for extraction.');
+  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.mime)) {
+    throw new Error('Only PDF invoices and JPG, PNG or WebP receipts can be staged for extraction.');
+  }
   await db
     .prepare(
       `INSERT INTO expense_invoice_imports
@@ -1291,6 +1337,38 @@ export async function purgeExpiredExpenseInvoiceImports(db: D1Database): Promise
   return result.meta.changes ?? 0;
 }
 
+// ---------- Direct income (money received without an invoice) ----------
+
+export type IncomeDraft = {
+  branch_id: number;
+  client_id: number | null;
+  payer: string;
+  income_date: string;
+  amount_cents: number;
+  currency: string;
+  reference: string | null;
+};
+
+export async function createIncome(db: D1Database, income: IncomeDraft): Promise<number> {
+  const result = await db
+    .prepare(
+      `INSERT INTO income_entries
+     (branch_id, client_id, payer, income_date, amount_cents, currency, reference)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      income.branch_id,
+      income.client_id,
+      income.payer,
+      income.income_date,
+      income.amount_cents,
+      income.currency,
+      income.reference
+    )
+    .run();
+  return result.meta.last_row_id;
+}
+
 // ---------- Reports ----------
 
 export type MonthlyReportRow = {
@@ -1331,7 +1409,7 @@ export async function monthlyReport(
   clientId: number | null = null
 ): Promise<MonthlyReportRow[]> {
   // ?1 = optional branch scope (NULL means every company), ?2 = optional shared-client filter
-  const [inv, pay, expense] = await db.batch<{ ym: string; currency: string; n: number; total: number }>([
+  const [inv, pay, expense, income] = await db.batch<{ ym: string; currency: string; n: number; total: number }>([
     db.prepare(
       `SELECT strftime('%Y-%m', issue_date) AS ym, currency, COUNT(*) AS n, COALESCE(SUM(total_cents), 0) AS total
        FROM invoices WHERE (?1 IS NULL OR branch_id = ?1) AND status IN ('sent', 'paid')
@@ -1347,6 +1425,14 @@ export async function monthlyReport(
       `SELECT strftime('%Y-%m', expense_date) AS ym, currency, COUNT(*) AS n,
               COALESCE(SUM(amount_cents), 0) AS total
        FROM expenses
+       WHERE (?1 IS NULL OR branch_id = ?1) AND voided_at IS NULL
+         AND (?2 IS NULL OR client_id = ?2)
+       GROUP BY ym, currency`
+    ).bind(branchId, clientId),
+    db.prepare(
+      `SELECT strftime('%Y-%m', income_date) AS ym, currency, COUNT(*) AS n,
+              COALESCE(SUM(amount_cents), 0) AS total
+       FROM income_entries
        WHERE (?1 IS NULL OR branch_id = ?1) AND voided_at IS NULL
          AND (?2 IS NULL OR client_id = ?2)
        GROUP BY ym, currency`
@@ -1386,6 +1472,12 @@ export async function monthlyReport(
     const m = row(r.ym, r.currency);
     m.expense_count = r.n;
     m.expense_cents = r.total;
+  }
+  // Direct client income (no invoice) counts as money received.
+  for (const r of income.results) {
+    const m = row(r.ym, r.currency);
+    m.received_count += r.n;
+    m.received_cents += r.total;
   }
   return [...months.values()].sort((a, b) =>
     a.ym === b.ym ? (a.currency < b.currency ? -1 : 1) : a.ym < b.ym ? 1 : -1
@@ -1448,7 +1540,7 @@ export async function reportSummary(
   const branchId = hasExplicitBranch ? branchOrToday : 1;
   const today = hasExplicitBranch ? (todayOrClient as string) : branchOrToday;
   const clientId = hasExplicitBranch ? explicitClientId : ((todayOrClient as number | null) ?? null);
-  const [counts, outstanding, received, expenses] = await db.batch([
+  const [counts, outstanding, received, expenses, income] = await db.batch([
     db
       .prepare(
         `SELECT
@@ -1484,6 +1576,15 @@ export async function reportSummary(
            AND (?3 IS NULL OR client_id = ?3) GROUP BY currency`
       )
       .bind(branchId, today, clientId),
+    db
+      .prepare(
+        `SELECT currency, COALESCE(SUM(amount_cents), 0) AS cents
+         FROM income_entries
+         WHERE (?1 IS NULL OR branch_id = ?1) AND voided_at IS NULL
+           AND strftime('%Y', income_date) = substr(?2, 1, 4)
+           AND (?3 IS NULL OR client_id = ?3) GROUP BY currency`
+      )
+      .bind(branchId, today, clientId),
   ]);
 
   const row = counts.results[0] as { outstanding_count: number; overdue_count: number } | undefined;
@@ -1506,6 +1607,9 @@ export async function reportSummary(
   }
   for (const r of expenses.results as { currency: string; cents: number }[]) {
     sums(r.currency).expense_ytd_cents = r.cents;
+  }
+  for (const r of income.results as { currency: string; cents: number }[]) {
+    sums(r.currency).received_ytd_cents += r.cents;
   }
   return {
     outstanding_count: row.outstanding_count,

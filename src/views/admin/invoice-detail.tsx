@@ -4,6 +4,7 @@ import { formatTimestamp, todayInTz } from '../../lib/dates';
 import type { InvoiceItem, InvoiceWithClient, Payment, TimelineEntry } from '../../db/queries';
 import { StatusBadge } from './dashboard';
 import { Icon } from '../icons';
+import type { InvoiceAttachmentMeta } from '../../services/telegram/repository';
 
 /** Provider refs (Stripe session ids are 66 chars) get middle-truncated; full value on hover. */
 export function ShortRef({ value }: { value: string }) {
@@ -26,6 +27,7 @@ export function InvoiceDetailPage({
   hasArchivedPdf,
   pdfIsUpdated,
   pdfNeedsRegen,
+  attachments,
   notice,
   error,
   nonce,
@@ -43,6 +45,8 @@ export function InvoiceDetailPage({
   pdfIsUpdated: boolean;
   /** Archive is a manual upload or behind the invoice — offer Regenerate. */
   pdfNeedsRegen?: boolean;
+  /** Supporting files uploaded through Telegram; emailed with the invoice. */
+  attachments: InvoiceAttachmentMeta[];
   notice?: string;
   error?: string;
   nonce?: string;
@@ -303,6 +307,21 @@ export function InvoiceDetailPage({
         <div class="card">
           <h2>Notes</h2>
           <p>{invoice.notes}</p>
+        </div>
+      ) : null}
+
+      {attachments.length ? (
+        <div class="card">
+          <h2>Attachments</h2>
+          <p class="muted">Supporting files uploaded through Telegram. Invoice emails include these files.</p>
+          <ul>
+            {attachments.map((attachment) => (
+              <li>
+                <a href={`/admin/invoices/${invoice.id}/attachments/${attachment.id}`}>{attachment.filename}</a>{' '}
+                <span class="muted">({Math.ceil(attachment.size_bytes / 1024)} KB)</span>
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
 

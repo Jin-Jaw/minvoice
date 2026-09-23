@@ -15,8 +15,10 @@ type Mail = {
   text: string;
   html: string;
   replyTo?: string;
-  attachments?: { filename: string; type: string; content: Uint8Array }[];
+  attachments?: EmailAttachment[];
 };
+
+export type EmailAttachment = { filename: string; type: string; content: Uint8Array };
 
 /**
  * Route a message through the provider chosen in Settings.
@@ -104,7 +106,7 @@ export async function sendInvoiceEmail(
   invoice: InvoiceWithClient,
   settings: Settings,
   pdfBytes: Uint8Array,
-  opts?: { copyTo?: string; hasLogo?: boolean }
+  opts?: { copyTo?: string; hasLogo?: boolean; extraAttachments?: EmailAttachment[] }
 ): Promise<void> {
   const copyTo = opts?.copyTo;
   if (!copyTo && !invoice.client_email) throw new Error('client has no email address');
@@ -209,6 +211,7 @@ export async function sendInvoiceEmail(
         filename: attachmentFilename,
         type: 'application/pdf',
       },
+      ...(opts?.extraAttachments ?? []),
     ],
   });
 }
@@ -224,11 +227,12 @@ export async function sendInvoiceEmailToClientAndOwner(
   invoice: InvoiceWithClient,
   settings: Settings,
   pdfBytes: Uint8Array,
-  hasLogo?: boolean
+  hasLogo?: boolean,
+  extraAttachments: EmailAttachment[] = []
 ): Promise<string> {
   const ownerCopyAddress = settings.business_email?.trim() || 'jad@jin-jaw.co.uk';
-  await sendInvoiceEmail(env, invoice, settings, pdfBytes, { copyTo: ownerCopyAddress, hasLogo });
-  await sendInvoiceEmail(env, invoice, settings, pdfBytes, { hasLogo });
+  await sendInvoiceEmail(env, invoice, settings, pdfBytes, { copyTo: ownerCopyAddress, hasLogo, extraAttachments });
+  await sendInvoiceEmail(env, invoice, settings, pdfBytes, { hasLogo, extraAttachments });
   return ownerCopyAddress;
 }
 

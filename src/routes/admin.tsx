@@ -44,6 +44,7 @@ import {
   getExpenseAttachment,
   getExpenseInvoiceImport,
   getInvoiceById,
+  linkClientToBranch,
   getInvoiceEvents,
   getInvoiceItems,
   getInvoiceSourcePdf,
@@ -88,6 +89,17 @@ import {
 import { DashboardPage, INVOICE_FILTERS, type InvoiceFilter } from '../views/admin/dashboard';
 import { generateInvoicePdf } from '../services/pdf';
 import { sendInvoiceEmail, sendInvoiceEmailToClientAndOwner, sendTestEmail } from '../services/email';
+import {
+  asEmailAttachments,
+  createLinkToken,
+  disconnectAdmin,
+  getConnectionForAdmin,
+  getInvoiceAttachment,
+  listInvoiceAttachmentMeta,
+  listInvoiceAttachments,
+} from '../services/telegram/repository';
+import { notifyInvoicePaid } from '../services/telegram/notifications';
+import { readReceiptImage, type ReceiptImageMime } from '../services/receipt-ocr';
 import { InvoiceFormPage } from '../views/admin/invoice-form';
 import { InvoiceDetailPage } from '../views/admin/invoice-detail';
 import { ClientEditPage, ClientNewPage, ClientsPage } from '../views/admin/clients';
@@ -301,14 +313,19 @@ async function expenseImportReviewResponse(
   error?: string,
   status: 200 | 400 = 200
 ): Promise<Response> {
-  const extraction = await extractExpenseInvoiceText(staged.bytes);
+  // Receipt photos (staged from Telegram) have no text layer: read them with
+  // the vision model instead of the PDF text parser.
+  const isImage = staged.mime !== 'application/pdf';
+  const extraction = isImage ? { lines: [], pageCount: 1 } : await extractExpenseInvoiceText(staged.bytes);
   const [branches, clients, settings] = await Promise.all([
     listBranches(c.env.DB),
     listClients(c.env.DB),
     getSettings(c.env.DB, c.get('branchId')),
   ]);
-  const parsed = parseExpenseInvoice(extraction.lines, branches.map((branch) => branch.name));
-  const detectedBranch = detectExpenseBranch(extraction.lines, branches);
+  const parsed = isImage
+    ? await readReceiptImage(c.env.AI, staged.bytes, staged.mime as ReceiptImageMime)
+    : parseExpenseInvoice(extraction.lines, branches.map((branch) => branch.name));
+  const detectedBranch = isImage ? null : detectExpenseBranch(extraction.lines, branches);
   const values = submittedValues ?? {
     branch_id: String(detectedBranch ?? c.get('branchId')),
     client_id: '',
@@ -591,12 +608,13 @@ admin.get('/invoices/:id', async (c) => {
   if (!invoice) return c.notFound();
   const branchId = invoice.branch_id;
 
-  const [items, payments, events, settings, pdfMeta] = await Promise.all([
+  const [items, payments, events, settings, pdfMeta, attachments] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
     getPayments(c.env.DB, id),
     getInvoiceEvents(c.env.DB, id),
     getSettings(c.env.DB, branchId),
     getInvoiceSourcePdfMeta(c.env.DB, id),
+    listInvoiceAttachmentMeta(c.env.DB, id),
   ]);
   const timeline = buildTimeline(invoice, payments, events, formatCents);
   const emailedTo = c.req.query('emailed');
@@ -614,6 +632,7 @@ admin.get('/invoices/:id', async (c) => {
       hasArchivedPdf={!!pdfMeta}
       pdfIsUpdated={!!pdfMeta?.generated && !pdfMeta.stale}
       pdfNeedsRegen={!!pdfMeta && (pdfMeta.stale || !pdfMeta.generated)}
+      attachments={attachments}
       notice={
         emailedTo
           ? `Invoice emailed to ${emailedTo}.`
@@ -759,11 +778,12 @@ admin.post('/invoices/:id/status', async (c) => {
           }
           let ownerCopyAddress = 'jad@jin-jaw.co.uk';
           try {
-            const [items, settings, sourcePdf, logo] = await Promise.all([
+            const [items, settings, sourcePdf, logo, attachments] = await Promise.all([
               getInvoiceItems(c.env.DB, id),
               getSettings(c.env.DB, branchId),
               getInvoiceSourcePdf(c.env.DB, id),
               getLogo(c.env.DB, branchId),
+              listInvoiceAttachments(c.env.DB, id),
             ]);
             let pdf: Uint8Array;
             if (sourcePdf && !sourcePdf.stale) {
@@ -789,7 +809,14 @@ admin.post('/invoices/:id/status', async (c) => {
                 );
               }
             }
-            ownerCopyAddress = await sendInvoiceEmailToClientAndOwner(c.env, invoice, settings, pdf, !!logo);
+            ownerCopyAddress = await sendInvoiceEmailToClientAndOwner(
+              c.env,
+              invoice,
+              settings,
+              pdf,
+              !!logo,
+              asEmailAttachments(attachments)
+            );
           } catch (e) {
             console.error('invoice email failed', e);
             const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
@@ -849,6 +876,7 @@ admin.post('/invoices/:id/status', async (c) => {
               ? paymentDate
               : undefined,
         });
+        c.executionCtx.waitUntil(notifyInvoicePaid(c.env, id));
       }
       break;
     case 'delete':
@@ -915,10 +943,11 @@ admin.post('/invoices/:id/email-copy', async (c) => {
     );
   }
   try {
-    const [items, sourcePdf, logo] = await Promise.all([
+    const [items, sourcePdf, logo, attachments] = await Promise.all([
       getInvoiceItems(c.env.DB, id),
       getInvoiceSourcePdf(c.env.DB, id),
       getLogo(c.env.DB, branchId),
+      listInvoiceAttachments(c.env.DB, id),
     ]);
     let pdf: Uint8Array;
     if (sourcePdf && !sourcePdf.stale) {
@@ -944,7 +973,11 @@ admin.post('/invoices/:id/email-copy', async (c) => {
         );
       }
     }
-    await sendInvoiceEmail(c.env, invoice, settings, pdf, { copyTo: to, hasLogo: !!logo });
+    await sendInvoiceEmail(c.env, invoice, settings, pdf, {
+      copyTo: to,
+      hasLogo: !!logo,
+      extraAttachments: asEmailAttachments(attachments),
+    });
   } catch (e) {
     console.error('invoice copy email failed', e);
     const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
@@ -1027,7 +1060,7 @@ admin.post('/clients', async (c) => {
   const body = (await c.req.parseBody()) as Record<string, string>;
   const defaultCurrency = body.default_currency?.trim().toUpperCase() ?? '';
   if (!isClientRateCurrency(defaultCurrency)) return c.text('Rate currency must be USD, GBP, or EUR.', 400);
-  await createClient(c.env.DB, {
+  const clientId = await createClient(c.env.DB, {
     name: body.name,
     email: body.email || null,
     address: body.address || null,
@@ -1036,6 +1069,7 @@ admin.post('/clients', async (c) => {
     payment_terms_days: body.payment_terms_days?.trim() ? Math.max(0, parseInt(body.payment_terms_days, 10) || 0) : null,
     locale: validLocaleTag(submittedLocale(body)) ? submittedLocale(body)!.trim() : null,
   });
+  await linkClientToBranch(c.env.DB, clientId, c.get('branchId'));
   return c.redirect('/admin/clients');
 });
 
@@ -1243,7 +1277,7 @@ admin.get('/expenses/import/:token/file', async (c) => {
   const encodedName = encodeURIComponent(staged.filename).replace(/'/g, '%27');
   return new Response(staged.bytes as unknown as BodyInit, {
     headers: {
-      'Content-Type': 'application/pdf',
+      'Content-Type': staged.mime,
       'Content-Length': String(staged.size_bytes),
       'Content-Disposition': `inline; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
       'Cache-Control': 'private, no-store',
@@ -1666,6 +1700,7 @@ admin.get('/settings', async (c) => {
     sources: { resend: keySource(c.env.RESEND_API_KEY, settings.resend_api_key) },
     hints: { resend: await tail(settings.resend_api_key) },
   };
+  const telegramConnection = await getConnectionForAdmin(c.env.DB, c.get('adminSubject'));
   return c.html(
     <SettingsPage
       currentPath="/admin/settings"
@@ -1683,9 +1718,48 @@ admin.get('/settings', async (c) => {
       accentKept={accentKeptQ}
       alerts={await configWarnings(c.env, settings)}
       theme={themeCookie(c)}
+      telegram={{
+        configured: !!c.env.TELEGRAM_BOT_TOKEN && !!c.env.TELEGRAM_WEBHOOK_SECRET && !!c.env.TELEGRAM_BOT_USERNAME,
+        connectedUsername: telegramConnection?.telegram_username ?? null,
+        connected: !!telegramConnection,
+      }}
       nonce={c.get('secureHeadersNonce')}
     />
   );
+});
+
+// Telegram linking: a one-time token (10 minutes) carried through the bot's
+// /start deep link binds this admin + company to the sender's Telegram account.
+admin.post('/settings/telegram/connect', async (c) => {
+  if (!c.env.TELEGRAM_BOT_TOKEN || !c.env.TELEGRAM_WEBHOOK_SECRET || !c.env.TELEGRAM_BOT_USERNAME) {
+    return c.text('Telegram secrets are not configured on this Worker.', 503);
+  }
+  const token = await createLinkToken(c.env.DB, c.get('branchId'), c.get('adminSubject'));
+  const username = c.env.TELEGRAM_BOT_USERNAME.replace(/^@/, '');
+  return c.redirect(`tg://resolve?domain=${encodeURIComponent(username)}&start=${encodeURIComponent(token)}`, 303);
+});
+
+admin.post('/settings/telegram/disconnect', async (c) => {
+  await disconnectAdmin(c.env.DB, c.get('adminSubject'));
+  return c.redirect('/admin/settings?saved=1#telegram');
+});
+
+admin.get('/invoices/:id/attachments/:attachmentId', async (c) => {
+  const id = Number(c.req.param('id'));
+  const attachmentId = Number(c.req.param('attachmentId'));
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) return c.notFound();
+  if (!(await getInvoiceById(c.env.DB, id))) return c.notFound();
+  const attachment = await getInvoiceAttachment(c.env.DB, id, attachmentId);
+  if (!attachment) return c.notFound();
+  return new Response(attachment.bytes, {
+    headers: {
+      'Content-Type': attachment.mime,
+      'Content-Length': String(attachment.size_bytes),
+      'Content-Disposition': `attachment; filename="${attachment.filename.replace(/["\\\r\n]/g, '_')}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, no-store',
+    },
+  });
 });
 
 admin.post('/settings', async (c) => {

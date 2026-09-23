@@ -26,10 +26,13 @@ export const accessMiddleware = createMiddleware<AppEnv>(async (c, next) => {
 
     jwks ??= createRemoteJWKSet(new URL(`https://${c.env.ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`));
     try {
-      await jwtVerify(token, jwks, {
+      const verified = await jwtVerify(token, jwks, {
         issuer: `https://${c.env.ACCESS_TEAM_DOMAIN}`,
         audience: c.env.ACCESS_AUD,
       });
+      // Stable admin identity, used to bind a Telegram connection to its owner.
+      const email = typeof verified.payload.email === 'string' ? verified.payload.email : null;
+      c.set('adminSubject', email ?? verified.payload.sub ?? 'access-admin');
     } catch {
       return c.text('Forbidden', 403);
     }
@@ -37,7 +40,10 @@ export const accessMiddleware = createMiddleware<AppEnv>(async (c, next) => {
   }
 
   if (mode === 'password') {
-    if (await verifySession(c.env.ADMIN_PASSWORD!, getCookie(c, SESSION_COOKIE))) return next();
+    if (await verifySession(c.env.ADMIN_PASSWORD!, getCookie(c, SESSION_COOKIE))) {
+      c.set('adminSubject', 'password-admin');
+      return next();
+    }
     return c.redirect('/admin/login');
   }
 

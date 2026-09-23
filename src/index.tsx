@@ -19,6 +19,9 @@ import {
   recordLoginAttempt,
 } from './db/queries';
 import { processEmailOutbox } from './services/outbox';
+import { handleTelegramUpdate, type TelegramUpdate } from './services/telegram/handler';
+import { notifyOverdueInvoices } from './services/telegram/notifications';
+import { purgeTelegramData } from './services/telegram/repository';
 import { LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MINUTES, MAX_OUTBOX_ATTEMPTS } from './lib/outbox';
 import { generateInvoicePdf, pdfResponse } from './services/pdf';
 import { sendErrorAlert } from './services/email';
@@ -96,6 +99,29 @@ app.use('*', async (c, next) => {
 });
 
 app.get('/', (c) => c.redirect('/admin'));
+
+// Telegram bot webhook. Telegram signs every delivery with the secret set via
+// setWebhook; anything without it is rejected before the body is parsed.
+app.post(
+  '/api/integrations/telegram/webhook',
+  bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.text('update too large', 413) }),
+  async (c) => {
+    if (!c.env.TELEGRAM_BOT_TOKEN || !c.env.TELEGRAM_WEBHOOK_SECRET) return c.text('not configured', 503);
+    const supplied = c.req.header('X-Telegram-Bot-Api-Secret-Token') ?? '';
+    if (!supplied || !(await timingSafeEqual(supplied, c.env.TELEGRAM_WEBHOOK_SECRET))) {
+      return c.text('forbidden', 403);
+    }
+    let update: TelegramUpdate;
+    try {
+      update = await c.req.json<TelegramUpdate>();
+    } catch {
+      return c.text('invalid update', 400);
+    }
+    if (!Number.isSafeInteger(update.update_id)) return c.text('invalid update', 400);
+    await handleTelegramUpdate(c.env, update);
+    return c.text('ok');
+  }
+);
 
 // Cap admin request bodies BEFORE any handler buffers them. Expense evidence
 // gets a narrowly scoped 2 MB envelope (the verified file itself is capped at
@@ -280,6 +306,8 @@ export default {
         await purgeOldOutbox(env.DB, MAX_OUTBOX_ATTEMPTS);
         await purgeOldLoginAttempts(env.DB);
         await purgeExpiredExpenseInvoiceImports(env.DB);
+        await notifyOverdueInvoices(env);
+        await purgeTelegramData(env.DB);
       })()
     );
   },
