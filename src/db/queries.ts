@@ -756,6 +756,8 @@ export type InvoiceDraft = {
   notes: string | null;
   /** Validated ISO code; omitted = settings currency (create) / keep current (update) */
   currency?: string;
+  /** Per-invoice tax rate (basis points); omitted = the company's default rate. */
+  tax_rate_bps?: number;
   items: ItemDraft[];
 };
 
@@ -781,7 +783,8 @@ export async function createInvoice(
   const customNumber = typeof branchOrDraft === 'number' ? explicitCustomNumber : (draftOrCustom as string | undefined);
   const settings = await getSettings(db, branchId);
   const number = customNumber ?? (await claimInvoiceNumber(db, branchId));
-  const totals = computeTotals(draft.items, settings.tax_rate_bps);
+  const taxRateBps = draft.tax_rate_bps ?? settings.tax_rate_bps;
+  const totals = computeTotals(draft.items, taxRateBps);
 
   // Header + items in ONE transactional batch so a failure can't strand a
   // header without its lines. Items reference the header via the UNIQUE
@@ -802,7 +805,7 @@ export async function createInvoice(
         draft.due_date,
         draft.subject,
         draft.notes,
-        settings.tax_rate_bps,
+        taxRateBps,
         totals.subtotal_cents,
         totals.tax_cents,
         totals.total_cents,

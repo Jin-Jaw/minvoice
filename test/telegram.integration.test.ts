@@ -173,6 +173,80 @@ describe('Telegram /newinvoice', () => {
   });
 });
 
+describe('Telegram invoice extras', () => {
+  it('creates a new client from /newinvoice and continues with it', async () => {
+    await text('/newinvoice');
+    await tap('newclient');
+    await text('Acme Studio Ltd');
+    await text('billing@acme.test');
+    expect(messages().some((m) => m.includes('Client <b>Acme Studio Ltd</b> added'))).toBe(true);
+    expect(lastMessage()).toContain('Client: <b>Acme Studio Ltd</b>');
+
+    const client = await DB.prepare('SELECT * FROM clients WHERE name = ?')
+      .bind('Acme Studio Ltd')
+      .first<{ id: number; email: string; workspace_id: number }>();
+    expect(client).toMatchObject({ email: 'billing@acme.test', workspace_id: 1 });
+    const link = await DB.prepare('SELECT branch_id FROM client_branches WHERE client_id = ?').bind(client!.id).first();
+    expect(link).toEqual({ branch_id: 1 });
+  });
+
+  it('backdates the invoice keeping the payment window, and overrides tax for one invoice', async () => {
+    await text('/newinvoice');
+    await tap(`client:${clientId}`);
+    await text('Consulting - 1000');
+    await tap('itemsdone');
+    await tap('due:30');
+    await tap('notesnone');
+    await tap('editissue');
+    const endOfMonth = buttons().find((b) => b.text.startsWith('End of last month'))!.callback_data!;
+    await tap(endOfMonth);
+    await tap('edittax');
+    await tap('tax:0');
+    expect(lastMessage()).toContain('Tax: none');
+    await tap('create:1');
+
+    const issueDate = endOfMonth.slice('issue:'.length);
+    const created = await DB.prepare('SELECT * FROM invoices WHERE id != ? ORDER BY id DESC LIMIT 1')
+      .bind(previousInvoiceId)
+      .first<{ issue_date: string; due_date: string; tax_rate_bps: number; tax_cents: number; total_cents: number }>();
+    expect(created).toMatchObject({
+      issue_date: issueDate,
+      due_date: addDaysISO(issueDate, 30),
+      tax_rate_bps: 0,
+      tax_cents: 0,
+      total_cents: 100000,
+    });
+  });
+
+  it('records a payment dated yesterday or on a typed date', async () => {
+    const settings = await getSettings(DB, 1);
+    const today = todayInTz(settings.timezone);
+    await tap(`paidask:${previousInvoiceId}`);
+    await tap(`paidy:${previousInvoiceId}`);
+    expect(lastMessage()).toContain('marked paid on');
+    const payment = await DB.prepare('SELECT created_at FROM payments WHERE invoice_id = ?')
+      .bind(previousInvoiceId)
+      .first<{ created_at: string }>();
+    expect(payment?.created_at.slice(0, 10)).toBe(addDaysISO(today, -1));
+
+    const second = await createInvoice(DB, 1, {
+      client_id: clientId,
+      issue_date: addDaysISO(today, -20),
+      due_date: null,
+      subject: null,
+      notes: null,
+      currency: 'GBP',
+      items: [{ description: 'Work', quantity: 1, unit_price_cents: 5000 }],
+    });
+    await tap(`paiddate:${second}`);
+    await text(addDaysISO(today, -5));
+    const typed = await DB.prepare('SELECT created_at FROM payments WHERE invoice_id = ?')
+      .bind(second)
+      .first<{ created_at: string }>();
+    expect(typed?.created_at.slice(0, 10)).toBe(addDaysISO(today, -5));
+  });
+});
+
 describe('Telegram receipt photos', () => {
   it('reads the total, allows edits, and saves to the chosen company with the photo as evidence', async () => {
     aiAnswer = { total: 22.96, currency: 'GBP', tax: 3.83, supplier: 'Corner Hardware', date: '2026-09-18', category: 'Other' };
