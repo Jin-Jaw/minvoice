@@ -6,6 +6,9 @@ Worker at `https://invoices.jin-jaw.co.uk` and stores clients, invoices,
 payments, expenses, private expense evidence, events, workspaces, and configuration in the
 `jinjaw-invoices-eu` D1 database (binding `DB`, created in the EU jurisdiction).
 
+The GitHub repository `Jin-Jaw/minvoice` is private. It was public until
+2026-09-23, so treat anything committed before then as published.
+
 ## First production deployment
 
 These steps also rebuild production from nothing, for example in a new
@@ -223,9 +226,9 @@ Settings → Gmail payments, runs it on demand.
   the email, with the note "Automatically matched from Gmail message …". The
   linked Telegram chat gets the usual "Payment received" message.
 - **Search:** Settings → Gmail payments holds the Gmail search, which must
-  contain a `from:` sender address. Keep the trusted senders there and out of
-  this repository, which is public. Each check reads up to 25 matching
-  messages and skips every message id already in `gmail_payment_events`.
+  contain a `from:` sender address. Keep the trusted senders there, not in
+  git. Each check reads up to 25 matching messages and skips every message id
+  already in `gmail_payment_events`.
 - **Credentials:** the Google OAuth client is `GMAIL_CLIENT_ID` and
   `GMAIL_CLIENT_SECRET` (Worker secrets), with
   `https://invoices.jin-jaw.co.uk/admin/settings/gmail/callback` as its
