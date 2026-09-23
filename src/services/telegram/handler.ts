@@ -368,6 +368,8 @@ async function handleCallback(
     return;
   }
   if (data === 'itemsdone') return finishLineItems(env, api, branchId, userId, chatId);
+  if (data === 'notessaved') return choosePaymentDetails(env, api, branchId, userId, chatId, true);
+  if (data === 'notesnone') return choosePaymentDetails(env, api, branchId, userId, chatId, false);
   if (data.startsWith('list:')) return showInvoiceList(env, api, branchId, chatId, data.slice(5));
 
   const [action, rawId] = data.split(':', 2);
@@ -593,17 +595,79 @@ async function continueNewInvoice(
     const currency = text.toLowerCase() === 'default' ? state.currency : text.toUpperCase();
     if (!isSupportedCurrency(currency)) throw new Error('Enter a supported three-letter currency code.');
     state.currency = currency;
-    await saveSession(env.DB, userId, branchId, 'create_invoice', 'notes', state);
-    await api.sendMessage(chatId, 'Notes or payment details? Send text, or <b>none</b>.');
+    await askPaymentDetails(env, api, branchId, userId, chatId, state);
     return;
   }
   if (step === 'notes') {
-    state.notes = text.toLowerCase() === 'none' ? null : text.slice(0, 2000);
-    await saveSession(env.DB, userId, branchId, 'create_invoice', 'confirm', state);
-    await showDraftSummary(env, api, branchId, chatId, state);
-    return;
+    const answer = text.toLowerCase();
+    if (answer === 'default' || answer === 'saved') {
+      const saved = (await getSettings(env.DB, branchId)).default_payment_details.trim();
+      return setPaymentDetails(env, api, branchId, userId, chatId, state, saved || null);
+    }
+    return setPaymentDetails(env, api, branchId, userId, chatId, state, answer === 'none' ? null : text.slice(0, 2000));
   }
   throw new Error('Use the buttons above, or /newinvoice to start again.');
+}
+
+/** Like the web form: new invoices start with the company's saved payment details. */
+async function askPaymentDetails(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  state: NewInvoiceState
+): Promise<void> {
+  const settings = await getSettings(env.DB, branchId);
+  const saved = settings.default_payment_details.trim();
+  await saveSession(env.DB, userId, branchId, 'create_invoice', 'notes', state);
+  if (!saved) {
+    await api.sendMessage(chatId, 'Notes or payment details? Send text, or <b>none</b>.', [
+      [{ text: 'No payment details', callback_data: 'notesnone' }],
+    ]);
+    return;
+  }
+  await api.sendMessage(
+    chatId,
+    `<b>Payment details</b>\n\nSaved for ${esc(settings.business_name || 'this company')}:\n<pre>${esc(
+      saved.slice(0, 1500)
+    )}</pre>\n\nUse these, or send different text for this invoice.`,
+    [
+      [{ text: '✅ Use saved details', callback_data: 'notessaved' }],
+      [{ text: 'No payment details', callback_data: 'notesnone' }],
+    ]
+  );
+}
+
+async function setPaymentDetails(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  state: NewInvoiceState,
+  notes: string | null
+): Promise<void> {
+  state.notes = notes;
+  await saveSession(env.DB, userId, branchId, 'create_invoice', 'confirm', state);
+  await showDraftSummary(env, api, branchId, chatId, state);
+}
+
+async function choosePaymentDetails(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  useSaved: boolean
+): Promise<void> {
+  const session = await getSession(env.DB, userId);
+  if (!session || session.branch_id !== branchId || session.flow !== 'create_invoice' || session.step !== 'notes') {
+    throw new Error('That draft expired. Start again with /newinvoice.');
+  }
+  const state = JSON.parse(session.data_json) as NewInvoiceState;
+  const saved = useSaved ? (await getSettings(env.DB, branchId)).default_payment_details.trim() : '';
+  await setPaymentDetails(env, api, branchId, userId, chatId, state, saved || null);
 }
 
 async function finishLineItems(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
@@ -646,6 +710,7 @@ async function showDraftSummary(
       itemLines(state.items, state.currency),
       '',
       `Total: ${esc(formatCents(totals.total_cents, state.currency))}`,
+      `Payment details: ${state.notes ? esc(firstLine(state.notes, 60)) : 'None'}`,
       settings.tax_rate_bps ? `Tax: ${(settings.tax_rate_bps / 100).toFixed(2)}% (workspace default)` : 'Tax: none',
     ].join('\n'),
     [
@@ -1167,6 +1232,11 @@ function sanitizeFilename(name: string, mime: SniffedMime): string {
       .trim()
       .slice(0, 100) || 'attachment';
   return `${stem}${extension}`;
+}
+
+function firstLine(value: string, max: number): string {
+  const line = value.split('\n')[0].trim();
+  return line.length > max || value.includes('\n') ? `${line.slice(0, max)}…` : line;
 }
 
 function esc(value: string): string {
