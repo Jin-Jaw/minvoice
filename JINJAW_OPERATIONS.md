@@ -1,9 +1,9 @@
 # Jin&Jaw invoices operations
 
-This is Jin&Jaw's private, single-business fork of
+This is Jin&Jaw's private accounting fork of
 [Minvoice](https://github.com/ddyy/minvoice). It runs as a separate Cloudflare
 Worker at `https://invoices.jin-jaw.co.uk` and stores clients, invoices,
-payments, expenses, private expense evidence, events, and configuration in the
+payments, expenses, private expense evidence, events, workspaces, and configuration in the
 `jinjaw-invoices` D1 database.
 
 ## First production deployment
@@ -43,8 +43,19 @@ and evidence for audit history while removing the amount from report totals.
 
 Evidence files are private admin downloads stored in D1 and included in the
 normal SQL backup. Accepted files are genuine PDF, JPG, PNG, or WebP bytes, up
-to 1.5 MB each. Upload additional pages one at a time from the expense detail
-page. Never commit exported evidence or database backups.
+to 1.5 MB each. Drop evidence directly onto an expense row or the expense detail
+page. Expenses without evidence are explicitly flagged **Missing invoice**.
+The Reports page can export a ZIP containing `expenses.csv` and every evidence
+file; paths inside the ZIP are recorded in the CSV. Never commit exported
+evidence or database backups.
+
+## Workspaces
+
+Use the selector at the top left to move between **Jin&Jaw invoices** and
+**Property / Flats**. Companies, clients, invoices, payments, expenses, and
+reports are scoped to the selected workspace. Property / Flats starts with an
+empty ledger and a default property company shell that can be renamed in
+Companies or Settings.
 
 ## Backups and recovery
 
@@ -57,6 +68,13 @@ the independent, longer-retention copy. Never commit an export: it contains
 client and financial data.
 
 ## Routine maintenance
+
+Every push to `main` runs type-checking, tests, and a Worker dry run in GitHub
+Actions. Production deploys only after all three checks pass. The deploy job
+applies pending D1 migrations, publishes the Worker, and verifies that the
+settings encryption key exists. GitHub stores the Cloudflare credentials as
+the `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository secrets;
+never add either value to the repository.
 
 - `npm ci` — install the audited lockfile.
 - `npm test` — run the unit and D1 integration suite.

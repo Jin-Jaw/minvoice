@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
+import { selectBranch, selectWorkspace } from '../middleware/branch';
 import type { AppEnv } from '../env';
 import {
   formatCents,
@@ -17,6 +18,7 @@ import { isLocalRequest } from '../lib/admin-auth';
 import { parseSchedule } from '../lib/reminders';
 import { invoicePdfFilename } from '../lib/invoice-filename';
 import { isIsoDate, prepareExpenseAttachment } from '../lib/expenses';
+import { createZip, safeZipPart } from '../lib/zip';
 import {
   detectExpenseBranch,
   EXPENSE_IMPORT_TTL_HOURS,
@@ -55,8 +57,10 @@ import {
   listAllPayments,
   listAllInvoices,
   listBranches,
+  listWorkspaces,
   listClients,
   listExpenseAttachments,
+  listWorkspaceExpenseAttachments,
   listExpenses,
   listInvoices,
   getInvoiceSourcePdfMeta,
@@ -116,6 +120,18 @@ import {
 } from '../views/admin/expenses';
 
 export const admin = new Hono<AppEnv>();
+
+admin.post('/workspace', async (c) => {
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  const workspaceId = Number(body.workspace_id);
+  const workspace = (await listWorkspaces(c.env.DB)).find((candidate) => candidate.id === workspaceId);
+  if (!workspace) return c.text('Choose a valid workspace.', 400);
+  const [branch] = await listBranches(c.env.DB, workspace.id);
+  if (!branch) return c.text('That workspace has no company configured.', 409);
+  selectWorkspace(c, workspace.id);
+  selectBranch(c, branch.id);
+  return c.redirect(`/admin?workspace=${workspace.id}`);
+});
 
 // ---------- First-launch setup wizard ----------
 
@@ -318,8 +334,8 @@ async function expenseImportReviewResponse(
   const isImage = staged.mime !== 'application/pdf';
   const extraction = isImage ? { lines: [], pageCount: 1 } : await extractExpenseInvoiceText(staged.bytes);
   const [branches, clients, settings] = await Promise.all([
-    listBranches(c.env.DB),
-    listClients(c.env.DB),
+    listBranches(c.env.DB, c.get('workspaceId')),
+    listClients(c.env.DB, false, c.get('workspaceId')),
     getSettings(c.env.DB, c.get('branchId')),
   ]);
   const parsed = isImage
@@ -406,12 +422,12 @@ function parseItemDrafts(body: Record<string, string | string[]>): { items: Item
 async function invoiceHeaderProblems(
   db: D1Database,
   body: Record<string, string | string[]>,
-  opts: { checkClient: boolean }
+  opts: { checkClient: boolean; workspaceId?: number }
 ): Promise<string[]> {
   const problems: string[] = [];
   if (opts.checkClient) {
     const clientId = Number(str(body.client_id));
-    if (!Number.isInteger(clientId) || !(await getClient(db, clientId))) {
+    if (!Number.isInteger(clientId) || !(await getClient(db, clientId, opts.workspaceId))) {
       problems.push('Select a client.');
     }
   }
@@ -467,7 +483,7 @@ function addListNotice(path: string, key: 'paid' | 'emailed' | 'email_error', va
 admin.get('/', async (c) => {
   const branchId = c.get('branchId');
   const [invoices, settings] = await Promise.all([
-    listAllInvoices(c.env.DB),
+    listAllInvoices(c.env.DB, c.get('workspaceId')),
     getSettings(c.env.DB, branchId),
   ]);
   const status = c.req.query('status');
@@ -499,13 +515,13 @@ admin.get('/', async (c) => {
 // ---------- Invoices: new ----------
 
 admin.get('/invoices/new', async (c) => {
-  const branches = await listBranches(c.env.DB);
+  const branches = await listBranches(c.env.DB, c.get('workspaceId'));
   const requestedBranchId = Number(c.req.query('branch'));
   const branchId = branches.some((branch) => branch.id === requestedBranchId)
     ? requestedBranchId
     : c.get('branchId');
   const [clients, settings, logo] = await Promise.all([
-    listClients(c.env.DB),
+    listClients(c.env.DB, false, c.get('workspaceId')),
     getSettings(c.env.DB, branchId),
     getLogo(c.env.DB, branchId),
   ]);
@@ -524,11 +540,11 @@ admin.get('/invoices/new', async (c) => {
 
 admin.post('/invoices/new', async (c) => {
   const body = (await c.req.parseBody({ all: true })) as Record<string, string | string[]>;
-  const branches = await listBranches(c.env.DB);
+  const branches = await listBranches(c.env.DB, c.get('workspaceId'));
   const branchId = Number(str(body.branch_id));
   if (!branches.some((branch) => branch.id === branchId)) return c.text('Choose a valid issuing company.', 400);
   const [clients, settings, logo] = await Promise.all([
-    listClients(c.env.DB),
+    listClients(c.env.DB, false, c.get('workspaceId')),
     getSettings(c.env.DB, branchId),
     getLogo(c.env.DB, branchId),
   ]);
@@ -562,7 +578,7 @@ admin.post('/invoices/new', async (c) => {
       400
     );
 
-  const problems = [...(await invoiceHeaderProblems(c.env.DB, body, { checkClient: true })), ...itemProblems];
+  const problems = [...(await invoiceHeaderProblems(c.env.DB, body, { checkClient: true, workspaceId: c.get('workspaceId') })), ...itemProblems];
 
   // Blank or untouched number -> auto counter; anything else is a custom number.
   const typedNumber = str(body.number).trim();
@@ -661,7 +677,7 @@ admin.get('/invoices/:id/edit', async (c) => {
   }
 
   const [clients, items, settings, logo] = await Promise.all([
-    listClients(c.env.DB),
+    listClients(c.env.DB, false, c.get('workspaceId')),
     getInvoiceItems(c.env.DB, id),
     getSettings(c.env.DB, branchId),
     getLogo(c.env.DB, branchId),
@@ -694,11 +710,11 @@ admin.post('/invoices/:id/edit', async (c) => {
 
   const body = (await c.req.parseBody({ all: true })) as Record<string, string | string[]>;
   const { items, problems: itemProblems } = parseItemDrafts(body);
-  const problems = [...(await invoiceHeaderProblems(c.env.DB, body, { checkClient: true })), ...itemProblems];
+  const problems = [...(await invoiceHeaderProblems(c.env.DB, body, { checkClient: true, workspaceId: c.get('workspaceId') })), ...itemProblems];
 
   if (problems.length) {
     const [clients, settings, logo] = await Promise.all([
-      listClients(c.env.DB),
+      listClients(c.env.DB, false, c.get('workspaceId')),
       getSettings(c.env.DB, branchId),
       getLogo(c.env.DB, branchId),
     ]);
@@ -903,7 +919,7 @@ admin.post('/invoices/:id/duplicate', async (c) => {
   const [items, settings, client] = await Promise.all([
     getInvoiceItems(c.env.DB, id),
     getSettings(c.env.DB, branchId),
-    getClient(c.env.DB, source.client_id),
+    getClient(c.env.DB, source.client_id, c.get('workspaceId')),
   ]);
   const today = todayInTz(settings.timezone);
   const terms = client?.payment_terms_days ?? settings.payment_terms_days;
@@ -1047,7 +1063,7 @@ admin.post('/invoices/:id/payments/:pid/note', async (c) => {
 // ---------- Clients ----------
 
 admin.get('/clients', async (c) => {
-  const clients = await listClients(c.env.DB, true);
+  const clients = await listClients(c.env.DB, true, c.get('workspaceId'));
   const error = c.req.query('error') === 'in-use'
     ? 'This client has invoices and cannot be deleted. Archive it instead to preserve the invoice history.'
     : undefined;
@@ -1068,7 +1084,7 @@ admin.post('/clients', async (c) => {
     default_currency: defaultCurrency,
     payment_terms_days: body.payment_terms_days?.trim() ? Math.max(0, parseInt(body.payment_terms_days, 10) || 0) : null,
     locale: validLocaleTag(submittedLocale(body)) ? submittedLocale(body)!.trim() : null,
-  });
+  }, c.get('workspaceId'));
   await linkClientToBranch(c.env.DB, clientId, c.get('branchId'));
   return c.redirect('/admin/clients');
 });
@@ -1091,7 +1107,7 @@ admin.post('/clients/reorder', async (c) => {
   const body = (await c.req.parseBody()) as Record<string, string>;
   const orderedIds = (body.client_ids ?? '').split(',').filter(Boolean).map(Number);
   if (orderedIds.some((id) => !Number.isInteger(id) || id <= 0)) return c.text('Invalid client order.', 400);
-  if (!(await reorderClients(c.env.DB, orderedIds))) return c.text('Client list changed. Refresh and try again.', 409);
+  if (!(await reorderClients(c.env.DB, orderedIds, c.get('workspaceId')))) return c.text('Client list changed. Refresh and try again.', 409);
   return c.redirect('/admin/clients');
 });
 
@@ -1118,7 +1134,7 @@ admin.get('/clients/:id', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const client = await getClient(c.env.DB, id);
+  const client = await getClient(c.env.DB, id, c.get('workspaceId'));
   if (!client) return c.notFound();
 
   return c.html(
@@ -1130,7 +1146,7 @@ admin.post('/clients/:id', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
 
-  const client = await getClient(c.env.DB, id);
+  const client = await getClient(c.env.DB, id, c.get('workspaceId'));
   if (!client) return c.notFound();
 
   const body = (await c.req.parseBody()) as Record<string, string>;
@@ -1145,7 +1161,7 @@ admin.post('/clients/:id', async (c) => {
     default_currency: defaultCurrency,
     payment_terms_days: body.payment_terms_days?.trim() ? Math.max(0, parseInt(body.payment_terms_days, 10) || 0) : null,
     locale: validLocaleTag(submittedLocale(body)) ? submittedLocale(body)!.trim() : null,
-  });
+  }, c.get('workspaceId'));
 
   return c.redirect('/admin/clients');
 });
@@ -1153,7 +1169,7 @@ admin.post('/clients/:id', async (c) => {
 admin.post('/clients/:id/delete', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.notFound();
-  const result = await deleteClient(c.env.DB, id);
+  const result = await deleteClient(c.env.DB, id, c.get('workspaceId'));
   if (result === 'not_found') return c.notFound();
   if (result === 'in_use') return c.redirect('/admin/clients?error=in-use');
   return c.redirect('/admin/clients');
@@ -1164,7 +1180,7 @@ admin.post('/clients/:id/delete', async (c) => {
 admin.get('/branches', async (c) =>
   c.html(
     <BranchesPage
-      branches={await listBranches(c.env.DB)}
+      branches={await listBranches(c.env.DB, c.get('workspaceId'))}
       nonce={c.get('secureHeadersNonce')}
     />
   )
@@ -1188,14 +1204,14 @@ admin.post('/branches', async (c) => {
   if (invalid) {
     return c.html(
       <BranchesPage
-        branches={await listBranches(c.env.DB)}
+        branches={await listBranches(c.env.DB, c.get('workspaceId'))}
         error="Provide a valid name, address, optional email, currency, and invoice prefix."
         nonce={c.get('secureHeadersNonce')}
       />,
       400
     );
   }
-  const branchId = await createBranch(c.env.DB, {
+  const branchId = await createBranch(c.env.DB, c.get('workspaceId'), {
     name,
     business_address: businessAddress,
     business_email: businessEmail || null,
@@ -1208,12 +1224,12 @@ admin.post('/branches', async (c) => {
 // ---------- Expenses ----------
 
 admin.get('/expenses', async (c) => {
-  const branches = await listBranches(c.env.DB);
+  const branches = await listBranches(c.env.DB, c.get('workspaceId'));
   const requestedBranch = Number(c.req.query('company'));
   const branchId = branches.some((branch) => branch.id === requestedBranch) ? requestedBranch : null;
   return c.html(
     <ExpensesPage
-      expenses={await listExpenses(c.env.DB, branchId)}
+      expenses={await listExpenses(c.env.DB, branchId, null, c.get('workspaceId'))}
       branches={branches}
       branchId={branchId}
       nonce={c.get('secureHeadersNonce')}
@@ -1301,8 +1317,8 @@ admin.post('/expenses/import/:token/confirm', async (c) => {
   const raw = (await c.req.parseBody()) as ExpenseBody;
   const branchId = c.get('branchId');
   const [branches, clients, settings] = await Promise.all([
-    listBranches(c.env.DB),
-    listClients(c.env.DB),
+    listBranches(c.env.DB, c.get('workspaceId')),
+    listClients(c.env.DB, false, c.get('workspaceId')),
     getSettings(c.env.DB, branchId),
   ]);
   const values = expenseFormValues(raw, {
@@ -1333,8 +1349,8 @@ admin.post('/expenses/import/:token/confirm', async (c) => {
 admin.get('/expenses/new', async (c) => {
   const branchId = c.get('branchId');
   const [branches, clients, settings] = await Promise.all([
-    listBranches(c.env.DB),
-    listClients(c.env.DB),
+    listBranches(c.env.DB, c.get('workspaceId')),
+    listClients(c.env.DB, false, c.get('workspaceId')),
     getSettings(c.env.DB, branchId),
   ]);
   return c.html(
@@ -1355,8 +1371,8 @@ admin.post('/expenses', async (c) => {
   const raw = (await c.req.parseBody()) as ExpenseBody;
   const branchId = c.get('branchId');
   const [branches, clients, settings] = await Promise.all([
-    listBranches(c.env.DB),
-    listClients(c.env.DB),
+    listBranches(c.env.DB, c.get('workspaceId')),
+    listClients(c.env.DB, false, c.get('workspaceId')),
     getSettings(c.env.DB, branchId),
   ]);
   const values = expenseFormValues(raw, {
@@ -1395,12 +1411,12 @@ admin.post('/expenses', async (c) => {
 admin.get('/expenses/:id', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id) || id <= 0) return c.notFound();
-  const expense = await getExpense(c.env.DB, id);
+  const expense = await getExpense(c.env.DB, id, c.get('workspaceId'));
   if (!expense) return c.notFound();
   const [attachments, branches, clients] = await Promise.all([
     listExpenseAttachments(c.env.DB, id),
-    listBranches(c.env.DB),
-    listClients(c.env.DB, true),
+    listBranches(c.env.DB, c.get('workspaceId')),
+    listClients(c.env.DB, true, c.get('workspaceId')),
   ]);
   return c.html(
     <ExpenseFormPage
@@ -1419,10 +1435,13 @@ admin.get('/expenses/:id', async (c) => {
 admin.post('/expenses/:id', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id) || id <= 0) return c.notFound();
-  const expense = await getExpense(c.env.DB, id);
+  const expense = await getExpense(c.env.DB, id, c.get('workspaceId'));
   if (!expense) return c.notFound();
   const raw = (await c.req.parseBody()) as ExpenseBody;
-  const [branches, clients] = await Promise.all([listBranches(c.env.DB), listClients(c.env.DB, true)]);
+  const [branches, clients] = await Promise.all([
+    listBranches(c.env.DB, c.get('workspaceId')),
+    listClients(c.env.DB, true, c.get('workspaceId')),
+  ]);
   const values = expenseFormValues(raw, {
     branchId: expense.branch_id,
     date: expense.expense_date,
@@ -1453,7 +1472,7 @@ admin.post('/expenses/:id', async (c) => {
 
 admin.post('/expenses/:id/void', async (c) => {
   const id = Number(c.req.param('id'));
-  if (!Number.isInteger(id) || id <= 0 || !(await getExpense(c.env.DB, id))) return c.notFound();
+  if (!Number.isInteger(id) || id <= 0 || !(await getExpense(c.env.DB, id, c.get('workspaceId')))) return c.notFound();
   const body = (await c.req.parseBody()) as Record<string, string>;
   await setExpenseVoided(c.env.DB, id, body.action !== 'restore');
   return c.redirect('/admin/expenses');
@@ -1461,7 +1480,7 @@ admin.post('/expenses/:id/void', async (c) => {
 
 admin.post('/expenses/:id/attachments', async (c) => {
   const id = Number(c.req.param('id'));
-  if (!Number.isInteger(id) || id <= 0 || !(await getExpense(c.env.DB, id))) return c.notFound();
+  if (!Number.isInteger(id) || id <= 0 || !(await getExpense(c.env.DB, id, c.get('workspaceId')))) return c.notFound();
   const body = await c.req.parseBody();
   const evidence = body.evidence;
   if (!(evidence instanceof File)) return c.text('Choose an evidence file.', 400);
@@ -1475,6 +1494,7 @@ admin.get('/expenses/:id/attachments/:attachmentId', async (c) => {
   const id = Number(c.req.param('id'));
   const attachmentId = Number(c.req.param('attachmentId'));
   if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) return c.notFound();
+  if (!(await getExpense(c.env.DB, id, c.get('workspaceId')))) return c.notFound();
   const attachment = await getExpenseAttachment(c.env.DB, id, attachmentId);
   if (!attachment) return c.notFound();
   const asciiName = attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
@@ -1493,7 +1513,7 @@ admin.get('/expenses/:id/attachments/:attachmentId', async (c) => {
 admin.post('/expenses/:id/attachments/:attachmentId/delete', async (c) => {
   const id = Number(c.req.param('id'));
   const attachmentId = Number(c.req.param('attachmentId'));
-  if (!Number.isInteger(id) || !Number.isInteger(attachmentId) || !(await getExpense(c.env.DB, id))) {
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId) || !(await getExpense(c.env.DB, id, c.get('workspaceId')))) {
     return c.notFound();
   }
   if (!(await deleteExpenseAttachment(c.env.DB, id, attachmentId))) return c.notFound();
@@ -1508,13 +1528,17 @@ function csvField(v: unknown): string {
 }
 
 function csvResponse(rows: unknown[][], filename: string): Response {
-  const body = rows.map((r) => r.map(csvField).join(',')).join('\r\n') + '\r\n';
+  const body = csvBody(rows);
   return new Response(body, {
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="${filename}"`,
     },
   });
+}
+
+function csvBody(rows: unknown[][]): string {
+  return rows.map((r) => r.map(csvField).join(',')).join('\r\n') + '\r\n';
 }
 
 admin.get('/export/invoices.csv', async (c) => {
@@ -1575,9 +1599,9 @@ admin.get('/export/payments.csv', async (c) => {
 });
 
 admin.get('/export/expenses.csv', async (c) => {
-  const expenses = await listExpenses(c.env.DB, null);
+  const expenses = await listExpenses(c.env.DB, null, null, c.get('workspaceId'));
   const rows: unknown[][] = [
-    ['date', 'company', 'paid_to', 'category', 'description', 'reference', 'client', 'amount', 'tax_included', 'currency', 'status', 'evidence_files', 'recorded_at'],
+    ['date', 'company', 'paid_to', 'category', 'description', 'reference', 'client', 'amount', 'tax_included', 'currency', 'status', 'invoice_status', 'evidence_files', 'recorded_at'],
     ...expenses.map((expense) => [
       expense.expense_date,
       expense.branch_name,
@@ -1590,11 +1614,55 @@ admin.get('/export/expenses.csv', async (c) => {
       (expense.tax_cents / 100).toFixed(2),
       expense.currency,
       expense.voided_at ? 'void' : 'recorded',
+      expense.attachment_count ? 'attached' : 'missing invoice',
       expense.attachment_count,
       expense.created_at,
     ]),
   ];
   return csvResponse(rows, 'expenses.csv');
+});
+
+admin.get('/export/expenses.zip', async (c) => {
+  const workspaceId = c.get('workspaceId');
+  const [expenses, attachments] = await Promise.all([
+    listExpenses(c.env.DB, null, null, workspaceId),
+    listWorkspaceExpenseAttachments(c.env.DB, workspaceId),
+  ]);
+  const evidencePaths = new Map<number, string[]>();
+  const files = attachments.map((attachment) => {
+    const path = `evidence/${attachment.expense_date}_${attachment.expense_id}_${safeZipPart(attachment.payee)}/${attachment.id}_${safeZipPart(attachment.filename)}`;
+    evidencePaths.set(attachment.expense_id, [...(evidencePaths.get(attachment.expense_id) ?? []), path]);
+    return { name: path, bytes: attachment.bytes, modified: new Date(attachment.uploaded_at.replace(' ', 'T') + 'Z') };
+  });
+  const rows: unknown[][] = [
+    ['date', 'company', 'paid_to', 'category', 'description', 'reference', 'client', 'amount', 'tax_included', 'currency', 'status', 'invoice_status', 'evidence_files', 'recorded_at'],
+    ...expenses.map((expense) => [
+      expense.expense_date,
+      expense.branch_name,
+      expense.payee,
+      expense.category,
+      expense.description,
+      expense.reference,
+      expense.client_name,
+      (expense.amount_cents / 100).toFixed(2),
+      (expense.tax_cents / 100).toFixed(2),
+      expense.currency,
+      expense.voided_at ? 'void' : 'recorded',
+      expense.attachment_count ? 'attached' : 'missing invoice',
+      (evidencePaths.get(expense.id) ?? []).join(';'),
+      expense.created_at,
+    ]),
+  ];
+  const csv = new TextEncoder().encode(csvBody(rows));
+  const archive = createZip([{ name: 'expenses.csv', bytes: csv }, ...files]);
+  const filename = `${safeZipPart(c.get('workspaceName'))}-expenses-with-evidence.zip`;
+  return new Response(archive as unknown as BodyInit, {
+    headers: {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'private, no-store',
+    },
+  });
 });
 
 // Remove a recorded pay-link view (own views, email scanners) from History.
@@ -1615,7 +1683,7 @@ admin.get('/payments', async (c) => {
   const [payments, settings, clients] = await Promise.all([
     listAllPayments(c.env.DB, branchId, clientId),
     getSettings(c.env.DB, branchId),
-    listClients(c.env.DB, true),
+    listClients(c.env.DB, true, c.get('workspaceId')),
   ]);
   return c.html(
     <PaymentsPage
@@ -1637,9 +1705,9 @@ admin.get('/reports', async (c) => {
   const settings = await getSettings(c.env.DB, branchId);
   const clientId = Number(c.req.query('client')) || null;
   const [summary, months, clients] = await Promise.all([
-    reportSummary(c.env.DB, null, todayInTz(settings.timezone), clientId),
-    monthlyReport(c.env.DB, null, clientId),
-    listClients(c.env.DB, true),
+    reportSummary(c.env.DB, null, todayInTz(settings.timezone), clientId, c.get('workspaceId')),
+    monthlyReport(c.env.DB, null, clientId, c.get('workspaceId')),
+    listClients(c.env.DB, true, c.get('workspaceId')),
   ]);
   return c.html(
     <ReportsPage
@@ -1673,7 +1741,7 @@ admin.post('/settings/appearance', async (c) => {
 });
 
 admin.get('/settings', async (c) => {
-  const branches = await listBranches(c.env.DB);
+  const branches = await listBranches(c.env.DB, c.get('workspaceId'));
   const requestedBranchId = Number(c.req.query('branch'));
   const branchId = branches.some((branch) => branch.id === requestedBranchId)
     ? requestedBranchId
@@ -1766,7 +1834,7 @@ admin.post('/settings', async (c) => {
   const raw = await c.req.parseBody();
   const body = raw as Record<string, string>;
   const branchId = Number(body.branch_id);
-  if (!(await listBranches(c.env.DB)).some((branch) => branch.id === branchId)) {
+  if (!(await listBranches(c.env.DB, c.get('workspaceId'))).some((branch) => branch.id === branchId)) {
     return c.text('Choose a valid company.', 400);
   }
   const current = await getSettings(c.env.DB, branchId);

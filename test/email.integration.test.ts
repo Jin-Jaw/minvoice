@@ -4,6 +4,8 @@ import { getSettings, type InvoiceWithClient } from '../src/db/queries';
 import { sendInvoiceEmail, sendInvoiceEmailToClientAndOwner, sendTestEmail } from '../src/services/email';
 import { isBoxed, unbox } from '../src/lib/secretbox';
 import { en } from '../src/lib/strings/en';
+import { todayInTz } from '../src/lib/dates';
+import { invoicePdfFilename } from '../src/lib/invoice-filename';
 
 const DB = env.DB;
 const TEST_MASTER_KEY = 'integration-test-master-key-0123456789abcdef';
@@ -46,18 +48,23 @@ describe('sendTestEmail', () => {
     } as unknown as SendEmail;
 
     const to = await sendTestEmail({ ...env, EMAIL }, DB, 1);
+    const settings = await getSettings(DB, 1);
+    const today = todayInTz(settings.timezone);
+    const month = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+      .format(new Date(`${today}T00:00:00Z`));
+    const filename = invoicePdfFilename(1, today);
     expect(to).toBe('owner@example.test');
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe('owner@example.test');
-    expect(sent[0].subject).toBe('August 2026 Invoice from Test Biz');
+    expect(sent[0].subject).toBe(`${month} Invoice from Test Biz`);
     expect(sent[0].from?.email).toBe('contact@jin-jaw.co.uk');
     // The real PDF rides along (ASCII sample -> fast WinAnsi path -> compact file)
     expect(sent[0].attachments).toHaveLength(1);
-    expect(sent[0].attachments![0].filename).toBe('JinJawLTD_Invoice_August_2026.pdf');
+    expect(sent[0].attachments![0].filename).toBe(filename);
     expect(sent[0].attachments![0].content.length).toBeGreaterThan(1000);
     expect(sent[0].text).toContain('Test Biz has sent you an invoice for');
     expect(sent[0].text).not.toContain('A PDF copy is attached');
-    expect(sent[0].html).toContain('JinJawLTD_Invoice_August_2026.pdf attached below');
+    expect(sent[0].html).toContain(`${filename} attached below`);
     expect(sent[0].html).not.toContain('123 Map Street');
     expect(sent[0].html).toContain('src="https://jin-jaw.co.uk/assets/jinjaw-square.png"');
     expect(sent[0].html).toContain('object-fit: cover; border-radius: 8px;');

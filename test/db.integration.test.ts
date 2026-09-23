@@ -26,6 +26,7 @@ import {
   getPayments,
   getSettings,
   listClients,
+  listBranches,
   listExpenseAttachments,
   listExpenses,
   listInvoices,
@@ -1217,5 +1218,29 @@ describe('awaitingPaymentReview', () => {
     // paid invoices are handled by status, not review state
     expect(awaitingPaymentReview({ status: 'paid' }, [{ provider: 'stripe', undone_at: null }])).toBe(false);
     void id;
+  });
+});
+
+describe('workspace isolation', () => {
+  it('keeps companies and clients in their selected workspace', async () => {
+    const propertyBranch = await createBranch(DB, 2, {
+      name: 'Property / Flats',
+      business_address: 'Property records',
+      business_email: null,
+      currency: 'GBP',
+      invoice_prefix: 'PROP-',
+    });
+    const propertyClient = await createClient(DB, {
+      name: 'Property tenant',
+      email: null,
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    }, 2);
+
+    expect((await listBranches(DB, 1)).map((branch) => branch.id)).not.toContain(propertyBranch);
+    expect((await listBranches(DB, 2)).map((branch) => branch.id)).toEqual([propertyBranch]);
+    expect((await listClients(DB)).map((client) => client.id)).not.toContain(propertyClient);
+    expect((await listClients(DB, false, 2)).map((client) => client.id)).toEqual([propertyClient]);
   });
 });

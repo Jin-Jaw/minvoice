@@ -29,5 +29,12 @@ export type Bindings = {
 
 export type AppEnv = {
   Bindings: Bindings;
-  Variables: { secureHeadersNonce?: string; adminSubject: string; branchId: number; branchName: string };
+  Variables: {
+    secureHeadersNonce?: string;
+    adminSubject: string;
+    workspaceId: number;
+    workspaceName: string;
+    branchId: number;
+    branchName: string;
+  };
 };

@@ -831,7 +831,7 @@ async function confirmIncome(env: Bindings, api: TelegramApi, branchId: number, 
         address: null,
         default_rate_cents: null,
         payment_terms_days: null,
-      });
+      }, branch.workspace_id);
       await linkClientToBranch(env.DB, clientId, branchId);
     }
   }

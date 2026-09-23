@@ -108,6 +108,9 @@ export function ReportsPage({
           <a class="btn btn-secondary btn-sm" href="/admin/export/expenses.csv">
             Export expenses CSV
           </a>
+          <a class="btn btn-primary btn-sm" href="/admin/export/expenses.zip">
+            Export expenses + evidence
+          </a>
         </div>
       </div>
 

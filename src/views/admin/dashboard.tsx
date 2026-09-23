@@ -131,7 +131,7 @@ export function DashboardPage({
       {emailed ? <div class="banner banner-success">Invoice emailed to {emailed}.</div> : null}
       {emailError ? <div class="banner banner-error">Email failed to send: {emailError}</div> : null}
 
-      <div class="banner">Showing invoices from both companies. Choose the issuing company when creating a new invoice.</div>
+      <div class="banner">Showing invoices from the selected workspace. Choose the issuing company when creating a new invoice.</div>
 
       {warnings?.length ? (
         <div class="banner banner-warning">
