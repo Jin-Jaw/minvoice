@@ -51,9 +51,10 @@
     "logs": { "head_sampling_rate": 1 },
     "traces": { "enabled": true, "head_sampling_rate": 0.05 }
   },
-  // Daily at 15:00 UTC: payment reminder emails (only when switched on in
-  // Settings → Email), email outbox retries, Telegram overdue-invoice
-  // messages, and purges of old outbox rows, login attempts, expired imports
-  // and expired Telegram data.
-  "triggers": { "crons": ["0 15 * * *"] }
+  // Hourly: Gmail payment confirmations (only once Gmail is connected in
+  // Settings; src/index.tsx matches this exact expression). Daily at 15:00
+  // UTC: payment reminder emails (only when switched on in Settings → Email),
+  // email outbox retries, Telegram overdue-invoice messages, and purges of old
+  // outbox rows, login attempts, expired imports and expired Telegram data.
+  "triggers": { "crons": ["0 * * * *", "0 15 * * *"] }
 }

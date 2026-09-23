@@ -19,6 +19,7 @@ import {
   recordLoginAttempt,
 } from './db/queries';
 import { processEmailOutbox } from './services/outbox';
+import { scanGmailPayments } from './services/gmail-payments';
 import { handleTelegramUpdate, type TelegramUpdate } from './services/telegram/handler';
 import { notifyOverdueInvoices } from './services/telegram/notifications';
 import { purgeTelegramData } from './services/telegram/repository';
@@ -293,12 +294,30 @@ app.onError((err, c) => {
   return c.text('Something went wrong. The error has been reported.', 500);
 });
 
+// Must match the hourly entry in wrangler.jsonc triggers.
+const GMAIL_SCAN_CRON = '0 * * * *';
+
 export default {
   fetch: app.fetch,
-  // Daily cron (wrangler.jsonc triggers): enqueue due reminders (opt-in via
-  // Settings), drain the email outbox (delivers reminders + retries any
-  // email notifications that failed their immediate attempt), then housekeeping.
-  scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
+  // Cron triggers (wrangler.jsonc). Hourly: check Gmail for payment
+  // confirmations (a no-op until Gmail is connected in Settings). Daily:
+  // enqueue due reminders (opt-in via Settings), drain the email outbox
+  // (delivers reminders + retries any email notifications that failed their
+  // immediate attempt), then housekeeping.
+  scheduled(controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
+    if (controller.cron === GMAIL_SCAN_CRON) {
+      ctx.waitUntil(
+        scanGmailPayments(env).then(
+          (result) => {
+            if (result.checked || result.paid || result.review) {
+              console.log(JSON.stringify({ event: 'gmail_payment_scan', ...result }));
+            }
+          },
+          (error) => console.error(JSON.stringify({ event: 'gmail_payment_scan_failed', error: String(error) }))
+        )
+      );
+      return;
+    }
     ctx.waitUntil(
       (async () => {
         await sendOverdueReminders(env);

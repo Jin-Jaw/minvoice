@@ -21,6 +21,14 @@ export function secretConfigured(v: string | undefined): boolean {
   return t !== '' && !PLACEHOLDER_VALUES.has(t);
 }
 
+/** A Gmail payment search must name a sender address, so arbitrary inbox mail can never change invoices. */
+export function trustedSenderQuery(query: string): boolean {
+  return /(?:^|\s|\{)from:[^\s{}]+@[^\s{}]+/i.test(query);
+}
+
+/** The Gmail scan runs hourly; this long without a completed check means it is failing. */
+const GMAIL_STALE_AFTER_MS = 3 * 60 * 60 * 1000;
+
 export type ConfigWarning = { text: string; category: 'email' | 'auth' };
 
 /**
@@ -60,6 +68,29 @@ export async function configWarnings(
     }
     if (!settings.email_from.trim()) {
       push('email', 'No email From address set (Settings) — invoice and receipt emails will fail.');
+    }
+  }
+  if (settings.gmail_enabled) {
+    if (!secretConfigured(env.GMAIL_CLIENT_ID) || !secretConfigured(env.GMAIL_CLIENT_SECRET)) {
+      push('email', 'Gmail payment matching is on but GMAIL_CLIENT_ID or GMAIL_CLIENT_SECRET is missing.');
+    }
+    if (!settings.gmail_address || !settings.gmail_refresh_token) {
+      push('email', 'Gmail payment matching is on but no Gmail account is connected.');
+    }
+    if (!trustedSenderQuery(settings.gmail_query)) {
+      push('email', 'Gmail payment matching needs a trusted from: sender address in its search before it can run.');
+    }
+    if (!validMasterKey(env.SETTINGS_MASTER_KEY)) {
+      push('auth', 'Gmail requires SETTINGS_MASTER_KEY so its refresh token stays encrypted at rest.');
+    } else if ((await storedSecretsHealth(env, settings, ['gmail_refresh_token'])).undecryptable) {
+      push('email', 'The stored Gmail refresh token cannot be decrypted — reconnect Gmail in Settings.');
+    }
+    const lastChecked = settings.gmail_last_checked_at;
+    if (lastChecked && Date.now() - Date.parse(`${lastChecked.replace(' ', 'T')}Z`) > GMAIL_STALE_AFTER_MS) {
+      push(
+        'email',
+        `Gmail payment matching has not completed a check since ${lastChecked} UTC — reconnect Gmail in Settings, or read the Worker logs.`
+      );
     }
   }
   if (authMode(env) === 'password') {

@@ -30,8 +30,8 @@ that they depend on.
 9. Open `/admin`. On an empty database, confirm the registered address, tax
    position, invoice terms, and default rate, then finish the first-run
    wizard. After an import into a new Worker, re-enter the Resend API key in
-   Settings → Email: the new `SETTINGS_MASTER_KEY` cannot decrypt the stored
-   one.
+   Settings → Email and reconnect Gmail in Settings → Gmail payments: the new
+   `SETTINGS_MASTER_KEY` cannot decrypt the stored credentials.
 
 Stripe and PayPal are disabled by default. Enable them only after their secrets
 and verified webhooks have been configured.
@@ -65,6 +65,8 @@ Everything production depends on outside git, as of 2026-09-23:
   plan for 30-day Time Travel. The daily cron trigger deploys from
   `wrangler.jsonc`.
 - **Resend:** `jin-jaw.co.uk` verified as a sending domain, and an API key.
+- **Google Cloud:** the OAuth web client behind `GMAIL_CLIENT_ID`, with the
+  Gmail API enabled and the Gmail callback registered as a redirect URI.
 - **Telegram:** the bot in BotFather and its registered webhook.
 - **GitHub:** the `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository
   secrets used by the deploy job.
@@ -196,13 +198,56 @@ production schema, and merged into `main` with the workspaces feature. The
 same recovery (commit `a07638a`) added `0015_workspaces` and
 `0015_gmail_payment_matching`, which production had applied from their own
 branches, and renamed the receipt-photo migration to
-`0018_expense_import_images`, which the 2026-09-23 deploy applied. The Gmail
-payment reader that `0015_gmail_payment_matching` belongs to is only on branch
-`JADPTFIXES/invoice-page-work`, and it stopped running when `main` was
-deployed on 2026-09-21. The three `0015` files do not depend on each other:
+`0018_expense_import_images`, which the 2026-09-23 deploy applied.
+`0015_gmail_payment_matching` belongs to the Gmail payment reader (see Gmail
+payment confirmations). The three `0015` files do not depend on each other:
 production applied them in the order gmail, workspaces, telegram, and a new
 database applies them in filename order. Deploy only through CI from `main`,
 so production never again runs code that git does not have.
+
+## Gmail payment confirmations
+
+The Worker reads one Gmail mailbox with the read-only `gmail.readonly` scope
+and closes sent invoices that a trusted payment email matches. The hourly cron
+trigger runs the check. **Check Gmail now**, on the dashboard or in
+Settings → Gmail payments, runs it on demand.
+
+- **Matching:** only invoices with status sent are candidates. A message that
+  names exactly one sent invoice number is matched to that invoice when an
+  amount in the invoice currency is within 2% of the total, or when all its
+  amounts are in other currencies (a converted receipt). A message without an
+  invoice number is matched only when a same-currency amount within 2% fits
+  exactly one sent invoice. Every other message is recorded as ignored or
+  review and changes nothing.
+- **Result of a match:** a manual payment of the full invoice total, dated on
+  the email, with the note "Automatically matched from Gmail message …". The
+  linked Telegram chat gets the usual "Payment received" message.
+- **Search:** Settings → Gmail payments holds the Gmail search, which must
+  contain a `from:` sender address. Keep the trusted senders there and out of
+  this repository, which is public. Each check reads up to 25 matching
+  messages and skips every message id already in `gmail_payment_events`.
+- **Credentials:** the Google OAuth client is `GMAIL_CLIENT_ID` and
+  `GMAIL_CLIENT_SECRET` (Worker secrets), with
+  `https://invoices.jin-jaw.co.uk/admin/settings/gmail/callback` as its
+  redirect URI. The refresh token is saved in Settings, encrypted with
+  `SETTINGS_MASTER_KEY`.
+- **Failures:** a failed check logs `gmail_payment_scan_failed`. When the last
+  completed check is more than three hours old, the dashboard shows a warning.
+  The usual fix is Settings → Gmail payments → Reconnect Gmail.
+- **Undoing a match:** use Undo on the payment in the invoice's Payments card.
+  The message stays in `gmail_payment_events`, so later checks do not match it
+  again.
+- **Stopping it:** untick "Automatically mark trusted payment matches paid", or
+  use Disconnect Gmail, which also deletes the stored token. To end Google's
+  grant as well, remove the app's access in the Google Account security
+  settings.
+- **Code:** `src/services/gmail-payments.ts` (with its unit tests beside it),
+  the Gmail routes in `src/routes/admin.tsx` (after the Telegram routes), and
+  `test/gmail-payments.integration.test.ts`.
+
+The reader was built on branch `JADPTFIXES/invoice-page-work` and ran in
+production from 2026-09-05 until `main` was deployed without it on
+2026-09-21. It was brought onto `main` on 2026-09-23.
 
 ## Backups and recovery
 

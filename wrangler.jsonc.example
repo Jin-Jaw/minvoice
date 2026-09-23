@@ -37,9 +37,9 @@
   "observability": {
     "enabled": true
   },
-  // Daily overdue-reminder check (15:00 UTC). Does nothing unless payment
-  // reminders are switched on in Settings → Email.
-  "triggers": { "crons": ["0 15 * * *"] },
+  // Gmail payment checks hourly; daily reminders at 15:00 UTC. Each job is a
+  // no-op until it is switched on in Settings.
+  "triggers": { "crons": ["0 * * * *", "0 15 * * *"] },
 
   // Staging: sandbox providers, separate D1, own hostname. Deploy with
   // `npx wrangler d1 migrations apply DB --remote --env test`, then
@@ -68,7 +68,7 @@
         "PAYPAL_API_BASE": "https://api-m.sandbox.paypal.com"
       },
       "observability": { "enabled": true },
-      "triggers": { "crons": ["0 15 * * *"] }
+      "triggers": { "crons": ["0 * * * *", "0 15 * * *"] }
     }
   }
 }

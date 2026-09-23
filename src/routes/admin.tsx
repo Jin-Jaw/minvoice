@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { getCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { selectBranch, selectWorkspace } from '../middleware/branch';
 import type { AppEnv } from '../env';
 import {
@@ -10,11 +10,11 @@ import {
   type ClientRateCurrency,
 } from '../lib/money';
 import { addDaysISO, isValidTimezone, todayInTz } from '../lib/dates';
-import { configWarnings, secretConfigured } from '../lib/config';
+import { configWarnings, secretConfigured, trustedSenderQuery } from '../lib/config';
 import { accentUsable, safeAccent } from '../lib/color';
 import { effectiveProviderEnv, encryptStoredSecrets, keySource } from '../lib/providers';
 import { sealIfKeyed, unbox, validMasterKey } from '../lib/secretbox';
-import { isLocalRequest } from '../lib/admin-auth';
+import { isLocalRequest, timingSafeEqual } from '../lib/admin-auth';
 import { parseSchedule } from '../lib/reminders';
 import { invoicePdfFilename } from '../lib/invoice-filename';
 import { isIsoDate, prepareExpenseAttachment } from '../lib/expenses';
@@ -84,6 +84,9 @@ import {
   updateInvoice,
   setNextInvoiceNumber,
   setResendApiKey,
+  setGmailConnection,
+  updateGmailSettings,
+  clearGmailConnection,
   updateEmailSettings,
   updateSettings,
   type ItemDraft,
@@ -103,6 +106,7 @@ import {
   listInvoiceAttachments,
 } from '../services/telegram/repository';
 import { notifyInvoicePaid } from '../services/telegram/notifications';
+import { exchangeGmailCode, gmailAuthorizationUrl, scanGmailPayments } from '../services/gmail-payments';
 import { readReceiptImage, type ReceiptImageMime } from '../services/receipt-ocr';
 import { InvoiceFormPage } from '../views/admin/invoice-form';
 import { InvoiceDetailPage } from '../views/admin/invoice-detail';
@@ -502,6 +506,9 @@ admin.get('/', async (c) => {
       emailed={c.req.query('emailed')}
       emailError={c.req.query('email_error')}
       emailEnabled={settings.email_provider !== 'none'}
+      gmailConnected={!!settings.gmail_address && !!settings.gmail_refresh_token}
+      gmailChecked={c.req.query('gmail_checked')}
+      gmailError={c.req.query('gmail_error')}
       today={todayInTz(settings.timezone)}
       warnings={(await configWarnings(c.env, settings))
         .filter((w) => w.category !== 'auth')
@@ -1758,6 +1765,12 @@ admin.get('/settings', async (c) => {
   const resendKept = c.req.query('resend_kept') === '1';
   const secretSaveBlocked = c.req.query('secret_key_required') === '1';
   const accentKeptQ = c.req.query('accent_kept') === '1';
+  const gmail = {
+    connected: c.req.query('gmail_connected') === '1',
+    disconnected: c.req.query('gmail_disconnected') === '1',
+    error: c.req.query('gmail_error') ?? null,
+    checked: c.req.query('gmail_checked') ?? null,
+  };
   // Masked-field hints show the last 4 chars of the real key, so boxed values
   // are opened first; undecryptable ones fall back to '' (alert explains why).
   const tail = async (v: string) => {
@@ -1784,6 +1797,7 @@ admin.get('/settings', async (c) => {
       resendKept={resendKept}
       secretSaveBlocked={secretSaveBlocked}
       accentKept={accentKeptQ}
+      gmail={gmail}
       alerts={await configWarnings(c.env, settings)}
       theme={themeCookie(c)}
       telegram={{
@@ -1810,6 +1824,89 @@ admin.post('/settings/telegram/connect', async (c) => {
 admin.post('/settings/telegram/disconnect', async (c) => {
   await disconnectAdmin(c.env.DB, c.get('adminSubject'));
   return c.redirect('/admin/settings?saved=1#telegram');
+});
+
+// ---------- Gmail payment confirmations ----------
+// Read-only OAuth: connect stores a sealed refresh token; the hourly cron (or
+// "Check Gmail now") closes sent invoices that a trusted payment email matches.
+
+const GMAIL_STATE_COOKIE = 'gmail_oauth_state';
+
+const gmailErrorRedirect = (message: string, to = '/admin/settings') =>
+  `${to}?gmail_error=${encodeURIComponent(message.slice(0, 200))}${to === '/admin/settings' ? '#gmail' : ''}`;
+
+admin.get('/settings/gmail/connect', (c) => {
+  if (!validMasterKey(c.env.SETTINGS_MASTER_KEY)) {
+    return c.redirect(gmailErrorRedirect('SETTINGS_MASTER_KEY is required before Gmail can be connected.'));
+  }
+  try {
+    const state = crypto.randomUUID();
+    setCookie(c, GMAIL_STATE_COOKIE, state, {
+      path: '/admin/settings/gmail',
+      httpOnly: true,
+      secure: new URL(c.req.url).protocol === 'https:',
+      sameSite: 'Lax',
+      maxAge: 10 * 60,
+    });
+    return c.redirect(gmailAuthorizationUrl(c.env, state));
+  } catch (error) {
+    return c.redirect(gmailErrorRedirect(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+admin.get('/settings/gmail/callback', async (c) => {
+  const expected = getCookie(c, GMAIL_STATE_COOKIE) ?? '';
+  const actual = c.req.query('state') ?? '';
+  deleteCookie(c, GMAIL_STATE_COOKIE, { path: '/admin/settings/gmail' });
+  if (!expected || !actual || !(await timingSafeEqual(expected, actual))) {
+    return c.redirect(gmailErrorRedirect('Gmail connection state was missing or expired. Try connecting again.'));
+  }
+  if (c.req.query('error')) return c.redirect(gmailErrorRedirect('Google access was not granted.'));
+  const code = c.req.query('code');
+  if (!code) return c.redirect(gmailErrorRedirect('Google did not return an authorization code.'));
+  try {
+    const connection = await exchangeGmailCode(c.env, code);
+    await setGmailConnection(c.env.DB, {
+      refreshToken: await sealIfKeyed(c.env.SETTINGS_MASTER_KEY, connection.refreshToken),
+      address: connection.address,
+    });
+    return c.redirect('/admin/settings?gmail_connected=1#gmail');
+  } catch (error) {
+    return c.redirect(gmailErrorRedirect(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+admin.post('/settings/gmail', async (c) => {
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  const query = (body.gmail_query ?? '').trim();
+  if (query.length > 500 || !trustedSenderQuery(query)) {
+    return c.redirect(
+      gmailErrorRedirect('The Gmail search must be under 500 characters and include a trusted from: sender email address.')
+    );
+  }
+  const current = await getSettings(c.env.DB, c.get('branchId'));
+  await updateGmailSettings(c.env.DB, {
+    enabled: !!body.gmail_enabled && !!current.gmail_address && !!current.gmail_refresh_token,
+    query,
+  });
+  return c.redirect('/admin/settings?saved=1#gmail');
+});
+
+admin.post('/settings/gmail/check', async (c) => {
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  const to = body.return_to === '/admin' ? '/admin' : '/admin/settings';
+  try {
+    const result = await scanGmailPayments(c.env);
+    const summary = `${result.checked} checked, ${result.paid} paid, ${result.review} review, ${result.ignored} ignored`;
+    return c.redirect(`${to}?gmail_checked=${encodeURIComponent(summary)}${to === '/admin' ? '' : '#gmail'}`);
+  } catch (error) {
+    return c.redirect(gmailErrorRedirect(error instanceof Error ? error.message : String(error), to));
+  }
+});
+
+admin.post('/settings/gmail/disconnect', async (c) => {
+  await clearGmailConnection(c.env.DB);
+  return c.redirect('/admin/settings?gmail_disconnected=1#gmail');
 });
 
 admin.get('/invoices/:id/attachments/:attachmentId', async (c) => {

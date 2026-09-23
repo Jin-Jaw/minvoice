@@ -121,3 +121,52 @@ describe('configWarnings', () => {
     expect(w.some((m) => m.category === 'email' && m.text.includes('cannot be decrypted'))).toBe(true);
   });
 });
+
+describe('configWarnings: Gmail payment matching', () => {
+  const key = 'unit-test-master-key-0123456789abcdef';
+  const gmailEnv = { ...fullEnv, GMAIL_CLIENT_ID: 'gid', GMAIL_CLIENT_SECRET: 'gsec', SETTINGS_MASTER_KEY: key } as Bindings;
+  const sqlTime = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+  const gmail = async (overrides: Partial<Settings> = {}) =>
+    ({
+      ...cf,
+      gmail_enabled: 1,
+      gmail_address: 'books@example.test',
+      gmail_refresh_token: await box(key, 'refresh-token'),
+      gmail_query: 'from:payments@bank.example',
+      gmail_last_checked_at: sqlTime(Date.now() - 30 * 60 * 1000),
+      ...overrides,
+    }) as Settings;
+  const texts = async (env: Bindings, settings: Settings) => (await configWarnings(env, settings)).map((w) => w.text);
+
+  it('is silent while connected and checking on schedule', async () => {
+    expect(await configWarnings(gmailEnv, await gmail())).toEqual([]);
+    // A fresh connection has not run yet; that is not a failure.
+    expect(await configWarnings(gmailEnv, await gmail({ gmail_last_checked_at: null }))).toEqual([]);
+  });
+
+  it('stays silent while switched off', async () => {
+    const off = await gmail({ gmail_enabled: 0, gmail_query: '', gmail_last_checked_at: '2026-01-01 00:00:00' });
+    expect(await configWarnings(fullEnv, off)).toEqual([]);
+  });
+
+  it('flags checks that stopped completing', async () => {
+    const stale = await gmail({ gmail_last_checked_at: sqlTime(Date.now() - 5 * 60 * 60 * 1000) });
+    expect((await texts(gmailEnv, stale)).some((t) => t.includes('has not completed a check since'))).toBe(true);
+  });
+
+  it('flags a search without a trusted sender', async () => {
+    const loose = await gmail({ gmail_query: '"payment received"' });
+    expect((await texts(gmailEnv, loose)).some((t) => t.includes('trusted from:'))).toBe(true);
+  });
+
+  it('flags missing OAuth client secrets', async () => {
+    expect((await texts({ ...gmailEnv, GMAIL_CLIENT_SECRET: '' }, await gmail())).some((t) => t.includes('GMAIL_CLIENT_ID'))).toBe(
+      true
+    );
+  });
+
+  it('flags a refresh token the master key cannot open', async () => {
+    const foreign = await gmail({ gmail_refresh_token: await box('a-different-master-key-fedcba9876543210', 'refresh-token') });
+    expect((await texts(gmailEnv, foreign)).some((t) => t.includes('cannot be decrypted'))).toBe(true);
+  });
+});
