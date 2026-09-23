@@ -27,8 +27,9 @@ import {
 } from '../../db/queries';
 import { addDaysISO, formatDateHuman, todayInTz } from '../../lib/dates';
 import { computeTotals, formatCents, isSupportedCurrency } from '../../lib/money';
-import { MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
+import { EXPENSE_CATEGORIES, MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
 import {
+  detectExpenseBranch,
   extractExpenseInvoiceText,
   parseExpenseInvoice,
   type ParsedExpenseInvoice,
@@ -69,12 +70,21 @@ export type TelegramUpdate = {
 type NewInvoiceState = {
   clientId: number;
   issueDate: string;
+  /** Client (or company) payment terms, offered first for the due date. */
+  termsDays: number;
   dueDate: string | null;
   currency: string;
   /** Client (or company) default rate, used when a line has no price. */
   defaultUnitPriceCents: number | null;
+  /** The currency that default rate is in; it is not applied in any other. */
+  defaultRateCurrency: string | null;
   items: LineItemInput[];
+  subject?: string | null;
   notes?: string | null;
+  /** Payment details already answered (or copied), so edits return to the summary. */
+  notesChosen?: boolean;
+  /** Number of the invoice this draft was copied from. */
+  repeatedFrom?: string;
 };
 
 type IncomeState = {
@@ -86,7 +96,16 @@ type IncomeState = {
   reference?: string | null;
 };
 
-type ExpenseState = { token?: string; parsed?: ParsedExpenseInvoice; kind?: 'pdf' | 'image' };
+type ExpenseState = {
+  token?: string;
+  parsed?: ParsedExpenseInvoice;
+  kind?: 'pdf' | 'image';
+  /** Company the expense is saved to (defaults to the active one). */
+  targetBranchId?: number;
+  /** targetBranchId came from the invoice's billed-to text. */
+  branchDetected?: boolean;
+  clientId?: number | null;
+};
 
 const MAX_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_LINE_ITEMS = 20;
@@ -216,7 +235,7 @@ export async function handleTelegramUpdate(env: Bindings, update: TelegramUpdate
       await continueAddIncome(env, api, session.branch_id, userId, chatId, session.step, state, text);
       return;
     }
-    if (session?.flow === 'expense_invoice' && (session.step === 'amount' || session.step === 'payee')) {
+    if (session?.flow === 'expense_invoice' && ['amount', 'payee', 'date'].includes(session.step)) {
       const state = JSON.parse(session.data_json) as ExpenseState;
       await continueExpenseImport(env, api, session.branch_id, userId, chatId, session.step, state, text);
       return;
@@ -368,6 +387,21 @@ async function handleCallback(
     return;
   }
   if (data === 'itemsdone') return finishLineItems(env, api, branchId, userId, chatId);
+  if (data === 'undoline') return undoLastLine(env, api, branchId, userId, chatId);
+  if (data === 'addline' || data === 'rmmenu' || data === 'editdue' || data === 'editnotes') {
+    return editDraftPart(env, api, branchId, userId, chatId, data);
+  }
+  if (data === 'rmkeep') return removeDraftLine(env, api, branchId, userId, chatId, null);
+  if (data.startsWith('cur:')) return changeDraftCurrency(env, api, branchId, userId, chatId, data.slice(4));
+  if (data.startsWith('due:')) return chooseDueDate(env, api, branchId, userId, chatId, data.slice(4));
+  if (data.startsWith('expedit:')) return editExpenseField(env, api, branchId, userId, chatId, data.slice(8));
+  if (data === 'expback') {
+    const { state } = await loadExpenseSession(env, branchId, userId);
+    return showExpenseReview(env, api, branchId, userId, chatId, state);
+  }
+  // Pickers whose value may be 0 ("today", "no client"), so they skip the id check below.
+  const picked = data.match(/^(expday|expcat|expclient|expcompany):(\d{1,9})$/);
+  if (picked) return setExpenseField(env, api, branchId, userId, chatId, picked[1], Number(picked[2]));
   if (data === 'notessaved') return choosePaymentDetails(env, api, branchId, userId, chatId, true);
   if (data === 'notesnone') return choosePaymentDetails(env, api, branchId, userId, chatId, false);
   if (data.startsWith('list:')) return showInvoiceList(env, api, branchId, chatId, data.slice(5));
@@ -399,7 +433,10 @@ async function handleCallback(
   if (action === 'inv') return showInvoice(env, api, branchId, chatId, id);
   if (action === 'client') return selectClient(env, api, branchId, userId, chatId, id);
   if (action === 'create') return confirmCreate(env, api, branchId, userId, chatId);
-  if (action === 'editdraft') return editDraft(env, api, branchId, userId, chatId);
+  if (action === 'repeat') return repeatInvoice(env, api, branchId, userId, chatId, id);
+  if (action === 'rmline') return removeDraftLine(env, api, branchId, userId, chatId, id);
+  // Older drafts' "Edit" button: return to the line list without clearing it.
+  if (action === 'editdraft') return editDraftPart(env, api, branchId, userId, chatId, 'addline');
 
   const invoice = await getInvoice(env.DB, branchId, id);
   if (!invoice) throw new Error('Invoice not found in your company.');
@@ -488,6 +525,8 @@ async function handleCallback(
 
 // ---------- New invoice ----------
 
+const QUICK_CURRENCIES = ['GBP', 'EUR', 'USD'];
+
 async function startNewInvoice(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
   const branch = await getBranch(env.DB, branchId);
   if (!branch) throw new Error('That workspace is unavailable.');
@@ -499,6 +538,14 @@ async function startNewInvoice(env: Bindings, api: TelegramApi, branchId: number
     ...clients.map((client) => [{ text: client.name.slice(0, 50), callback_data: `client:${client.id}` }]),
     [{ text: 'Cancel', callback_data: 'cancel' }],
   ]);
+}
+
+async function loadDraft(env: Bindings, branchId: number, userId: string, steps?: string[]) {
+  const session = await getSession(env.DB, userId);
+  if (!session || session.branch_id !== branchId || session.flow !== 'create_invoice' || (steps && !steps.includes(session.step))) {
+    throw new Error('That draft expired. Start again with /newinvoice.');
+  }
+  return { step: session.step, state: JSON.parse(session.data_json) as NewInvoiceState };
 }
 
 async function selectClient(
@@ -517,24 +564,51 @@ async function selectClient(
   const settings = await getSettings(env.DB, branchId);
   const issueDate = todayInTz(settings.timezone);
   const terms = client.payment_terms_days ?? settings.payment_terms_days;
+  // A default rate is only meaningful in the currency it was set in.
+  const clientRate = client.default_rate_cents ?? null;
   const state: NewInvoiceState = {
     clientId,
     issueDate,
+    termsDays: terms,
     dueDate: terms > 0 ? addDaysISO(issueDate, terms) : null,
     currency: client.default_currency ?? settings.currency,
-    defaultUnitPriceCents: client.default_rate_cents ?? settings.default_rate_cents ?? null,
+    defaultUnitPriceCents: clientRate ?? settings.default_rate_cents ?? null,
+    defaultRateCurrency: clientRate !== null ? (client.default_currency ?? settings.currency) : settings.currency,
     items: [],
   };
+  const last = (await listInvoices(env.DB, branchId)).find(
+    (invoice) => invoice.client_id === clientId && invoice.status !== 'void'
+  );
   await saveSession(env.DB, userId, branchId, 'create_invoice', 'items', state);
-  await api.sendMessage(chatId, `Client: <b>${esc(client.name)}</b>\n\nSend the first line item.\n${lineItemHint(state)}`, [
-    [{ text: 'Cancel', callback_data: 'cancel' }],
-  ]);
+  const keyboard: InlineKeyboard = [];
+  if (last) {
+    keyboard.push([
+      {
+        text: `🔁 Repeat ${last.number} (${formatCents(last.total_cents, last.currency)})`.slice(0, 60),
+        callback_data: `repeat:${last.id}`,
+      },
+    ]);
+  }
+  keyboard.push(currencyRow(state.currency), [{ text: 'Cancel', callback_data: 'cancel' }]);
+  await api.sendMessage(
+    chatId,
+    `Client: <b>${esc(client.name)}</b>\nCurrency: <b>${esc(state.currency)}</b> (tap to change)\n\nSend the first line item.\n${lineItemHint(state)}`,
+    keyboard
+  );
+}
+
+function currencyRow(current: string): InlineKeyboard[number] {
+  const options = QUICK_CURRENCIES.includes(current) ? QUICK_CURRENCIES : [current, ...QUICK_CURRENCIES];
+  return options.map((code) => ({ text: code === current ? `✓ ${code}` : code, callback_data: `cur:${code}` }));
+}
+
+function defaultRate(state: NewInvoiceState): number | null {
+  return state.currency === state.defaultRateCurrency ? state.defaultUnitPriceCents : null;
 }
 
 function lineItemHint(state: NewInvoiceState): string {
-  const fallback = state.defaultUnitPriceCents
-    ? `\nSend just a description to use the default rate (${esc(formatCents(state.defaultUnitPriceCents, state.currency))}).`
-    : '';
+  const rate = defaultRate(state);
+  const fallback = rate ? `\nSend just a description to use the default rate (${esc(formatCents(rate, state.currency))}).` : '';
   return `${LINE_ITEM_FORMAT}${fallback}`;
 }
 
@@ -545,6 +619,34 @@ function itemLines(items: LineItemInput[], currency: string): string {
       return `${i + 1}. ${esc(item.description)} — ${qty}${esc(formatCents(item.unit_price_cents, currency))}`;
     })
     .join('\n');
+}
+
+/** The line list shown while adding items, with the running subtotal. */
+async function showItems(api: TelegramApi, chatId: string, state: NewInvoiceState, note = ''): Promise<void> {
+  if (!state.items.length) {
+    await api.sendMessage(
+      chatId,
+      `${note}Currency: <b>${esc(state.currency)}</b>\n\nSend the first line item.\n${lineItemHint(state)}`,
+      [currencyRow(state.currency), [{ text: 'Cancel', callback_data: 'cancel' }]]
+    );
+    return;
+  }
+  const full = state.items.length >= MAX_LINE_ITEMS;
+  const { subtotal_cents } = computeTotals(state.items, 0);
+  await api.sendMessage(
+    chatId,
+    `${note}<b>Line items</b>\n${itemLines(state.items, state.currency)}\n\nSubtotal: <b>${esc(
+      formatCents(subtotal_cents, state.currency)
+    )}</b>\n\n${full ? 'That’s the maximum number of lines. Press Done.' : 'Send another line item, or press Done.'}`,
+    [
+      [
+        { text: '✅ Done', callback_data: 'itemsdone' },
+        { text: '↩️ Undo last', callback_data: 'undoline' },
+      ],
+      currencyRow(state.currency),
+      [{ text: 'Cancel', callback_data: 'cancel' }],
+    ]
+  );
 }
 
 async function continueNewInvoice(
@@ -559,44 +661,24 @@ async function continueNewInvoice(
 ): Promise<void> {
   if (!text) throw new Error('Please send text for this step.');
   if (step === 'items') {
-    const item = parseLineItem(text, state.defaultUnitPriceCents);
+    if (state.items.length >= MAX_LINE_ITEMS) throw new Error('That’s the maximum number of lines. Press Done.');
+    const item = parseLineItem(text, defaultRate(state));
     if (!item) throw new Error(`I couldn’t read that line item.\n\n${LINE_ITEM_FORMAT}`);
     if (item.unit_price_cents > 10_000_000_000) throw new Error('That price is too large.');
-    state.items = [...(state.items ?? []), item];
+    state.items = [...state.items, item];
     await saveSession(env.DB, userId, branchId, 'create_invoice', 'items', state);
-    const full = state.items.length >= MAX_LINE_ITEMS;
-    await api.sendMessage(
-      chatId,
-      `<b>Line items</b>\n${itemLines(state.items, state.currency)}\n\n${
-        full ? 'That’s the maximum number of lines. Press Done.' : 'Send another line item, or press Done.'
-      }`,
-      [
-        [
-          { text: '✅ Done', callback_data: 'itemsdone' },
-          { text: 'Cancel', callback_data: 'cancel' },
-        ],
-      ]
-    );
+    await showItems(api, chatId, state);
     return;
   }
   if (step === 'due_date') {
-    if (text.toLowerCase() === 'none') state.dueDate = null;
-    else if (text.toLowerCase() !== 'default') {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(Date.parse(`${text}T00:00:00Z`))) {
-        throw new Error('Use a real date in YYYY-MM-DD format.');
-      }
-      state.dueDate = text;
+    const answer = text.toLowerCase();
+    if (answer === 'none') return setDueDate(env, api, branchId, userId, chatId, state, null);
+    if (answer === 'default') return setDueDate(env, api, branchId, userId, chatId, state, state.dueDate);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(Date.parse(`${text}T00:00:00Z`))) {
+      throw new Error('Use a real date in YYYY-MM-DD format, or tap one of the buttons.');
     }
-    await saveSession(env.DB, userId, branchId, 'create_invoice', 'currency', state);
-    await api.sendMessage(chatId, `Currency? Send a three-letter code or <b>default</b> (${esc(state.currency)}).`);
-    return;
-  }
-  if (step === 'currency') {
-    const currency = text.toLowerCase() === 'default' ? state.currency : text.toUpperCase();
-    if (!isSupportedCurrency(currency)) throw new Error('Enter a supported three-letter currency code.');
-    state.currency = currency;
-    await askPaymentDetails(env, api, branchId, userId, chatId, state);
-    return;
+    if (text < state.issueDate) throw new Error('The due date can’t be before the invoice date.');
+    return setDueDate(env, api, branchId, userId, chatId, state, text);
   }
   if (step === 'notes') {
     const answer = text.toLowerCase();
@@ -607,6 +689,93 @@ async function continueNewInvoice(
     return setPaymentDetails(env, api, branchId, userId, chatId, state, answer === 'none' ? null : text.slice(0, 2000));
   }
   throw new Error('Use the buttons above, or /newinvoice to start again.');
+}
+
+async function changeDraftCurrency(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  code: string
+): Promise<void> {
+  const { state } = await loadDraft(env, branchId, userId, ['items']);
+  const currency = code.toUpperCase();
+  if (!isSupportedCurrency(currency)) throw new Error('That currency is not supported.');
+  state.currency = currency;
+  await saveSession(env.DB, userId, branchId, 'create_invoice', 'items', state);
+  await showItems(api, chatId, state, `✅ Currency set to <b>${esc(currency)}</b>.\n\n`);
+}
+
+async function undoLastLine(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
+  const { state } = await loadDraft(env, branchId, userId, ['items']);
+  const removed = state.items.pop();
+  await saveSession(env.DB, userId, branchId, 'create_invoice', 'items', state);
+  await showItems(api, chatId, state, removed ? `Removed “${esc(removed.description)}”.\n\n` : '');
+}
+
+async function finishLineItems(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
+  const { state } = await loadDraft(env, branchId, userId, ['items']);
+  if (!state.items.length) throw new Error(`Add at least one line item first.\n\n${LINE_ITEM_FORMAT}`);
+  // Coming back from the summary ("Add line") skips questions already answered.
+  if (state.notesChosen) {
+    await saveSession(env.DB, userId, branchId, 'create_invoice', 'confirm', state);
+    return showDraftSummary(env, api, branchId, chatId, state);
+  }
+  await askDueDate(env, api, branchId, userId, chatId, state);
+}
+
+async function askDueDate(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  state: NewInvoiceState
+): Promise<void> {
+  await saveSession(env.DB, userId, branchId, 'create_invoice', 'due_date', state);
+  const options = [...new Set([state.termsDays, 14, 30].filter((days) => days > 0))];
+  await api.sendMessage(chatId, 'When is it due? Tap an option or send a date (YYYY-MM-DD).', [
+    ...options.map((days) => [
+      {
+        text: `${days === state.termsDays ? '⭐ ' : ''}In ${days} days (${formatDateHuman(addDaysISO(state.issueDate, days))})`,
+        callback_data: `due:${days}`,
+      },
+    ]),
+    [{ text: 'No due date', callback_data: 'due:none' }],
+  ]);
+}
+
+async function chooseDueDate(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  choice: string
+): Promise<void> {
+  const { state } = await loadDraft(env, branchId, userId, ['due_date']);
+  if (choice === 'none') return setDueDate(env, api, branchId, userId, chatId, state, null);
+  const days = Number(choice);
+  if (!Number.isInteger(days) || days <= 0 || days > 365) throw new Error('That due date option is no longer valid.');
+  await setDueDate(env, api, branchId, userId, chatId, state, addDaysISO(state.issueDate, days));
+}
+
+async function setDueDate(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  state: NewInvoiceState,
+  dueDate: string | null
+): Promise<void> {
+  state.dueDate = dueDate;
+  if (state.notesChosen) {
+    await saveSession(env.DB, userId, branchId, 'create_invoice', 'confirm', state);
+    return showDraftSummary(env, api, branchId, chatId, state);
+  }
+  await askPaymentDetails(env, api, branchId, userId, chatId, state);
 }
 
 /** Like the web form: new invoices start with the company's saved payment details. */
@@ -649,6 +818,7 @@ async function setPaymentDetails(
   notes: string | null
 ): Promise<void> {
   state.notes = notes;
+  state.notesChosen = true;
   await saveSession(env.DB, userId, branchId, 'create_invoice', 'confirm', state);
   await showDraftSummary(env, api, branchId, chatId, state);
 }
@@ -661,27 +831,37 @@ async function choosePaymentDetails(
   chatId: string,
   useSaved: boolean
 ): Promise<void> {
-  const session = await getSession(env.DB, userId);
-  if (!session || session.branch_id !== branchId || session.flow !== 'create_invoice' || session.step !== 'notes') {
-    throw new Error('That draft expired. Start again with /newinvoice.');
-  }
-  const state = JSON.parse(session.data_json) as NewInvoiceState;
+  const { state } = await loadDraft(env, branchId, userId, ['notes']);
   const saved = useSaved ? (await getSettings(env.DB, branchId)).default_payment_details.trim() : '';
   await setPaymentDetails(env, api, branchId, userId, chatId, state, saved || null);
 }
 
-async function finishLineItems(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
-  const session = await getSession(env.DB, userId);
-  if (!session || session.branch_id !== branchId || session.flow !== 'create_invoice' || session.step !== 'items') {
-    throw new Error('That draft expired. Start again with /newinvoice.');
-  }
-  const state = JSON.parse(session.data_json) as NewInvoiceState;
-  if (!state.items?.length) throw new Error(`Add at least one line item first.\n\n${LINE_ITEM_FORMAT}`);
-  await saveSession(env.DB, userId, branchId, 'create_invoice', 'due_date', state);
-  await api.sendMessage(
-    chatId,
-    `Due date? Send YYYY-MM-DD${state.dueDate ? `, <b>default</b> (${state.dueDate})` : ''}, or <b>none</b>.`
-  );
+/** Copy a previous invoice's lines, currency and payment details, dated today. */
+async function repeatInvoice(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  invoiceId: number
+): Promise<void> {
+  const { state } = await loadDraft(env, branchId, userId, ['items']);
+  const source = await getInvoice(env.DB, branchId, invoiceId);
+  if (!source || source.client_id !== state.clientId) throw new Error('That invoice can’t be repeated for this client.');
+  const items = await getInvoiceItems(env.DB, invoiceId);
+  if (!items.length) throw new Error(`${source.number} has no line items to copy.`);
+  state.items = items.slice(0, MAX_LINE_ITEMS).map((item) => ({
+    description: item.description,
+    quantity: item.quantity,
+    unit_price_cents: item.unit_price_cents,
+  }));
+  state.currency = source.currency;
+  state.subject = source.subject;
+  state.notes = source.notes;
+  state.notesChosen = true;
+  state.repeatedFrom = source.number;
+  await saveSession(env.DB, userId, branchId, 'create_invoice', 'confirm', state);
+  await showDraftSummary(env, api, branchId, chatId, state);
 }
 
 async function showDraftSummary(
@@ -700,62 +880,99 @@ async function showDraftSummary(
   await api.sendMessage(
     chatId,
     [
-      '<b>Invoice draft</b>',
+      state.repeatedFrom ? `<b>Invoice draft</b> (copy of ${esc(state.repeatedFrom)})` : '<b>Invoice draft</b>',
       '',
       `Client: ${esc(client.name)}`,
-      `Invoice date: ${state.issueDate}`,
+      `Invoice date: ${formatDateHuman(state.issueDate)}`,
       `Due: ${state.dueDate ? formatDateHuman(state.dueDate) : 'None'}`,
-      `Currency: ${state.currency}`,
       '',
       itemLines(state.items, state.currency),
       '',
-      `Total: ${esc(formatCents(totals.total_cents, state.currency))}`,
+      settings.tax_rate_bps
+        ? `Tax: ${esc(formatCents(totals.tax_cents, state.currency))} (${(settings.tax_rate_bps / 100).toFixed(2)}%)`
+        : 'Tax: none',
+      `Total: <b>${esc(formatCents(totals.total_cents, state.currency))}</b>`,
       `Payment details: ${state.notes ? esc(firstLine(state.notes, 60)) : 'None'}`,
-      settings.tax_rate_bps ? `Tax: ${(settings.tax_rate_bps / 100).toFixed(2)}% (workspace default)` : 'Tax: none',
     ].join('\n'),
     [
+      [{ text: '✅ Create invoice', callback_data: 'create:1' }],
       [
-        { text: 'Create invoice', callback_data: 'create:1' },
-        { text: 'Edit', callback_data: 'editdraft:1' },
+        { text: '➕ Add line', callback_data: 'addline' },
+        { text: '➖ Remove line', callback_data: 'rmmenu' },
+      ],
+      [
+        { text: '📅 Due date', callback_data: 'editdue' },
+        { text: '💳 Payment details', callback_data: 'editnotes' },
       ],
       [{ text: 'Cancel', callback_data: 'cancel' }],
     ]
   );
 }
 
-async function confirmCreate(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
-  const session = await getSession(env.DB, userId);
-  if (!session || session.branch_id !== branchId || session.flow !== 'create_invoice' || session.step !== 'confirm') {
-    throw new Error('That draft expired. Start again with /newinvoice.');
+type DraftEdit = 'addline' | 'rmmenu' | 'editdue' | 'editnotes';
+
+async function editDraftPart(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  part: DraftEdit
+): Promise<void> {
+  const { state } = await loadDraft(env, branchId, userId, ['confirm']);
+  if (part === 'addline') {
+    await saveSession(env.DB, userId, branchId, 'create_invoice', 'items', state);
+    return showItems(api, chatId, state);
   }
-  const state = JSON.parse(session.data_json) as NewInvoiceState;
-  if (!state.items?.length) throw new Error('That draft has no line items. Start again with /newinvoice.');
+  if (part === 'editdue') return askDueDate(env, api, branchId, userId, chatId, state);
+  if (part === 'editnotes') return askPaymentDetails(env, api, branchId, userId, chatId, state);
+  await api.sendMessage(chatId, 'Which line should I remove?', [
+    ...state.items.map((item, i) => [
+      { text: `${i + 1}. ${item.description}`.slice(0, 60), callback_data: `rmline:${i + 1}` },
+    ]),
+    [{ text: 'Keep all', callback_data: 'rmkeep' }],
+  ]);
+}
+
+async function removeDraftLine(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  position: number | null
+): Promise<void> {
+  const { state } = await loadDraft(env, branchId, userId, ['confirm']);
+  if (position !== null) {
+    if (position < 1 || position > state.items.length) throw new Error('That line no longer exists.');
+    state.items.splice(position - 1, 1);
+  }
+  if (!state.items.length) {
+    await saveSession(env.DB, userId, branchId, 'create_invoice', 'items', state);
+    return showItems(api, chatId, state, 'All lines removed.\n\n');
+  }
+  await saveSession(env.DB, userId, branchId, 'create_invoice', 'confirm', state);
+  await showDraftSummary(env, api, branchId, chatId, state);
+}
+
+async function confirmCreate(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
+  const { state } = await loadDraft(env, branchId, userId, ['confirm']);
+  if (!state.items.length) throw new Error('That draft has no line items. Start again with /newinvoice.');
   const client = await getClientForBranch(env.DB, state.clientId, branchId);
   if (!client || client.archived) throw new Error('The selected client is unavailable.');
   const id = await createInvoice(env.DB, branchId, {
     client_id: state.clientId,
     issue_date: state.issueDate,
     due_date: state.dueDate ?? null,
-    subject: state.items[0].description.slice(0, 160),
+    subject: (state.subject || state.items[0].description).slice(0, 160),
     notes: state.notes ?? null,
     currency: state.currency,
     items: state.items,
   });
-  await logInvoiceEvent(env.DB, id, 'created_via_telegram');
+  await logInvoiceEvent(env.DB, id, 'created_via_telegram', state.repeatedFrom ? `Repeated from ${state.repeatedFrom}` : undefined);
   await clearSession(env.DB, userId);
   await api.sendMessage(chatId, '✅ Invoice created');
   await showInvoice(env, api, branchId, chatId, id);
-}
-
-async function editDraft(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
-  const session = await getSession(env.DB, userId);
-  if (!session || session.flow !== 'create_invoice') throw new Error('That draft expired.');
-  const state = JSON.parse(session.data_json) as NewInvoiceState;
-  state.items = [];
-  await saveSession(env.DB, userId, branchId, 'create_invoice', 'items', state);
-  await api.sendMessage(chatId, `Line items cleared. Send the first line item again.\n${lineItemHint(state)}`, [
-    [{ text: 'Cancel', callback_data: 'cancel' }],
-  ]);
 }
 
 // ---------- Direct income (expense-only workspaces) ----------
@@ -972,14 +1189,18 @@ async function handleExpenseInvoiceUpload(
 
   const settings = await getSettings(env.DB, branchId);
   let parsed: ParsedExpenseInvoice;
+  let detectedBranch: number | null = null;
   if (mime === 'application/pdf') {
     const extraction = await extractExpenseInvoiceText(bytes);
     const branches = await listBranches(env.DB);
     parsed = parseExpenseInvoice(extraction.lines, branches.map((branch) => branch.name));
+    // Supplier invoices name who they were billed to; file them under that company.
+    detectedBranch = detectExpenseBranch(extraction.lines, branches);
   } else {
     parsed = await readReceiptImage(env.AI, bytes, mime as ReceiptImageMime);
   }
   if (!parsed.currency) parsed.currency = settings.currency;
+  if (!parsed.expenseDate) parsed.expenseDate = todayInTz(settings.timezone);
 
   const token = newExpenseImportToken();
   const fallbackName = mime === 'application/pdf' ? `supplier-invoice-${message.message_id}` : `receipt-${message.message_id}`;
@@ -990,31 +1211,37 @@ async function handleExpenseInvoiceUpload(
     size_bytes: bytes.byteLength,
     sha256: await sha256Hex(bytes),
   });
-  const state: ExpenseState = { token, parsed, kind: mime === 'application/pdf' ? 'pdf' : 'image' };
+  const state: ExpenseState = {
+    token,
+    parsed,
+    kind: mime === 'application/pdf' ? 'pdf' : 'image',
+    targetBranchId: detectedBranch ?? branchId,
+    branchDetected: detectedBranch !== null && detectedBranch !== branchId,
+    clientId: null,
+  };
 
   if (parsed.amountCents === null) {
     await saveSession(env.DB, userId, branchId, 'expense_invoice', 'amount', state);
     await api.sendMessage(
       chatId,
-      `${expenseSummary(parsed, settings.timezone)}\n\nI couldn’t read the total. Send the amount paid, e.g. <b>12.40</b> or <b>12.40 EUR</b>.`,
+      `${await expenseSummary(env, state)}\n\nI couldn’t read the total. Send the amount paid, e.g. <b>12.40</b> or <b>12.40 EUR</b>.`,
       [reviewInAppRow(env, token), [{ text: 'Cancel', callback_data: 'cancel' }]]
     );
     return;
   }
-  await saveSession(env.DB, userId, branchId, 'expense_invoice', 'confirm', state);
-  await api.sendMessage(chatId, `${expenseSummary(parsed, settings.timezone)}\n\nIs the total right?`, [
-    [{ text: `✅ Confirm ${formatCents(parsed.amountCents, parsed.currency)}`, callback_data: 'expenseconfirm:1' }],
-    [{ text: '✏️ Set different amount', callback_data: 'expenseamount:1' }],
-    reviewInAppRow(env, token),
-    [{ text: 'Cancel', callback_data: 'cancel' }],
-  ]);
+  await showExpenseReview(env, api, branchId, userId, chatId, state, 'Is the total right?');
 }
 
 function reviewInAppRow(env: Bindings, token: string): InlineKeyboard[number] {
   return [{ text: 'Review in app', url: `${env.APP_BASE_URL}/admin/expenses/import/${token}/review` }];
 }
 
-function expenseSummary(parsed: ParsedExpenseInvoice, timezone: string, heading = '<b>Expense found</b>'): string {
+async function expenseSummary(env: Bindings, state: ExpenseState, heading = '<b>Expense found</b>'): Promise<string> {
+  const parsed = state.parsed!;
+  const [branch, client] = await Promise.all([
+    getBranch(env.DB, state.targetBranchId!),
+    state.clientId ? getClientForBranch(env.DB, state.clientId, state.targetBranchId!) : Promise.resolve(null),
+  ]);
   const total =
     parsed.amountCents === null || !parsed.currency ? 'Needs review' : formatCents(parsed.amountCents, parsed.currency);
   const tax = parsed.taxCents === null || !parsed.currency ? 'Not detected' : formatCents(parsed.taxCents, parsed.currency);
@@ -1024,13 +1251,44 @@ function expenseSummary(parsed: ParsedExpenseInvoice, timezone: string, heading 
       heading,
       '',
       `Supplier: ${esc(parsed.payee ?? 'Needs review')}`,
-      `Date: ${esc(parsed.expenseDate ?? todayInTz(timezone))}`,
+      `Date: ${esc(parsed.expenseDate ? formatDateHuman(parsed.expenseDate) : 'Today')}`,
       `Total: <b>${esc(total)}</b>`,
       `Tax: ${esc(tax)}`,
       `Reference: ${esc(parsed.reference ?? 'None detected')}`,
       `Category: ${esc(parsed.category)}`,
+      `Company: ${esc(branch?.name ?? 'Unavailable')}${state.branchDetected ? ' (from the invoice)' : ''}`,
+      `Client: ${esc(client?.name ?? 'None')}`,
     ].join('\n') + warnings
   );
+}
+
+/** The confirm screen: save with one tap, or correct any field first. */
+async function showExpenseReview(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  state: ExpenseState,
+  question = 'Save this expense?'
+): Promise<void> {
+  const parsed = state.parsed!;
+  if (parsed.amountCents === null || !parsed.currency) return askExpenseAmount(env, api, branchId, userId, chatId);
+  await saveSession(env.DB, userId, branchId, 'expense_invoice', 'confirm', state);
+  const multipleCompanies = (await listBranches(env.DB)).length > 1;
+  await api.sendMessage(chatId, `${await expenseSummary(env, state)}\n\n${question}`, [
+    [{ text: `✅ Save ${formatCents(parsed.amountCents, parsed.currency)}`, callback_data: 'expenseconfirm:1' }],
+    [
+      { text: '✏️ Amount', callback_data: 'expenseamount:1' },
+      { text: '📅 Date', callback_data: 'expedit:date' },
+    ],
+    [
+      { text: '🏷 Category', callback_data: 'expedit:category' },
+      { text: '👤 Client', callback_data: 'expedit:client' },
+    ],
+    ...(multipleCompanies ? [[{ text: '🏢 Company', callback_data: 'expedit:company' }]] : []),
+    [reviewInAppRow(env, state.token!)[0], { text: 'Cancel', callback_data: 'cancel' }],
+  ]);
 }
 
 async function loadExpenseSession(env: Bindings, branchId: number, userId: string) {
@@ -1040,7 +1298,8 @@ async function loadExpenseSession(env: Bindings, branchId: number, userId: strin
   }
   const state = JSON.parse(session.data_json) as ExpenseState;
   if (!state.token || !state.parsed) throw new Error('That expense import expired. Upload the supplier invoice again.');
-  return { session, state: state as Required<ExpenseState> };
+  state.targetBranchId ??= branchId;
+  return { session, state };
 }
 
 async function askExpenseAmount(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
@@ -1048,9 +1307,106 @@ async function askExpenseAmount(env: Bindings, api: TelegramApi, branchId: numbe
   await saveSession(env.DB, userId, branchId, 'expense_invoice', 'amount', state);
   await api.sendMessage(
     chatId,
-    `Send the amount paid, e.g. <b>12.40</b> (${esc(state.parsed.currency ?? '')}) or <b>12.40 EUR</b>.`,
+    `Send the amount paid, e.g. <b>12.40</b> (${esc(state.parsed!.currency ?? '')}) or <b>12.40 EUR</b>.`,
     [[{ text: 'Cancel', callback_data: 'cancel' }]]
   );
+}
+
+/** Field pickers opened from the confirm screen. */
+async function editExpenseField(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  field: string
+): Promise<void> {
+  const { state } = await loadExpenseSession(env, branchId, userId);
+  if (field === 'date') {
+    const settings = await getSettings(env.DB, state.targetBranchId!);
+    const today = todayInTz(settings.timezone);
+    await saveSession(env.DB, userId, branchId, 'expense_invoice', 'date', state);
+    await api.sendMessage(chatId, 'When was it paid? Tap an option or send a date (YYYY-MM-DD).', [
+      [
+        { text: `Today (${formatDateHuman(today)})`, callback_data: 'expday:0' },
+        { text: 'Yesterday', callback_data: 'expday:1' },
+      ],
+      [{ text: 'Back', callback_data: 'expback' }],
+    ]);
+    return;
+  }
+  if (field === 'category') {
+    await api.sendMessage(chatId, 'Choose a category.', [
+      ...EXPENSE_CATEGORIES.map((category, i) => [
+        { text: `${category === state.parsed!.category ? '✓ ' : ''}${category}`, callback_data: `expcat:${i + 1}` },
+      ]),
+      [{ text: 'Back', callback_data: 'expback' }],
+    ]);
+    return;
+  }
+  if (field === 'client') {
+    const clients = (await listClientsForBranch(env.DB, state.targetBranchId!)).slice(0, 30);
+    await api.sendMessage(
+      chatId,
+      clients.length ? 'Which client is this cost for?' : 'This company has no clients yet.',
+      [
+        ...clients.map((client) => [
+          { text: `${client.id === state.clientId ? '✓ ' : ''}${client.name}`.slice(0, 60), callback_data: `expclient:${client.id}` },
+        ]),
+        [{ text: 'No client', callback_data: 'expclient:0' }],
+        [{ text: 'Back', callback_data: 'expback' }],
+      ]
+    );
+    return;
+  }
+  if (field === 'company') {
+    const branches = await listBranches(env.DB);
+    await api.sendMessage(chatId, 'Which company paid this?', [
+      ...branches.map((branch) => [
+        {
+          text: `${branch.id === state.targetBranchId ? '✓ ' : ''}${branch.name}`.slice(0, 60),
+          callback_data: `expcompany:${branch.id}`,
+        },
+      ]),
+      [{ text: 'Back', callback_data: 'expback' }],
+    ]);
+    return;
+  }
+  throw new Error('That option is no longer available.');
+}
+
+async function setExpenseField(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  field: string,
+  value: number
+): Promise<void> {
+  const { state } = await loadExpenseSession(env, branchId, userId);
+  const parsed = state.parsed!;
+  if (field === 'expday') {
+    if (value !== 0 && value !== 1) throw new Error('That option is no longer available.');
+    const settings = await getSettings(env.DB, state.targetBranchId!);
+    parsed.expenseDate = addDaysISO(todayInTz(settings.timezone), -value);
+    parsed.warnings = parsed.warnings.filter((warning) => !/date/i.test(warning));
+  } else if (field === 'expcat') {
+    const category = EXPENSE_CATEGORIES[value - 1];
+    if (!category) throw new Error('That category is no longer available.');
+    parsed.category = category;
+  } else if (field === 'expclient') {
+    if (value !== 0 && !(await getClientForBranch(env.DB, value, state.targetBranchId!))) {
+      throw new Error('That client is unavailable for this company.');
+    }
+    state.clientId = value || null;
+  } else if (field === 'expcompany') {
+    if (!(await getBranch(env.DB, value))) throw new Error('That company is unavailable.');
+    if (value !== state.targetBranchId) state.clientId = null; // clients are per company
+    state.targetBranchId = value;
+    state.branchDetected = false;
+  }
+  await showExpenseReview(env, api, branchId, userId, chatId, state);
 }
 
 async function continueExpenseImport(
@@ -1064,6 +1420,7 @@ async function continueExpenseImport(
   text: string
 ): Promise<void> {
   if (!state.token || !state.parsed) throw new Error('That expense import expired. Upload the supplier invoice again.');
+  state.targetBranchId ??= branchId;
   if (step === 'amount') {
     const money = parseMoneyReply(text);
     if (!money) throw new Error('Enter the amount paid, e.g. 12.40 or 12.40 EUR.');
@@ -1076,37 +1433,45 @@ async function continueExpenseImport(
     if (payee.length < 2 || payee.length > 120) throw new Error('Supplier name must be between 2 and 120 characters.');
     state.parsed.payee = payee;
     state.parsed.warnings = state.parsed.warnings.filter((warning) => !/supplier/i.test(warning));
+  } else if (step === 'date') {
+    const answer = text.trim().toLowerCase();
+    const settings = await getSettings(env.DB, state.targetBranchId);
+    const today = todayInTz(settings.timezone);
+    const date = answer === 'today' ? today : answer === 'yesterday' ? addDaysISO(today, -1) : text.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+      throw new Error('Use a real date in YYYY-MM-DD format, or tap one of the buttons.');
+    }
+    if (date > today) throw new Error('An expense can’t be dated in the future.');
+    state.parsed.expenseDate = date;
+    state.parsed.warnings = state.parsed.warnings.filter((warning) => !/date/i.test(warning));
   }
   if (!state.parsed.payee) {
     await saveSession(env.DB, userId, branchId, 'expense_invoice', 'payee', state);
     await api.sendMessage(chatId, 'Who was paid? Send the supplier or shop name.', [[{ text: 'Cancel', callback_data: 'cancel' }]]);
     return;
   }
-  await saveSession(env.DB, userId, branchId, 'expense_invoice', 'confirm', state);
-  const settings = await getSettings(env.DB, branchId);
-  await api.sendMessage(chatId, expenseSummary(state.parsed, settings.timezone, '<b>Save this expense?</b>'), [
-    [{ text: 'Save expense', callback_data: 'expenseconfirm:1' }],
-    [{ text: '✏️ Set different amount', callback_data: 'expenseamount:1' }],
-    [{ text: 'Cancel', callback_data: 'cancel' }],
-  ]);
+  await showExpenseReview(env, api, branchId, userId, chatId, state);
 }
 
 async function confirmExpenseImport(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
   const { session, state } = await loadExpenseSession(env, branchId, userId);
   if (session.step !== 'confirm') throw new Error('Finish the current step first, or press Cancel.');
-  const parsed = state.parsed;
+  const parsed = state.parsed!;
   if (parsed.amountCents === null || !parsed.currency) return askExpenseAmount(env, api, branchId, userId, chatId);
   if (!parsed.payee) {
     await saveSession(env.DB, userId, branchId, 'expense_invoice', 'payee', state);
     await api.sendMessage(chatId, 'Who was paid? Send the supplier or shop name.', [[{ text: 'Cancel', callback_data: 'cancel' }]]);
     return;
   }
-  const branch = await getBranch(env.DB, branchId);
-  if (!branch) throw new Error('That workspace is unavailable.');
-  const settings = await getSettings(env.DB, branchId);
-  const expenseId = await createExpenseFromInvoiceImport(env.DB, state.token, {
-    branch_id: branchId,
-    client_id: null,
+  const target = await getBranch(env.DB, state.targetBranchId!);
+  if (!target) throw new Error('That company is unavailable. Choose another company.');
+  if (state.clientId && !(await getClientForBranch(env.DB, state.clientId, target.id))) {
+    throw new Error('That client is no longer linked to this company. Choose the client again.');
+  }
+  const settings = await getSettings(env.DB, target.id);
+  const expenseId = await createExpenseFromInvoiceImport(env.DB, state.token!, {
+    branch_id: target.id,
+    client_id: state.clientId ?? null,
     expense_date: parsed.expenseDate ?? todayInTz(settings.timezone),
     payee: parsed.payee,
     category: parsed.category,
@@ -1118,10 +1483,14 @@ async function confirmExpenseImport(env: Bindings, api: TelegramApi, branchId: n
   });
   if (!expenseId) throw new Error('That expense import expired or was already saved.');
   await clearSession(env.DB, userId);
+  const active = await getBranch(env.DB, branchId);
   await api.sendMessage(
     chatId,
-    `✅ Expense saved: <b>${esc(parsed.payee)}</b> — ${esc(formatCents(parsed.amountCents, parsed.currency))}`,
-    [[{ text: 'View expense', url: `${env.APP_BASE_URL}/admin/expenses/${expenseId}` }], ...homeKeyboard(branch.invoicing_enabled === 0)]
+    `✅ Expense saved to <b>${esc(target.name)}</b>: ${esc(parsed.payee)} — ${esc(formatCents(parsed.amountCents, parsed.currency))}`,
+    [
+      [{ text: 'View expense', url: `${env.APP_BASE_URL}/admin/expenses/${expenseId}` }],
+      ...homeKeyboard(active?.invoicing_enabled === 0),
+    ]
   );
 }
 
