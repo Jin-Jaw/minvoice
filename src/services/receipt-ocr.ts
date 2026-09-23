@@ -133,8 +133,9 @@ export async function readReceiptImage(
       response_format: { type: 'json_schema', json_schema: RESPONSE_SCHEMA },
       max_tokens: 300,
       temperature: 0,
-    } as never)) as { response?: unknown };
-    return parseReceiptFields(result?.response ?? result);
+    } as never)) as { response?: unknown; choices?: { message?: { content?: unknown } }[] };
+    // Workers AI returns the JSON in `response`; the OpenAI-style copy is a fallback.
+    return parseReceiptFields(result?.response ?? result?.choices?.[0]?.message?.content ?? null);
   } catch (error) {
     console.error(JSON.stringify({ event: 'receipt_ocr_failed', error: String(error) }));
     return parseReceiptFields(null);
