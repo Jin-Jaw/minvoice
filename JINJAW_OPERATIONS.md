@@ -6,8 +6,10 @@ Worker at `https://invoices.jin-jaw.co.uk` and stores clients, invoices,
 payments, expenses, private expense evidence, events, workspaces, and configuration in the
 `jinjaw-invoices-eu` D1 database (binding `DB`, created in the EU jurisdiction).
 
-The GitHub repository `Jin-Jaw/minvoice` is private. It was public until
-2026-09-23, so treat anything committed before then as published.
+The GitHub repository `Jin-Jaw/minvoice` is public, and must stay public: the
+website's Workers Builds clones it as a submodule of the private website
+repository, and it cannot clone a private submodule. Never commit client
+data, exports, secret values, or the trusted Gmail senders.
 
 ## First production deployment
 
