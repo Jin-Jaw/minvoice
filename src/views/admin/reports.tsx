@@ -160,79 +160,82 @@ export function ReportsPage({
         years.map((g) => (
           <div class="card">
             <h2>{g.year}</h2>
-            <table class="table table--stack">
-              <thead>
-                <tr>
-                  <th>Month</th>
-                  {multiCurrency ? <th>Currency</th> : null}
-                  <th class="text-right">Invoices sent</th>
-                  <th class="text-right">Invoiced</th>
-                  <th class="text-right">Payments</th>
-                  <th class="text-right">Received</th>
-                  <th class="text-right">Expenses</th>
-                  <th class="text-right">Spent</th>
-                  <th class="text-right">Net cash</th>
-                </tr>
-              </thead>
-              <tbody>
-                {g.rows.map((r) => (
+            {/* Nine columns outgrow the card between the phone layout and wide screens */}
+            <div class="table-scroll">
+              <table class="table table--stack">
+                <thead>
                   <tr>
-                    <td data-label="Month">{monthLabel(r.ym)}</td>
-                    {multiCurrency ? <td data-label="Currency">{r.currency}</td> : null}
-                    <td class="text-right" data-label="Invoices sent">
-                      {r.invoiced_count || <span class="muted">—</span>}
-                    </td>
-                    <td class="text-right" data-label="Invoiced">
-                      {r.invoiced_cents ? formatCents(r.invoiced_cents, r.currency) : <span class="muted">—</span>}
-                    </td>
-                    <td class="text-right" data-label="Payments">
-                      {r.received_count || <span class="muted">—</span>}
-                    </td>
-                    <td class="text-right" data-label="Received">
-                      {r.received_cents ? formatCents(r.received_cents, r.currency) : <span class="muted">—</span>}
-                    </td>
-                    <td class="text-right" data-label="Expenses">
-                      {r.expense_count || <span class="muted">—</span>}
-                    </td>
-                    <td class="text-right" data-label="Spent">
-                      {r.expense_cents ? formatCents(r.expense_cents, r.currency) : <span class="muted">—</span>}
-                    </td>
-                    <td class="text-right" data-label="Net cash">
-                      {r.received_cents || r.expense_cents
-                        ? formatCents(r.received_cents - r.expense_cents, r.currency)
-                        : <span class="muted">—</span>}
-                    </td>
+                    <th>Month</th>
+                    {multiCurrency ? <th>Currency</th> : null}
+                    <th class="text-right">Invoices sent</th>
+                    <th class="text-right">Invoiced</th>
+                    <th class="text-right">Payments</th>
+                    <th class="text-right">Received</th>
+                    <th class="text-right">Expenses</th>
+                    <th class="text-right">Spent</th>
+                    <th class="text-right">Net cash</th>
                   </tr>
-                ))}
-                {g.totals.map((t) => (
-                  <tr class="report-total">
-                    <td>Total</td>
-                    {multiCurrency ? <td data-label="Currency">{t.currency}</td> : null}
-                    <td class="text-right" data-label="Invoices sent">
-                      {t.invoiced_count}
-                    </td>
-                    <td class="text-right" data-label="Invoiced">
-                      {formatCents(t.invoiced_cents, t.currency)}
-                    </td>
-                    <td class="text-right" data-label="Payments">
-                      {t.received_count}
-                    </td>
-                    <td class="text-right" data-label="Received">
-                      {formatCents(t.received_cents, t.currency)}
-                    </td>
-                    <td class="text-right" data-label="Expenses">
-                      {t.expense_count}
-                    </td>
-                    <td class="text-right" data-label="Spent">
-                      {formatCents(t.expense_cents, t.currency)}
-                    </td>
-                    <td class="text-right" data-label="Net cash">
-                      {formatCents(t.received_cents - t.expense_cents, t.currency)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {g.rows.map((r) => (
+                    <tr>
+                      <td data-label="Month">{monthLabel(r.ym)}</td>
+                      {multiCurrency ? <td data-label="Currency">{r.currency}</td> : null}
+                      <td class="text-right" data-label="Invoices sent">
+                        {r.invoiced_count || <span class="muted">—</span>}
+                      </td>
+                      <td class="text-right" data-label="Invoiced">
+                        {r.invoiced_cents ? formatCents(r.invoiced_cents, r.currency) : <span class="muted">—</span>}
+                      </td>
+                      <td class="text-right" data-label="Payments">
+                        {r.received_count || <span class="muted">—</span>}
+                      </td>
+                      <td class="text-right" data-label="Received">
+                        {r.received_cents ? formatCents(r.received_cents, r.currency) : <span class="muted">—</span>}
+                      </td>
+                      <td class="text-right" data-label="Expenses">
+                        {r.expense_count || <span class="muted">—</span>}
+                      </td>
+                      <td class="text-right" data-label="Spent">
+                        {r.expense_cents ? formatCents(r.expense_cents, r.currency) : <span class="muted">—</span>}
+                      </td>
+                      <td class="text-right" data-label="Net cash">
+                        {r.received_cents || r.expense_cents
+                          ? formatCents(r.received_cents - r.expense_cents, r.currency)
+                          : <span class="muted">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                  {g.totals.map((t) => (
+                    <tr class="report-total">
+                      <td>Total</td>
+                      {multiCurrency ? <td data-label="Currency">{t.currency}</td> : null}
+                      <td class="text-right" data-label="Invoices sent">
+                        {t.invoiced_count}
+                      </td>
+                      <td class="text-right" data-label="Invoiced">
+                        {formatCents(t.invoiced_cents, t.currency)}
+                      </td>
+                      <td class="text-right" data-label="Payments">
+                        {t.received_count}
+                      </td>
+                      <td class="text-right" data-label="Received">
+                        {formatCents(t.received_cents, t.currency)}
+                      </td>
+                      <td class="text-right" data-label="Expenses">
+                        {t.expense_count}
+                      </td>
+                      <td class="text-right" data-label="Spent">
+                        {formatCents(t.expense_cents, t.currency)}
+                      </td>
+                      <td class="text-right" data-label="Net cash">
+                        {formatCents(t.received_cents - t.expense_cents, t.currency)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         ))
       )}
