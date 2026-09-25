@@ -31,7 +31,8 @@ that they depend on.
 7. Commit the `wrangler.jsonc` change and push to `main`. CI applies the
    migrations, deploys, and creates `SETTINGS_MASTER_KEY` for credentials
    saved through Settings.
-8. Set the Telegram secrets and register the webhook (see Telegram bot).
+8. Set the Telegram secrets and register the webhooks (see Telegram bot and
+   Staff submissions bot).
 9. Open `/admin`. On an empty database, confirm the registered address, tax
    position, invoice terms, and default rate, then finish the first-run
    wizard. After an import into a new Worker, re-enter the Resend API key in
@@ -56,8 +57,9 @@ Everything production depends on outside git, as of 2026-09-23:
 
 - **Worker secrets:** `SETTINGS_MASTER_KEY` (created by the deploy and
   impossible to read back), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`,
-  `TELEGRAM_WEBHOOK_SECRET`, `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET`.
-  `ADMIN_PASSWORD` is not set, because Access handles sign-in. `RESEND_API_KEY`
+  `TELEGRAM_WEBHOOK_SECRET`, `SUBMISSIONS_BOT_TOKEN`,
+  `SUBMISSIONS_WEBHOOK_SECRET`, `SUBMISSIONS_BOT_USERNAME`, `GMAIL_CLIENT_ID`
+  and `GMAIL_CLIENT_SECRET`. `ADMIN_PASSWORD` is not set, because Access handles sign-in. `RESEND_API_KEY`
   is not set, because the key is saved in Settings.
 - **Saved in Settings (D1, encrypted with `SETTINGS_MASTER_KEY`):** the Resend
   API key and the Gmail refresh token.
@@ -72,7 +74,8 @@ Everything production depends on outside git, as of 2026-09-23:
 - **Resend:** `jin-jaw.co.uk` verified as a sending domain, and an API key.
 - **Google Cloud:** the OAuth web client behind `GMAIL_CLIENT_ID`, with the
   Gmail API enabled and the Gmail callback registered as a redirect URI.
-- **Telegram:** the bot in BotFather and its registered webhook.
+- **Telegram:** the admin bot and the staff submissions bot in BotFather, each
+  with its registered webhook.
 - **GitHub:** the `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository
   secrets used by the deploy job.
 
@@ -215,6 +218,8 @@ commands are not replayed.
 | `/uploadinvoice`, `/expense` | A PDF (text extraction) or a receipt photo (OCR) → confirm or change amount, date, category, client and paying company → saved as an expense with the file as evidence. PDFs are filed under the company they were billed to. |
 | `/income` | Property / Flats only: money received without an invoice (`income_entries`), counted as "received" in reports. |
 | `/workspace`, `/workspaces` | Switch the company the bot acts for. |
+| `/pending` | Staff requests waiting for approval, oldest first. Tap one to see it again with its invoice and the Approve and Reject buttons (see Staff submissions bot). |
+| `/submitters` | Everyone who asked to use the staff bot, with Allow, Deny and Remove buttons. |
 
 Property / Flats (workspace 2; company id 3 in production, id 2 in a newly
 migrated database) has `invoicing_enabled = 0`, so the bot offers only
@@ -239,6 +244,93 @@ payment confirmations). The three `0015` files do not depend on each other:
 production applied them in the order gmail, workspaces, telegram, and a new
 database applies them in filename order. Deploy only through CI from `main`,
 so production never again runs code that git does not have.
+
+## Staff submissions bot
+
+People who are not admins, such as Arabia staff, send expenses and income
+through a second Telegram bot. It runs in the same Worker as the admin bot,
+with its own BotFather token, webhook and secrets. Every request waits for an
+admin to approve it in the admin bot, and nothing reaches `expenses` or
+`income_entries` before that.
+
+Requests are always filed under the first active company in the workspace
+with the slug `jinjaw-arabia` (Jin&Jaw Arabia S.A.R.L; the slug is
+`SUBMISSIONS_WORKSPACE_SLUG` in `src/services/submissions/repository.ts`).
+They use that company's currency unless the sender types another one.
+
+### Access
+
+The first message from a Telegram account records an access request in
+`telegram_submitters` and sends an Allow and Deny card to every linked admin
+chat. Only allowed accounts can send requests. The bot does not ask again
+about a denied or removed account; allow it again from `/submitters` in the
+admin bot. `/submitters` also shows the link to share with staff when
+`SUBMISSIONS_BOT_USERNAME` is set.
+
+### Sending a request
+
+`/expense` or `/income` in the staff bot starts a request. The sender then
+sends a photo or PDF of the invoice, or types it, for example
+`Taxi to airport 25` or `120 EUR`. Photos are read by the same Workers AI
+model as receipt photos in the admin bot, and PDFs by the same text
+extraction as supplier invoices. An income invoice names Jin&Jaw Arabia as
+its issuer, so for income the bot ignores the supplier it reads and always
+asks who paid. A file or an amount sent without a command makes the bot ask
+whether it is an expense or income.
+
+The summary lets the sender change the amount, the name, the date, the
+category (expenses only) and a note for the admin, then send it for
+approval. `/mine` shows their last 10 requests with their status and any
+rejection reason.
+
+Each request is one row in `submissions`. While the sender fills it in, its
+status is `draft`, and the daily cron deletes drafts left untouched for a
+day. A sent request is `pending` until an admin decides.
+
+### Approving
+
+Each sent request arrives in every linked admin chat (the rows of
+`telegram_connections` with `personal_notifications = 1`) as a card: the
+photo or PDF with the details as its caption, and Approve and Reject buttons.
+`/pending` lists up to 10 waiting requests and shows any of them again.
+
+Approve writes the expense or income entry and copies the file into
+`expense_attachments` or `income_attachments`, all in one D1 batch. A second
+tap, or another admin's tap on their own card, changes nothing. The expense
+description or the income reference records the request number, the sender
+and their note. Income is linked to a client of the company whose name
+matches the payer, ignoring case, and otherwise has no client.
+
+Reject asks for a reason, which the sender receives; "Reject without a reason"
+skips it. The sender gets a message with either decision. The daily cron
+removes the file of a rejected request 30 days after the decision.
+
+Approved expenses can be edited on the web like any other expense. Income
+entries have no web page yet, so income evidence is only in
+`income_attachments` and the SQL backup.
+
+### Setting up the staff bot
+
+1. Create the bot in BotFather and note its token and username.
+2. Store the three secrets with `npx wrangler secret put SUBMISSIONS_BOT_TOKEN`,
+   `npx wrangler secret put SUBMISSIONS_WEBHOOK_SECRET` and
+   `npx wrangler secret put SUBMISSIONS_BOT_USERNAME`. The webhook secret
+   follows the same rules as the admin bot's.
+3. Register the webhook as described in Registering the webhook, with the
+   staff bot's token and secret and the URL
+   `https://invoices.jin-jaw.co.uk/api/integrations/telegram/submissions/webhook`.
+
+Until the token and secret exist, that endpoint answers 503. The admin bot
+must also be set up, because the approval cards go through it.
+
+To stop the staff bot, delete its webhook with its own token, or delete
+`SUBMISSIONS_WEBHOOK_SECRET`. To stop one person, use Remove in
+`/submitters`.
+
+The code is in `src/services/submissions/` (`handler.ts` holds the staff
+bot's conversation, `review.ts` the admin cards and decisions,
+`repository.ts` the D1 access and `format.ts` the shared text), with
+migration `0020_submissions` and `test/submissions.integration.test.ts`.
 
 ## Gmail payment confirmations
 

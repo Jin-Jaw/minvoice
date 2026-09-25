@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseLineItem, parseMoneyReply } from './telegram-input';
+import { parseLineItem, parseMoneyReply, parseQuickEntry } from './telegram-input';
 
 describe('parseMoneyReply', () => {
   it('reads plain and symbol amounts', () => {
@@ -59,5 +59,24 @@ describe('parseLineItem', () => {
   it('rejects a bare description with no default rate', () => {
     expect(parseLineItem('Monthly retainer', null)).toBeNull();
     expect(parseLineItem('   ', 1000)).toBeNull();
+  });
+});
+
+describe('parseQuickEntry', () => {
+  it('reads a name followed by an amount', () => {
+    expect(parseQuickEntry('Taxi to airport 25')).toEqual({ party: 'Taxi to airport', cents: 2500, currency: null });
+    expect(parseQuickEntry('Corner Cafe - 12.40 EUR')).toEqual({ party: 'Corner Cafe', cents: 1240, currency: 'EUR' });
+    expect(parseQuickEntry('Room 101 rent: 500')).toEqual({ party: 'Room 101 rent', cents: 50000, currency: null });
+  });
+
+  it('reads an amount on its own', () => {
+    expect(parseQuickEntry('120 usd')).toEqual({ party: null, cents: 12000, currency: 'USD' });
+    expect(parseQuickEntry('$1,250')).toEqual({ party: null, cents: 125000, currency: null });
+  });
+
+  it('rejects text without a trailing amount, and dates', () => {
+    expect(parseQuickEntry('Corner Cafe')).toBeNull();
+    expect(parseQuickEntry('Invoice 2026-09')).toBeNull();
+    expect(parseQuickEntry('x 5')).toBeNull();
   });
 });

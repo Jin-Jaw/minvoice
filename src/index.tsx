@@ -23,6 +23,8 @@ import { scanGmailPayments } from './services/gmail-payments';
 import { handleTelegramUpdate, type TelegramUpdate } from './services/telegram/handler';
 import { notifyOverdueInvoices } from './services/telegram/notifications';
 import { purgeTelegramData } from './services/telegram/repository';
+import { handleSubmissionsUpdate } from './services/submissions/handler';
+import { purgeSubmissionsData } from './services/submissions/repository';
 import { LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MINUTES, MAX_OUTBOX_ATTEMPTS } from './lib/outbox';
 import { generateInvoicePdf, pdfResponse } from './services/pdf';
 import { sendErrorAlert } from './services/email';
@@ -108,15 +110,18 @@ app.use('*', async (c, next) => {
 
 app.get('/', (c) => c.redirect('/admin'));
 
-// Telegram bot webhook. Telegram signs every delivery with the secret set via
-// setWebhook; anything without it is rejected before the body is parsed.
-app.post(
-  '/api/integrations/telegram/webhook',
-  bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.text('update too large', 413) }),
-  async (c) => {
-    if (!c.env.TELEGRAM_BOT_TOKEN || !c.env.TELEGRAM_WEBHOOK_SECRET) return c.text('not configured', 503);
+// Telegram bot webhooks. Telegram signs every delivery with the secret set via
+// setWebhook; anything without it is rejected before the body is parsed. The
+// admin bot and the staff submissions bot each have their own token and secret.
+function telegramWebhook(
+  credentials: (env: Bindings) => { token?: string; secret?: string },
+  handle: (env: Bindings, update: TelegramUpdate) => Promise<void>
+) {
+  return async (c: Context<AppEnv>) => {
+    const { token, secret } = credentials(c.env);
+    if (!token || !secret) return c.text('not configured', 503);
     const supplied = c.req.header('X-Telegram-Bot-Api-Secret-Token') ?? '';
-    if (!supplied || !(await timingSafeEqual(supplied, c.env.TELEGRAM_WEBHOOK_SECRET))) {
+    if (!supplied || !(await timingSafeEqual(supplied, secret))) {
       return c.text('forbidden', 403);
     }
     let update: TelegramUpdate;
@@ -126,9 +131,26 @@ app.post(
       return c.text('invalid update', 400);
     }
     if (!Number.isSafeInteger(update.update_id)) return c.text('invalid update', 400);
-    await handleTelegramUpdate(c.env, update);
+    await handle(c.env, update);
     return c.text('ok');
-  }
+  };
+}
+
+const telegramBodyLimit = bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.text('update too large', 413) });
+
+app.post(
+  '/api/integrations/telegram/webhook',
+  telegramBodyLimit,
+  telegramWebhook((env) => ({ token: env.TELEGRAM_BOT_TOKEN, secret: env.TELEGRAM_WEBHOOK_SECRET }), handleTelegramUpdate)
+);
+
+app.post(
+  '/api/integrations/telegram/submissions/webhook',
+  telegramBodyLimit,
+  telegramWebhook(
+    (env) => ({ token: env.SUBMISSIONS_BOT_TOKEN, secret: env.SUBMISSIONS_WEBHOOK_SECRET }),
+    handleSubmissionsUpdate
+  )
 );
 
 // Cap admin request bodies BEFORE any handler buffers them. Expense evidence
@@ -334,6 +356,7 @@ export default {
         await purgeExpiredExpenseInvoiceImports(env.DB);
         await notifyOverdueInvoices(env);
         await purgeTelegramData(env.DB);
+        await purgeSubmissionsData(env.DB);
       })()
     );
   },

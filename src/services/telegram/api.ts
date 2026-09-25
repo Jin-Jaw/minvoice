@@ -5,7 +5,7 @@ import type { Bindings } from '../../env';
 export type InlineButton = { text: string; callback_data: string } | { text: string; url: string };
 export type InlineKeyboard = InlineButton[][];
 
-export type TelegramUser = { id: number; username?: string };
+export type TelegramUser = { id: number; username?: string; first_name?: string; last_name?: string };
 export type TelegramChat = { id: number; type: 'private' | 'group' | 'supergroup' | 'channel' };
 export type TelegramDocument = {
   file_id: string;
@@ -108,14 +108,55 @@ export class TelegramApi {
     return bytes;
   }
 
-  async sendDocument(chatId: string, bytes: Uint8Array, filename: string, caption?: string): Promise<void> {
+  /** Remove (or replace) the buttons under a message the bot sent earlier. */
+  editMessageReplyMarkup(chatId: string, messageId: number, keyboard: InlineKeyboard = []): Promise<unknown> {
+    return this.call('editMessageReplyMarkup', {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: keyboard },
+    });
+  }
+
+  async sendDocument(
+    chatId: string,
+    bytes: Uint8Array,
+    filename: string,
+    caption?: string,
+    options: { mime?: string; keyboard?: InlineKeyboard; html?: boolean } = {}
+  ): Promise<void> {
+    const file = new File([bytes], filename, { type: options.mime ?? 'application/pdf' });
+    await this.upload('sendDocument', 'document', chatId, file, caption, options);
+  }
+
+  /** A JPG or PNG shown inline, with an optional HTML caption and buttons. */
+  async sendPhoto(
+    chatId: string,
+    bytes: Uint8Array,
+    filename: string,
+    mime: string,
+    caption?: string,
+    keyboard?: InlineKeyboard
+  ): Promise<void> {
+    await this.upload('sendPhoto', 'photo', chatId, new File([bytes], filename, { type: mime }), caption, { keyboard, html: true });
+  }
+
+  private async upload(
+    method: 'sendDocument' | 'sendPhoto',
+    field: 'document' | 'photo',
+    chatId: string,
+    file: File,
+    caption: string | undefined,
+    options: { keyboard?: InlineKeyboard; html?: boolean }
+  ): Promise<void> {
     const form = new FormData();
     form.set('chat_id', chatId);
-    form.set('document', new File([bytes], filename, { type: 'application/pdf' }));
+    form.set(field, file);
     if (caption) form.set('caption', caption);
-    const response = await fetch(`https://api.telegram.org/bot${this.token}/sendDocument`, { method: 'POST', body: form });
+    if (caption && options.html) form.set('parse_mode', 'HTML');
+    if (options.keyboard) form.set('reply_markup', JSON.stringify({ inline_keyboard: options.keyboard }));
+    const response = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form });
     const result = (await response.json()) as { ok: boolean; description?: string };
-    if (!response.ok || !result.ok) throw new Error(`Telegram sendDocument failed: ${result.description ?? response.status}`);
+    if (!response.ok || !result.ok) throw new Error(`Telegram ${method} failed: ${result.description ?? response.status}`);
   }
 }
 

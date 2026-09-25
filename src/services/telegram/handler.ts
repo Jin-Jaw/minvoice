@@ -62,6 +62,13 @@ import {
   sha256Hex,
   touchConnection,
 } from './repository';
+import { esc, evidenceSource, humanError, sanitizeFilename, sniffMime } from './util';
+import {
+  handleRejectReason,
+  handleReviewCallback,
+  showPendingSubmissions,
+  showSubmitters,
+} from '../submissions/review';
 
 export type TelegramUpdate = {
   update_id: number;
@@ -113,7 +120,6 @@ type ExpenseState = {
 
 const MAX_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_LINE_ITEMS = 20;
-const IMAGE_MIMES: readonly string[] = ['image/jpeg', 'image/png', 'image/webp'];
 
 const HELP = [
   '<b>Invoice bot</b>',
@@ -125,6 +131,8 @@ const HELP = [
   '/unpaid — sent and unpaid',
   '/overdue — overdue invoices',
   '/workspace — switch company/workspace',
+  '/pending — staff requests waiting for approval',
+  '/submitters — who can use the staff bot',
   '/help — show this help',
 ].join('\n');
 
@@ -134,6 +142,8 @@ const EXPENSE_HELP = [
   '/uploadinvoice — upload a supplier invoice PDF or receipt photo',
   '/income — add income received from a client',
   '/workspace — switch company/workspace',
+  '/pending — staff requests waiting for approval',
+  '/submitters — who can use the staff bot',
   '/help — show this help',
 ].join('\n');
 
@@ -196,6 +206,8 @@ export async function handleTelegramUpdate(env: Bindings, update: TelegramUpdate
 
     if (callback) {
       await api.answerCallbackQuery(callback.id);
+      // Staff requests and access requests work whichever company is active.
+      if (await handleReviewCallback(env, api, connection, chatId, callback)) return;
       await handleCallback(env, api, branchId, userId, chatId, callback);
       return;
     }
@@ -217,6 +229,8 @@ export async function handleTelegramUpdate(env: Bindings, update: TelegramUpdate
         return startExpenseInvoiceUpload(env, api, branchId, userId, chatId);
       }
       if (command === '/income') return startAddIncome(env, api, branchId, userId, chatId);
+      if (command === '/pending') return showPendingSubmissions(env, api, chatId);
+      if (command === '/submitters') return showSubmitters(env, api, chatId);
       if (command === '/workspace' || command === '/workspaces') {
         return showWorkspaceList(env, api, branchId, chatId);
       }
@@ -229,6 +243,10 @@ export async function handleTelegramUpdate(env: Bindings, update: TelegramUpdate
     }
 
     const session = await getSession(env.DB, userId);
+    if (session?.flow === 'reject_submission') {
+      await handleRejectReason(env, api, connection, chatId, JSON.parse(session.data_json), text);
+      return;
+    }
     if (session?.flow === 'create_invoice' && session.step.startsWith('new_client')) {
       const state = JSON.parse(session.data_json) as NewClientState;
       await continueNewInvoiceClient(env, api, session.branch_id, userId, chatId, session.step, state, text);
@@ -1396,22 +1414,6 @@ async function startExpenseInvoiceUpload(
   );
 }
 
-/** The expense evidence to download: a PDF/image document, or the largest photo size under the limit. */
-function expenseSource(message: TelegramMessage): { fileId: string; declaredMime: string; size?: number; name?: string } {
-  const document = message.document;
-  if (document) {
-    const mime = document.mime_type ?? '';
-    if (mime !== 'application/pdf' && !IMAGE_MIMES.includes(mime)) {
-      throw new Error('Send the supplier invoice as a PDF, or a JPG, PNG or WebP photo of the receipt.');
-    }
-    return { fileId: document.file_id, declaredMime: mime, size: document.file_size, name: document.file_name };
-  }
-  const sizes = message.photo ?? [];
-  const photo = [...sizes].reverse().find((size) => (size.file_size ?? 0) <= MAX_EXPENSE_ATTACHMENT_BYTES) ?? sizes[0];
-  if (!photo) throw new Error('No file was found in that message.');
-  return { fileId: photo.file_id, declaredMime: 'image/jpeg', size: photo.file_size };
-}
-
 async function handleExpenseInvoiceUpload(
   env: Bindings,
   api: TelegramApi,
@@ -1420,7 +1422,7 @@ async function handleExpenseInvoiceUpload(
   chatId: string,
   message: TelegramMessage
 ): Promise<void> {
-  const source = expenseSource(message);
+  const source = evidenceSource(message);
   if ((source.size ?? 0) > MAX_EXPENSE_ATTACHMENT_BYTES) throw new Error('That file is larger than the 1.5 MB limit.');
   const bytes = await api.downloadFile(source.fileId, MAX_EXPENSE_ATTACHMENT_BYTES);
   const mime = sniffMime(bytes);
@@ -1813,49 +1815,7 @@ function newExpenseImportToken(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-type SniffedMime = 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp';
-
-function sniffMime(bytes: Uint8Array): SniffedMime | null {
-  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.length >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, index) => bytes[index] === byte)) {
-    return 'image/png';
-  }
-  if (bytes.length >= 5 && String.fromCharCode(...bytes.slice(0, 5)) === '%PDF-') return 'application/pdf';
-  if (
-    bytes.length >= 12 &&
-    String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' &&
-    String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
-  ) {
-    return 'image/webp';
-  }
-  return null;
-}
-
-function sanitizeFilename(name: string, mime: SniffedMime): string {
-  const extension =
-    mime === 'application/pdf' ? '.pdf' : mime === 'image/png' ? '.png' : mime === 'image/webp' ? '.webp' : '.jpg';
-  const stem =
-    name
-      .replace(/\.[^.]*$/, '')
-      .normalize('NFKC')
-      .replace(/[^a-zA-Z0-9._ -]/g, '_')
-      .replace(/\.{2,}/g, '.')
-      .trim()
-      .slice(0, 100) || 'attachment';
-  return `${stem}${extension}`;
-}
-
 function firstLine(value: string, max: number): string {
   const line = value.split('\n')[0].trim();
   return line.length > max || value.includes('\n') ? `${line.slice(0, max)}…` : line;
-}
-
-function esc(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function humanError(error: unknown): string {
-  const message = error instanceof Error ? error.message : 'Something went wrong. Please try again.';
-  if (/constraint|SQLITE|D1_/i.test(message)) return 'I couldn’t save that safely. Please try again or use the invoicing app.';
-  return message.slice(0, 300);
 }

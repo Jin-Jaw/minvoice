@@ -25,6 +25,11 @@ export type Bindings = {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_BOT_USERNAME?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  // Submissions bot for non-admin staff (token and secret required; see
+  // services/submissions). The username only feeds the share link in /submitters.
+  SUBMISSIONS_BOT_TOKEN?: string;
+  SUBMISSIONS_WEBHOOK_SECRET?: string;
+  SUBMISSIONS_BOT_USERNAME?: string;
   /** Workers AI, used to read totals from photographed receipts. */
   AI?: Ai;
 };

@@ -44,3 +44,17 @@ export function parseLineItem(text: string, defaultUnitPriceCents: number | null
   }
   return null;
 }
+
+/** "Taxi to airport 25", "25 EUR" or "Corner Cafe - 12.40": an optional name, then an amount. */
+export function parseQuickEntry(text: string): { party: string | null; cents: number; currency: string | null } | null {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  // A dash needs a space before it and a comma a space after it, so "Invoice 2026-09"
+  // and "1,250" stay whole.
+  const match = cleaned.match(/^(?:(.*?)(?:\s+[–—-]\s*|\s*:\s*|,\s+|\s+))?([£€$]?\s*[\d,]*\.?\d+(?:\s*[A-Za-z]{3})?)$/);
+  if (!match) return null;
+  const money = parseMoneyReply(match[2]);
+  if (!money) return null;
+  const party = match[1]?.trim() || null;
+  if (party && (party.length < 2 || party.length > 120)) return null;
+  return { party, cents: money.cents, currency: money.currency };
+}
