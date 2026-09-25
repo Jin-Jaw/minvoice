@@ -1,6 +1,19 @@
 import { raw } from 'hono/html';
-import type { Child } from 'hono/jsx';
+import { createContext, useContext, type Child } from 'hono/jsx';
 import { accentForeground, safeAccent } from '../lib/color';
+
+export type WorkspaceMenu = {
+  current: number;
+  workspaces: Array<{ id: number; name: string }>;
+};
+
+/** The workspace switcher's choices. branchContext provides it for every
+ *  admin render, so pages do not pass it through their props. */
+export const WorkspaceMenuContext = createContext<WorkspaceMenu | null>(null);
+
+export function withWorkspaceMenu(content: Child, menu: WorkspaceMenu) {
+  return <WorkspaceMenuContext.Provider value={menu}>{content}</WorkspaceMenuContext.Provider>;
+}
 
 type LayoutProps = {
   title: string;
@@ -29,6 +42,7 @@ const NAV_LINKS = [
 export function Layout({ title, children, variant = 'admin', currentPath = '', lang = 'en', accent, nonce }: LayoutProps) {
   const brandAccent = accent ? safeAccent(accent) : undefined;
   const brandForeground = brandAccent ? accentForeground(brandAccent) : undefined;
+  const workspaceMenu = useContext(WorkspaceMenuContext);
   return (
     <>
       {raw('<!DOCTYPE html>')}
@@ -67,13 +81,18 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
         {variant === 'admin' ? (
           <header class="site-header">
             <div class="container">
-              <form method="post" action="/admin/workspace" class="workspace-switcher">
-                <label for="workspace-select" class="visually-hidden">Workspace</label>
-                <select id="workspace-select" name="workspace_id" aria-label="Workspace" data-submit-on-change>
-                  <option value="1">Jin&amp;Jaw invoices</option>
-                  <option value="2">Property / Flats</option>
-                </select>
-              </form>
+              {workspaceMenu ? (
+                <form method="post" action="/admin/workspace" class="workspace-switcher">
+                  <label for="workspace-select" class="visually-hidden">Workspace</label>
+                  <select id="workspace-select" name="workspace_id" aria-label="Workspace" data-submit-on-change>
+                    {workspaceMenu.workspaces.map((workspace) => (
+                      <option value={String(workspace.id)} selected={workspace.id === workspaceMenu.current}>
+                        {workspace.name}
+                      </option>
+                    ))}
+                  </select>
+                </form>
+              ) : null}
               <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false">
                 <span></span>
                 <span></span>
@@ -156,11 +175,8 @@ export function Layout({ title, children, variant = 'admin', currentPath = '', l
     });
   });
 
-  var workspaceParam = new URLSearchParams(window.location.search).get('workspace');
-  var workspaceCookie = document.cookie.match(/(?:^|; )jj_invoice_workspace=(\d+)/);
-  var workspace = workspaceParam || (workspaceCookie && workspaceCookie[1]);
   var workspaceSelect = document.getElementById('workspace-select');
-  if (workspace && workspaceSelect) workspaceSelect.value = workspace;
+  var workspace = workspaceSelect instanceof HTMLSelectElement ? workspaceSelect.value : '';
   if (workspace) {
     document.querySelectorAll('[data-workspace-nav]').forEach(function (link) {
       var url = new URL(link.href, window.location.origin);

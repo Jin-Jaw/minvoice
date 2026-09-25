@@ -362,7 +362,60 @@ describe('expense ledger and evidence', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-disposition')).toContain('attachment;');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('x-frame-options')).toBe('DENY');
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+  });
+
+  it('previews evidence inline in the viewer, framable only by the admin pages', async () => {
+    const expenseId = await createExpense(DB, draftExpense());
+    const bytes = new TextEncoder().encode('%PDF-1.7\nprivate evidence');
+    await addExpenseAttachment(DB, expenseId, {
+      bytes,
+      mime: 'application/pdf',
+      filename: 'supplier-invoice.pdf',
+      size_bytes: bytes.byteLength,
+      sha256: 'b'.repeat(64),
+    });
+    const [meta] = await listExpenseAttachments(DB, expenseId);
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const cookie = await loginCookie();
+    const get = (path: string) => exports.default.fetch(new Request(`https://invoice.test${path}`, { headers: { cookie } }));
+
+    const preview = await get(`/admin/expenses/${expenseId}/attachments/${meta.id}/view`);
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get('content-type')).toBe('application/pdf');
+    expect(preview.headers.get('content-disposition')).toContain('inline;');
+    expect(preview.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+    expect(preview.headers.get('content-security-policy')).toContain("frame-ancestors 'self'");
+    expect(new Uint8Array(await preview.arrayBuffer())).toEqual(bytes);
+
+    const detail = await get(`/admin/expenses/${expenseId}`);
+    const detailHtml = await detail.text();
+    expect(detail.headers.get('x-frame-options')).toBe('DENY');
+    expect(detail.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(detail.headers.get('content-security-policy')).toContain("frame-src 'self'");
+    expect(detailHtml).toContain('id="evidence-viewer"');
+    expect(detailHtml).toContain(`href="/admin/expenses/${expenseId}/attachments/${meta.id}/view"`);
+    expect(detailHtml).toContain('data-evidence-mime="application/pdf"');
+
+    const list = await (await get('/admin/expenses')).text();
+    expect(list).toContain('View 1 file');
+    expect(list).toContain(`data-evidence-download="/admin/expenses/${expenseId}/attachments/${meta.id}"`);
+
+    // Evidence from another workspace is not served.
+    const otherBranch = await DB.prepare(
+      `INSERT INTO branches (name, workspace_id) VALUES ('Other workspace company', 2) RETURNING id`
+    ).first<{ id: number }>();
+    const otherExpenseId = await createExpense(DB, draftExpense({ branch_id: otherBranch!.id }));
+    await addExpenseAttachment(DB, otherExpenseId, {
+      bytes,
+      mime: 'application/pdf',
+      filename: 'other.pdf',
+      size_bytes: bytes.byteLength,
+      sha256: 'c'.repeat(64),
+    });
+    const [otherMeta] = await listExpenseAttachments(DB, otherExpenseId);
+    expect((await get(`/admin/expenses/${otherExpenseId}/attachments/${otherMeta.id}/view?workspace=1`)).status).toBe(404);
   });
 
   it('rejects a spoofed image upload and accepts a genuine PDF through the admin form', async () => {

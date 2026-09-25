@@ -18,6 +18,7 @@ import { isLocalRequest, timingSafeEqual } from '../lib/admin-auth';
 import { parseSchedule } from '../lib/reminders';
 import { invoicePdfFilename } from '../lib/invoice-filename';
 import { isIsoDate, prepareExpenseAttachment } from '../lib/expenses';
+import { evidenceDisposition } from '../lib/evidence-preview';
 import { createZip, safeZipPart } from '../lib/zip';
 import {
   detectExpenseBranch,
@@ -60,6 +61,7 @@ import {
   listWorkspaces,
   listClients,
   listExpenseAttachments,
+  listWorkspaceExpenseAttachmentMeta,
   listWorkspaceExpenseAttachments,
   listExpenses,
   listInvoices,
@@ -326,6 +328,23 @@ function validExpenseImportToken(token: string): boolean {
   return /^[a-f0-9]{64}$/.test(token);
 }
 
+/** Private evidence bytes. The stored MIME type was sniffed from the file's
+ *  own bytes on upload, and nosniff keeps the browser to it. */
+function evidenceFileResponse(
+  file: { bytes: Uint8Array; mime: string; filename: string; size_bytes: number },
+  disposition: 'inline' | 'attachment'
+): Response {
+  return new Response(file.bytes as unknown as BodyInit, {
+    headers: {
+      'Content-Type': file.mime,
+      'Content-Length': String(file.size_bytes),
+      'Content-Disposition': evidenceDisposition(disposition, file.filename),
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
 async function expenseImportReviewResponse(
   c: Context<AppEnv>,
   staged: NonNullable<Awaited<ReturnType<typeof getExpenseInvoiceImport>>>,
@@ -337,15 +356,28 @@ async function expenseImportReviewResponse(
   // the vision model instead of the PDF text parser.
   const isImage = staged.mime !== 'application/pdf';
   const extraction = isImage ? { lines: [], pageCount: 1 } : await extractExpenseInvoiceText(staged.bytes);
-  const [branches, clients, settings] = await Promise.all([
+  const [branches, allBranches, clients, settings] = await Promise.all([
     listBranches(c.env.DB, c.get('workspaceId')),
+    listBranches(c.env.DB),
     listClients(c.env.DB, false, c.get('workspaceId')),
     getSettings(c.env.DB, c.get('branchId')),
   ]);
+  // Every company counts as a buyer, so an invoice billed to a company in
+  // another workspace never reads that company as the supplier.
   const parsed = isImage
     ? await readReceiptImage(c.env.AI, staged.bytes, staged.mime as ReceiptImageMime)
-    : parseExpenseInvoice(extraction.lines, branches.map((branch) => branch.name));
-  const detectedBranch = isImage ? null : detectExpenseBranch(extraction.lines, branches);
+    : parseExpenseInvoice(extraction.lines, allBranches.map((branch) => branch.name));
+  const billedTo = isImage ? null : detectExpenseBranch(extraction.lines, allBranches);
+  const detectedBranch = branches.some((branch) => branch.id === billedTo) ? billedTo : null;
+  const otherWorkspaceBranch = billedTo !== null && detectedBranch === null
+    ? allBranches.find((branch) => branch.id === billedTo)
+    : undefined;
+  const warnings = otherWorkspaceBranch
+    ? [
+        `This invoice is billed to ${otherWorkspaceBranch.name}, which is in another workspace. Cancel this import, switch workspace, and upload it there.`,
+        ...parsed.warnings,
+      ]
+    : parsed.warnings;
   const values = submittedValues ?? {
     branch_id: String(detectedBranch ?? c.get('branchId')),
     client_id: '',
@@ -367,8 +399,9 @@ async function expenseImportReviewResponse(
       importReview={{
         token: staged.token,
         filename: staged.filename,
+        mime: staged.mime,
         pageCount: extraction.pageCount,
-        warnings: parsed.warnings,
+        warnings,
       }}
       nonce={c.get('secureHeadersNonce')}
     />,
@@ -1234,9 +1267,14 @@ admin.get('/expenses', async (c) => {
   const branches = await listBranches(c.env.DB, c.get('workspaceId'));
   const requestedBranch = Number(c.req.query('company'));
   const branchId = branches.some((branch) => branch.id === requestedBranch) ? requestedBranch : null;
+  const [expenses, attachments] = await Promise.all([
+    listExpenses(c.env.DB, branchId, null, c.get('workspaceId')),
+    listWorkspaceExpenseAttachmentMeta(c.env.DB, c.get('workspaceId')),
+  ]);
   return c.html(
     <ExpensesPage
-      expenses={await listExpenses(c.env.DB, branchId, null, c.get('workspaceId'))}
+      expenses={expenses}
+      attachments={attachments}
       branches={branches}
       branchId={branchId}
       nonce={c.get('secureHeadersNonce')}
@@ -1296,17 +1334,7 @@ admin.get('/expenses/import/:token/file', async (c) => {
   if (!validExpenseImportToken(token)) return c.notFound();
   const staged = await getExpenseInvoiceImport(c.env.DB, token);
   if (!staged) return c.notFound();
-  const asciiName = staged.filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
-  const encodedName = encodeURIComponent(staged.filename).replace(/'/g, '%27');
-  return new Response(staged.bytes as unknown as BodyInit, {
-    headers: {
-      'Content-Type': staged.mime,
-      'Content-Length': String(staged.size_bytes),
-      'Content-Disposition': `inline; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
-      'Cache-Control': 'private, no-store',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
+  return evidenceFileResponse(staged, 'inline');
 });
 
 admin.post('/expenses/import/:token/cancel', async (c) => {
@@ -1497,25 +1525,20 @@ admin.post('/expenses/:id/attachments', async (c) => {
   return c.redirect(`/admin/expenses/${id}${added ? '?saved=1' : '?duplicate=1'}#evidence`);
 });
 
-admin.get('/expenses/:id/attachments/:attachmentId', async (c) => {
+async function expenseAttachmentResponse(c: Context<AppEnv>, disposition: 'inline' | 'attachment'): Promise<Response> {
   const id = Number(c.req.param('id'));
   const attachmentId = Number(c.req.param('attachmentId'));
   if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) return c.notFound();
   if (!(await getExpense(c.env.DB, id, c.get('workspaceId')))) return c.notFound();
   const attachment = await getExpenseAttachment(c.env.DB, id, attachmentId);
   if (!attachment) return c.notFound();
-  const asciiName = attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
-  const encodedName = encodeURIComponent(attachment.filename).replace(/'/g, '%27');
-  return new Response(attachment.bytes as unknown as BodyInit, {
-    headers: {
-      'Content-Type': attachment.mime,
-      'Content-Length': String(attachment.size_bytes),
-      'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
-      'Cache-Control': 'private, no-store',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-});
+  return evidenceFileResponse(attachment, disposition);
+}
+
+admin.get('/expenses/:id/attachments/:attachmentId', (c) => expenseAttachmentResponse(c, 'attachment'));
+
+// Shown in the evidence viewer, or by the browser when opened on its own.
+admin.get('/expenses/:id/attachments/:attachmentId/view', (c) => expenseAttachmentResponse(c, 'inline'));
 
 admin.post('/expenses/:id/attachments/:attachmentId/delete', async (c) => {
   const id = Number(c.req.param('id'));

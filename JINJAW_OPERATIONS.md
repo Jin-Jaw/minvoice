@@ -92,7 +92,7 @@ Choose the paying company and currency; optionally assign a related client so
 the cost appears in that client's filtered report. Voiding preserves the row
 and evidence for audit history while removing the amount from report totals.
 
-Evidence files are private admin downloads stored in D1 and included in the
+Evidence files are private admin files stored in D1 and included in the
 normal SQL backup. Accepted files are genuine PDF, JPG, PNG, or WebP bytes, up
 to 1.5 MB each. Drop evidence directly onto an expense row or the expense detail
 page. Expenses without evidence are explicitly flagged **Missing invoice**.
@@ -100,13 +100,40 @@ The Reports page can export a ZIP containing `expenses.csv` and every evidence
 file; paths inside the ZIP are recorded in the CSV. Never commit exported
 evidence or database backups.
 
+"View N files" on an expense row, and each file on the expense detail page,
+open the evidence viewer. Images show full size on a click; PDFs show in the
+browser's PDF reader. Previous and Next move between an expense's files, and
+Open and Download stay available. The viewer loads
+`/admin/expenses/:id/attachments/:attachmentId/view`, which serves the file
+inline. That route and the staged import file are the only responses that
+allow same-origin framing (`frame-ancestors 'self'`, `X-Frame-Options:
+SAMEORIGIN`, see `src/lib/evidence-preview.ts`); every other response denies
+framing. Mobile browsers without a built-in PDF reader need Open or Download.
+
 ## Workspaces
 
-Use the selector at the top left to move between **Jin&Jaw invoices** and
-**Property / Flats**. Companies, clients, invoices, payments, expenses, and
-reports are scoped to the selected workspace. Property / Flats starts with an
+Use the selector at the top left to move between **Jin&Jaw Ltd**,
+**Property / Flats** and **Jin&Jaw Arabia**. The selector lists the rows of
+the `workspaces` table. Companies, clients, invoices, payments, expenses,
+income and reports are scoped to the selected workspace, so each workspace's
+report totals cover only its own companies. Property / Flats starts with an
 empty ledger and a default property company shell that can be renamed in
 Companies or Settings.
+
+Migration `0019_arabia_workspace` gave Jin&Jaw Arabia S.A.R.L (company id 2)
+its own workspace and renamed workspace 1 from "Jin&Jaw invoices" to
+"Jin&Jaw Ltd". Company ids did not change, so invoice numbers, PDF names,
+Telegram links and company settings carried across. A client that both
+companies had used was copied: the original stayed with Jin&Jaw Ltd and the
+copy took over the Arabia invoices, expenses, income and company link. Clients
+that only Arabia used moved across. Edit the two copies separately from then
+on.
+
+A supplier invoice PDF imported on the web is filed under a company in the
+selected workspace. When it names a company from another workspace, the review
+page says so: cancel the import and upload it from that workspace. The
+Telegram bot searches every company and files it under the named company in
+any workspace.
 
 ## Telegram bot
 
@@ -194,7 +221,10 @@ migrated database) has `invoicing_enabled = 0`, so the bot offers only
 expenses and income there. The bot lists clients per company through
 `client_branches`, while the web app lists them per workspace through
 `clients.workspace_id`. Creating a client or invoice in either place keeps
-both in step.
+both in step. The bot works per company, not per workspace: `/workspace`
+lists every company in every workspace, so Jin&Jaw Arabia (workspace 3 in
+production) stays one tap away. A client the bot creates joins the workspace
+of the company it acts for.
 
 The Telegram work (migrations `0015_telegram`, `0016_workspace_scoping` and
 `0017_direct_income`) was first deployed on 2026-09-21 from a checkout that was
@@ -323,9 +353,10 @@ repository secrets; never add either value to the repository.
 Before a large change, compare `npx wrangler d1 migrations list DB --remote`
 with `migrations/`: the list must be empty or show only your new files.
 
-On Windows, `wrangler dev` and the D1 integration tests cannot run locally
-(workerd fails to start), so CI is the place those tests run. The unit tests
-(`npx vitest run --project unit`) and the type check work locally.
+With wrangler 4.127.1 (checked on 2026-09-25), `wrangler dev --local` and the
+full test suite, D1 integration tests included, run on Windows. Older
+versions failed to start workerd there, so CI was the only place those tests
+ran.
 
 Do not rotate or delete `SETTINGS_MASTER_KEY` without first removing or
 re-entering any API credentials stored through the app. Wrangler secrets take

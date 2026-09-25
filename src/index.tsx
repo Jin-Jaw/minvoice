@@ -42,6 +42,7 @@ import { invoicePdfFilename } from './lib/invoice-filename';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { redactSensitivePath } from './lib/redact';
+import { isFrameableEvidencePath } from './lib/evidence-preview';
 import { NONCE, secureHeaders } from 'hono/secure-headers';
 
 const app = new Hono<AppEnv>();
@@ -58,7 +59,10 @@ app.use(
       connectSrc: ["'self'"],
       fontSrc: ["'self'"],
       formAction: ["'self'"],
-      frameAncestors: ["'none'"],
+      // The evidence viewer frames PDF evidence from this origin. Nothing
+      // else may be framed, and only evidence previews accept a frame.
+      frameAncestors: [(c) => (isFrameableEvidencePath(c.req.path) ? "'self'" : "'none'")],
+      frameSrc: ["'self'"],
       imgSrc: ["'self'", 'data:'],
       objectSrc: ["'none'"],
       scriptSrc: ["'self'", NONCE],
@@ -72,7 +76,8 @@ app.use(
     crossOriginOpenerPolicy: 'same-origin',
     crossOriginResourcePolicy: 'same-origin',
     strictTransportSecurity: 'max-age=31536000; includeSubDomains; preload',
-    xFrameOptions: 'DENY',
+    // Set per path by the next middleware.
+    xFrameOptions: false,
     referrerPolicy: 'same-origin',
     permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [] },
   })
@@ -80,13 +85,15 @@ app.use(
 
 // Financial records and capability-token invoice pages should never be
 // framed, indexed, MIME-sniffed, or retained in shared browser/proxy caches.
+// Expense evidence previews are the one exception to framing: the admin's
+// own pages may frame them.
 app.use('*', async (c, next) => {
   await next();
   c.header('Cache-Control', 'private, no-store');
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   c.header('Referrer-Policy', 'same-origin');
   c.header('X-Content-Type-Options', 'nosniff');
-  c.header('X-Frame-Options', 'DENY');
+  c.header('X-Frame-Options', isFrameableEvidencePath(c.req.path) ? 'SAMEORIGIN' : 'DENY');
   c.header('X-Robots-Tag', 'noindex, nofollow');
 });
 

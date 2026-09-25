@@ -1280,6 +1280,23 @@ export async function listExpenseAttachments(db: D1Database, expenseId: number):
   ).results;
 }
 
+/** Evidence file details (no bytes) for every expense in a workspace, for the expenses list viewer. */
+export async function listWorkspaceExpenseAttachmentMeta(db: D1Database, workspaceId: number): Promise<ExpenseAttachmentMeta[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT a.id, a.expense_id, a.mime, a.filename, a.size_bytes, a.sha256, a.uploaded_at
+         FROM expense_attachments a
+         JOIN expenses e ON e.id = a.expense_id
+         JOIN branches b ON b.id = e.branch_id
+         WHERE b.workspace_id = ?
+         ORDER BY a.expense_id, a.id`
+      )
+      .bind(workspaceId)
+      .all<ExpenseAttachmentMeta>()
+  ).results;
+}
+
 export async function listWorkspaceExpenseAttachments(
   db: D1Database,
   workspaceId: number

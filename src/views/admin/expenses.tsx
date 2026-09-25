@@ -4,6 +4,7 @@ import { EXPENSE_CATEGORIES, MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expe
 import { currencyOptions, formatCents } from '../../lib/money';
 import { Icon } from '../icons';
 import { Layout } from '../layout';
+import { EvidenceLink, EvidenceViewer, expenseEvidenceFile } from './evidence-viewer';
 
 export type ExpenseFormValues = {
   branch_id: string;
@@ -20,15 +21,23 @@ export type ExpenseFormValues = {
 
 export function ExpensesPage({
   expenses,
+  attachments,
   branches,
   branchId,
   nonce,
 }: {
   expenses: ExpenseListRow[];
+  attachments: ExpenseAttachmentMeta[];
   branches: Branch[];
   branchId: number | null;
   nonce?: string;
 }) {
+  const attachmentsByExpense = new Map<number, ExpenseAttachmentMeta[]>();
+  for (const attachment of attachments) {
+    const list = attachmentsByExpense.get(attachment.expense_id) ?? [];
+    list.push(attachment);
+    attachmentsByExpense.set(attachment.expense_id, list);
+  }
   return (
     <Layout title="Expenses" currentPath="/admin/expenses" nonce={nonce}>
       <div class="page-head">
@@ -87,9 +96,17 @@ export function ExpensesPage({
                 <td data-label="Evidence">
                   <div class={`expense-evidence-cell ${expense.attachment_count ? '' : 'is-missing'}`} data-evidence-drop>
                     {expense.attachment_count ? (
-                      <a href={`/admin/expenses/${expense.id}#evidence`}>
-                        {expense.attachment_count} file{expense.attachment_count === 1 ? '' : 's'}
-                      </a>
+                      (attachmentsByExpense.get(expense.id) ?? []).map((attachment, position) => (
+                        <EvidenceLink
+                          file={expenseEvidenceFile(expense.id, attachment)}
+                          group={`expense-${expense.id}`}
+                          hidden={position > 0}
+                          class="evidence-view-link"
+                        >
+                          <Icon name="eye" />
+                          View {expense.attachment_count} file{expense.attachment_count === 1 ? '' : 's'}
+                        </EvidenceLink>
+                      ))
                     ) : <span class="badge badge-missing">Missing invoice</span>}
                     <form method="post" action={`/admin/expenses/${expense.id}/attachments`} enctype="multipart/form-data" class="quick-evidence-form">
                       <input
@@ -133,6 +150,7 @@ export function ExpensesPage({
           </tbody>
         </table>
       )}
+      {attachments.length ? <EvidenceViewer /> : null}
     </Layout>
   );
 }
@@ -191,6 +209,7 @@ export function ExpenseFormPage({
   importReview?: {
     token: string;
     filename: string;
+    mime: string;
     pageCount: number;
     warnings: string[];
   };
@@ -217,7 +236,14 @@ export function ExpenseFormPage({
         <div class={importReview.warnings.length ? 'banner banner-warning' : 'banner banner-success'}>
           <div>
             <strong>{importReview.warnings.length ? 'Review needed' : 'Details extracted'}</strong>
-            <span> from <a href={`/admin/expenses/import/${importReview.token}/file`} target="_blank" rel="noopener">{importReview.filename}</a> ({importReview.pageCount} page{importReview.pageCount === 1 ? '' : 's'}).</span>
+            <span> from <EvidenceLink
+              file={{
+                viewUrl: `/admin/expenses/import/${importReview.token}/file`,
+                mime: importReview.mime,
+                filename: importReview.filename,
+              }}
+              group="import"
+            /> ({importReview.pageCount} page{importReview.pageCount === 1 ? '' : 's'}).</span>
           </div>
           {importReview.warnings.length ? (
             <ul>{importReview.warnings.map((warning) => <li>{warning}</li>)}</ul>
@@ -326,23 +352,35 @@ export function ExpenseFormPage({
           <p class="muted">Private supporting files. Upload additional pages or documents one at a time.</p>
           {attachments.length ? (
             <div class="evidence-list">
-              {attachments.map((attachment) => (
-                <div class="evidence-row">
-                  <div>
-                    <a href={`/admin/expenses/${expense.id}/attachments/${attachment.id}`}>
-                      <Icon name="download" /> {attachment.filename}
-                    </a>
-                    <span class="muted">{Math.ceil(attachment.size_bytes / 1024)} KB</span>
+              {attachments.map((attachment) => {
+                const file = expenseEvidenceFile(expense.id, attachment);
+                return (
+                  <div class="evidence-row">
+                    <EvidenceLink file={file} group="evidence" class="evidence-thumb" duplicate>
+                      {attachment.mime === 'application/pdf'
+                        ? <span class="evidence-thumb-pdf">PDF</span>
+                        : <img src={file.viewUrl} alt="" loading="lazy" />}
+                    </EvidenceLink>
+                    <div class="evidence-row-name">
+                      <EvidenceLink file={file} group="evidence" />
+                      <span class="muted">{Math.ceil(attachment.size_bytes / 1024)} KB</span>
+                    </div>
+                    <div class="evidence-row-actions">
+                      <a class="btn btn-secondary btn-sm" href={file.downloadUrl}>
+                        <Icon name="download" />
+                        Download
+                      </a>
+                      <form
+                        method="post"
+                        action={`/admin/expenses/${expense.id}/attachments/${attachment.id}/delete`}
+                        data-confirm={`Remove ${attachment.filename}? This cannot be undone.`}
+                      >
+                        <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+                      </form>
+                    </div>
                   </div>
-                  <form
-                    method="post"
-                    action={`/admin/expenses/${expense.id}/attachments/${attachment.id}/delete`}
-                    data-confirm={`Remove ${attachment.filename}? This cannot be undone.`}
-                  >
-                    <button type="submit" class="btn btn-danger btn-sm">Remove</button>
-                  </form>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : <div class="banner banner-warning"><strong>Missing invoice.</strong> Drop the supplier invoice below to complete this expense record.</div>}
           <form method="post" action={`/admin/expenses/${expense.id}/attachments`} enctype="multipart/form-data" class="evidence-upload evidence-dropzone" data-evidence-drop>
@@ -355,6 +393,7 @@ export function ExpenseFormPage({
           </form>
         </div>
       ) : null}
+      {attachments.length || importReview ? <EvidenceViewer /> : null}
     </Layout>
   );
 }

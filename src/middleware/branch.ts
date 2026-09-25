@@ -1,8 +1,10 @@
 import { getCookie, setCookie } from 'hono/cookie';
 import { createMiddleware } from 'hono/factory';
+import { isValidElement } from 'hono/jsx';
 import type { Context } from 'hono';
 import type { AppEnv } from '../env';
 import { listBranches, listWorkspaces } from '../db/queries';
+import { withWorkspaceMenu, type WorkspaceMenu } from '../views/layout';
 
 export const BRANCH_COOKIE = 'jj_invoice_branch';
 export const WORKSPACE_COOKIE = 'jj_invoice_workspace';
@@ -51,6 +53,17 @@ export const branchContext = createMiddleware<AppEnv>(async (c, next) => {
   c.set('branchId', branch.id);
   c.set('branchName', branch.name);
   if (branch.id !== requested) selectBranch(c, branch.id);
+
+  // Every admin page renders the workspace switcher in Layout. Wrapping
+  // c.html here hands it the workspace list without threading it through
+  // each page's props.
+  const menu: WorkspaceMenu = {
+    current: workspace.id,
+    workspaces: workspaces.map(({ id, name }) => ({ id, name })),
+  };
+  const html = c.html as (...args: unknown[]) => Response | Promise<Response>;
+  c.html = ((content: unknown, ...rest: unknown[]) =>
+    html(isValidElement(content) ? withWorkspaceMenu(content, menu) : content, ...rest)) as typeof c.html;
   await next();
 });
 
