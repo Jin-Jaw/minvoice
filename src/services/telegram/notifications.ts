@@ -2,11 +2,12 @@
 // (connection, event) pair is logged so a message is sent at most once.
 
 import type { Bindings } from '../../env';
-import { getInvoiceById, isOverdue, listBranches, listInvoices } from '../../db/queries';
+import { getBranch, getInvoiceById, isOverdue, listBranches, listInvoices } from '../../db/queries';
 import { formatCents } from '../../lib/money';
 import { formatDateHuman, todayInTz } from '../../lib/dates';
 import { telegramApi } from './api';
 import type { TelegramConnection } from './repository';
+import { adminUrl } from './util';
 
 function esc(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -40,6 +41,7 @@ export async function notifyInvoicePaid(env: Bindings, invoiceId: number): Promi
   if (!api) return;
   const invoice = await getInvoiceById(env.DB, invoiceId);
   if (!invoice || invoice.status !== 'paid') return;
+  const branch = await getBranch(env.DB, invoice.branch_id);
   const eventKey = `paid:${invoice.id}:${invoice.paid_at ?? invoice.updated_at}`;
   for (const connection of await connections(env.DB, invoice.branch_id)) {
     if (await wasSent(env.DB, connection.id, eventKey)) continue;
@@ -49,7 +51,7 @@ export async function notifyInvoicePaid(env: Bindings, invoiceId: number): Promi
         `💰 <b>Payment received</b>\n\n${esc(invoice.number)}\n${esc(invoice.client_name)}\n${esc(
           formatCents(invoice.total_cents, invoice.currency)
         )}`,
-        [[{ text: 'View invoice', url: `${env.APP_BASE_URL}/admin/invoices/${invoice.id}` }]]
+        [[{ text: 'View invoice', url: adminUrl(env, `/admin/invoices/${invoice.id}`, branch) }]]
       );
       await markSent(env.DB, connection.id, eventKey);
     } catch (error) {

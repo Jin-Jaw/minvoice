@@ -7,7 +7,7 @@ import { getBranch, type Branch } from '../../db/queries';
 import { formatCents } from '../../lib/money';
 import { TelegramApi, telegramApi, type InlineKeyboard, type TelegramCallbackQuery } from '../telegram/api';
 import { clearSession, getSession, saveSession, type TelegramConnection } from '../telegram/repository';
-import { esc } from '../telegram/util';
+import { adminUrl, esc } from '../telegram/util';
 import { amountLabel, kindLabel, submissionLines, submissionsMenuKeyboard } from './format';
 import {
   approveSubmission,
@@ -280,8 +280,8 @@ async function approve(
   const amount = formatCents(submission.amount_cents!, submission.currency!);
   const link =
     submission.kind === 'income'
-      ? { text: 'View reports', url: `${env.APP_BASE_URL}/admin/reports?workspace=${branch.workspace_id}` }
-      : { text: 'View expense', url: `${env.APP_BASE_URL}/admin/expenses/${entryId}?workspace=${branch.workspace_id}` };
+      ? { text: 'View reports', url: adminUrl(env, '/admin/reports', branch) }
+      : { text: 'View expense', url: adminUrl(env, `/admin/expenses/${entryId}`, branch) };
   await api.sendMessage(
     chatId,
     `✅ Approved request #${id}. The ${kind} is saved to <b>${esc(branch.name)}</b>: ${esc(submission.party ?? '')}, ${esc(amount)}.`,

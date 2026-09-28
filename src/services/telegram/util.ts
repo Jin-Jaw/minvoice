@@ -1,6 +1,8 @@
 // Helpers shared by the admin bot and the submissions bot: evidence files,
-// HTML escaping and user-facing error text.
+// admin links, HTML escaping and user-facing error text.
 
+import type { Branch } from '../../db/queries';
+import type { Bindings } from '../../env';
 import { MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
 import type { TelegramMessage } from './api';
 
@@ -52,6 +54,15 @@ export function sanitizeFilename(name: string, mime: SniffedMime): string {
       .trim()
       .slice(0, 100) || 'attachment';
   return `${stem}${extension}`;
+}
+
+/** A link into the admin app for a record of `branch`. Admin pages take the
+ *  workspace from ?workspace= before the browser's cookie, so naming the
+ *  company's workspace opens the record even when the browser last used
+ *  another workspace. Without a branch the link falls back to the cookie. */
+export function adminUrl(env: Pick<Bindings, 'APP_BASE_URL'>, path: string, branch: Pick<Branch, 'workspace_id'> | null): string {
+  const url = `${env.APP_BASE_URL}${path}`;
+  return branch ? `${url}?workspace=${branch.workspace_id}` : url;
 }
 
 export function esc(value: string): string {

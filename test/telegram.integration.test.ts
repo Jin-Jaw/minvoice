@@ -4,6 +4,7 @@ import { createClient, createInvoice, getInvoiceItems, getSettings, linkClientTo
 import { addDaysISO, todayInTz } from '../src/lib/dates';
 import type { Bindings } from '../src/env';
 import { handleTelegramUpdate } from '../src/services/telegram/handler';
+import { notifyInvoicePaid } from '../src/services/telegram/notifications';
 
 const DB = env.DB;
 const USER = 42;
@@ -59,7 +60,9 @@ const buttons = () =>
   (sent.filter((m) => m.method === 'sendMessage').at(-1)?.body.reply_markup?.inline_keyboard ?? []).flat() as {
     text: string;
     callback_data?: string;
+    url?: string;
   }[];
+const linkTo = (label: string) => buttons().find((b) => b.text === label)?.url;
 
 let clientId: number;
 let previousInvoiceId: number;
@@ -77,6 +80,7 @@ beforeEach(async () => {
     DB.prepare('DELETE FROM invoice_items'),
     DB.prepare('DELETE FROM payments'),
     DB.prepare('DELETE FROM invoices'),
+    DB.prepare('DELETE FROM income_entries'),
     DB.prepare('DELETE FROM client_branches'),
     DB.prepare('DELETE FROM clients'),
   ]);
@@ -265,6 +269,9 @@ describe('Telegram receipt photos', () => {
     await tap('expedit:company');
     await tap('expcompany:2');
     expect(lastMessage()).toContain('Category: Equipment &amp; supplies');
+    // Company 2 (Property / Flats) is in workspace 2, so its links must not
+    // depend on the browser's workspace cookie.
+    expect(linkTo('Review in app')).toMatch(/\/admin\/expenses\/import\/[^/]+\/review\?workspace=2$/);
     await tap('expenseconfirm:1');
 
     const expense = await DB.prepare('SELECT * FROM expenses ORDER BY id DESC LIMIT 1').first<{
@@ -284,6 +291,7 @@ describe('Telegram receipt photos', () => {
       category: 'Equipment & supplies',
       expense_date: '2026-09-18',
     });
+    expect(linkTo('View expense')).toBe(`https://invoice.test/admin/expenses/${expense!.id}?workspace=2`);
     const evidence = await DB.prepare('SELECT mime FROM expense_attachments WHERE expense_id = ?')
       .bind(expense!.id)
       .first<{ mime: string }>();
@@ -342,5 +350,30 @@ describe('Telegram delivery', () => {
     await handleTelegramUpdate(botEnv(), update);
     await handleTelegramUpdate(botEnv(), update);
     expect(messages().filter((m) => m.includes('Invoice bot'))).toHaveLength(1);
+  });
+});
+
+describe('Telegram links to the web app', () => {
+  it('opens an invoice in the workspace of its company', async () => {
+    await tap(`inv:${previousInvoiceId}`);
+    expect(linkTo('View')).toBe(`https://invoice.test/admin/invoices/${previousInvoiceId}?workspace=1`);
+
+    await tap(`paidask:${previousInvoiceId}`);
+    await tap(`paidy:${previousInvoiceId}`);
+    await notifyInvoicePaid(botEnv(), previousInvoiceId);
+    expect(lastMessage()).toContain('Payment received');
+    expect(linkTo('View invoice')).toBe(`https://invoice.test/admin/invoices/${previousInvoiceId}?workspace=1`);
+  });
+
+  it('opens reports in the workspace of the company that received the income', async () => {
+    await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
+    await text('/income');
+    await text('Flat 3 tenant');
+    await text('1200');
+    await text('today');
+    await text('none');
+    await tap('incomeconfirm:1');
+    expect(lastMessage()).toContain('Income saved');
+    expect(linkTo('View reports')).toBe('https://invoice.test/admin/reports?workspace=2');
   });
 });

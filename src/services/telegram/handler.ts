@@ -63,7 +63,7 @@ import {
   type UpdateStart,
 } from './repository';
 import { acknowledgeUpdate, logUpdateTiming } from './delivery';
-import { esc, evidenceSource, humanError, sanitizeFilename, sniffMime } from './util';
+import { adminUrl, esc, evidenceSource, humanError, sanitizeFilename, sniffMime } from './util';
 import {
   handleRejectReason,
   handleReviewCallback,
@@ -380,7 +380,7 @@ async function showInvoiceList(
 async function showInvoice(env: Bindings, api: TelegramApi, branchId: number, chatId: string, invoiceId: number): Promise<void> {
   const invoice = await getInvoice(env.DB, branchId, invoiceId);
   if (!invoice) throw new Error('Invoice not found in your company.');
-  const attachments = await listInvoiceAttachments(env.DB, invoiceId);
+  const [attachments, branch] = await Promise.all([listInvoiceAttachments(env.DB, invoiceId), getBranch(env.DB, invoice.branch_id)]);
   const due = invoice.due_date ? `\nDue: ${formatDateHuman(invoice.due_date)}` : '';
   const text = [
     `<b>${esc(invoice.number)}</b>`,
@@ -393,7 +393,7 @@ async function showInvoice(env: Bindings, api: TelegramApi, branchId: number, ch
     .join('\n');
   const keyboard: InlineKeyboard = [
     [
-      { text: 'View', url: `${env.APP_BASE_URL}/admin/invoices/${invoice.id}` },
+      { text: 'View', url: adminUrl(env, `/admin/invoices/${invoice.id}`, branch) },
       { text: 'PDF', callback_data: `pdf:${invoice.id}` },
     ],
     [
@@ -1409,7 +1409,7 @@ async function confirmIncome(env: Bindings, api: TelegramApi, branchId: number, 
   await api.sendMessage(
     chatId,
     `✅ Income saved: <b>${esc(state.clientName)}</b> — ${esc(formatCents(state.amountCents, state.currency))}`,
-    [[{ text: 'View reports', url: `${env.APP_BASE_URL}/admin/reports` }], ...homeKeyboard(true)]
+    [[{ text: 'View reports', url: adminUrl(env, '/admin/reports', branch) }], ...homeKeyboard(true)]
   );
   console.log(JSON.stringify({ event: 'telegram_income_created', branchId, incomeId, userId }));
 }
@@ -1488,15 +1488,17 @@ async function handleExpenseInvoiceUpload(
     await api.sendMessage(
       chatId,
       `${await expenseSummary(env, state)}\n\nI couldn’t read the total. Send the amount paid, e.g. <b>12.40</b> or <b>12.40 EUR</b>.`,
-      [reviewInAppRow(env, token), [{ text: 'Cancel', callback_data: 'cancel' }]]
+      [await reviewInAppRow(env, state), [{ text: 'Cancel', callback_data: 'cancel' }]]
     );
     return;
   }
   await showExpenseReview(env, api, branchId, userId, chatId, state, 'Is the total right?');
 }
 
-function reviewInAppRow(env: Bindings, token: string): InlineKeyboard[number] {
-  return [{ text: 'Review in app', url: `${env.APP_BASE_URL}/admin/expenses/import/${token}/review` }];
+/** Opens the staged import in the workspace of the company it is filed under. */
+async function reviewInAppRow(env: Bindings, state: ExpenseState): Promise<InlineKeyboard[number]> {
+  const target = await getBranch(env.DB, state.targetBranchId!);
+  return [{ text: 'Review in app', url: adminUrl(env, `/admin/expenses/import/${state.token}/review`, target) }];
 }
 
 async function expenseSummary(env: Bindings, state: ExpenseState, heading = '<b>Expense found</b>'): Promise<string> {
@@ -1550,7 +1552,7 @@ async function showExpenseReview(
       { text: '👤 Client', callback_data: 'expedit:client' },
     ],
     ...(multipleCompanies ? [[{ text: '🏢 Company', callback_data: 'expedit:company' }]] : []),
-    [reviewInAppRow(env, state.token!)[0], { text: 'Cancel', callback_data: 'cancel' }],
+    [(await reviewInAppRow(env, state))[0], { text: 'Cancel', callback_data: 'cancel' }],
   ]);
 }
 
@@ -1751,7 +1753,7 @@ async function confirmExpenseImport(env: Bindings, api: TelegramApi, branchId: n
     chatId,
     `✅ Expense saved to <b>${esc(target.name)}</b>: ${esc(parsed.payee)} — ${esc(formatCents(parsed.amountCents, parsed.currency))}`,
     [
-      [{ text: 'View expense', url: `${env.APP_BASE_URL}/admin/expenses/${expenseId}` }],
+      [{ text: 'View expense', url: adminUrl(env, `/admin/expenses/${expenseId}`, target) }],
       ...homeKeyboard(active?.invoicing_enabled === 0),
     ]
   );
