@@ -2,6 +2,7 @@
 // and the approve and reject writes that move a request into the ledger.
 
 import type { Branch } from '../../db/queries';
+import { rateLimitStatement, withinRateLimit } from '../telegram/repository';
 
 /** Requests from the submissions bot are always filed under this workspace. */
 export const SUBMISSIONS_WORKSPACE_SLUG = 'jinjaw-arabia';
@@ -83,19 +84,77 @@ const DRAFT_COLUMNS: readonly (keyof DraftPatch)[] = [
 ];
 
 // Every column except the file bytes, which are only read when needed.
-const COLUMNS = `s.id, s.submitter_id, s.branch_id, s.kind, s.status, s.step, s.party, s.entry_date, s.amount_cents,
-  s.tax_cents, s.currency, s.category, s.reference, s.note, s.file_mime, s.file_name, s.file_size, s.file_sha256,
-  s.created_at, s.updated_at, s.submitted_at, s.decided_at, s.decided_by, s.decision_note, s.expense_id, s.income_id`;
+const COLUMN_NAMES = [
+  'id', 'submitter_id', 'branch_id', 'kind', 'status', 'step', 'party', 'entry_date', 'amount_cents', 'tax_cents',
+  'currency', 'category', 'reference', 'note', 'file_mime', 'file_name', 'file_size', 'file_sha256', 'created_at',
+  'updated_at', 'submitted_at', 'decided_at', 'decided_by', 'decision_note', 'expense_id', 'income_id',
+];
+const COLUMNS = COLUMN_NAMES.map((column) => `s.${column}`).join(', ');
+/** The same columns for RETURNING, which takes no table alias. */
+const RETURNING = COLUMN_NAMES.join(', ');
 
 /** The company requests are filed under: the first active company in the Arabia workspace. */
 export function getSubmissionsBranch(db: D1Database): Promise<Branch | null> {
+  return branchStatement(db).first<Branch>();
+}
+
+function branchStatement(db: D1Database): D1PreparedStatement {
   return db
     .prepare(
       `SELECT b.* FROM branches b JOIN workspaces w ON w.id = b.workspace_id
        WHERE w.slug = ? AND b.active = 1 ORDER BY b.id LIMIT 1`
     )
-    .bind(SUBMISSIONS_WORKSPACE_SLUG)
-    .first<Branch>();
+    .bind(SUBMISSIONS_WORKSPACE_SLUG);
+}
+
+const DRAFT_EXPIRED = 'That request expired. Start again with /expense or /income.';
+
+export type SubmissionsUpdateStart = {
+  /** False when this update id was already handled (Telegram re-delivered it). */
+  claimed: boolean;
+  withinLimit: boolean;
+  submitter: Submitter | null;
+  branch: Branch | null;
+  draft: Submission | null;
+};
+
+/**
+ * Everything the submissions bot reads before it handles an update, in one
+ * D1 round trip: claim the update id, count it against the rate limit,
+ * refresh the submitter's chat details, and load the submitter, the company
+ * requests are filed under and the draft in progress.
+ */
+export async function beginSubmissionsUpdate(
+  db: D1Database,
+  updateId: number,
+  input: { userId: string; chatId: string; username: string | null; displayName: string }
+): Promise<SubmissionsUpdateStart> {
+  const [claim, rate, , submitter, branch, draft] = await db.batch([
+    db.prepare('INSERT OR IGNORE INTO submissions_bot_updates (update_id) VALUES (?)').bind(updateId),
+    // A separate key keeps this budget apart from the same person's admin bot use.
+    rateLimitStatement(db, `submissions:${input.userId}`),
+    db
+      .prepare(
+        `UPDATE telegram_submitters SET telegram_chat_id = ?, telegram_username = ?, display_name = ?,
+         last_used_at = datetime('now') WHERE telegram_user_id = ?`
+      )
+      .bind(input.chatId, input.username, input.displayName, input.userId),
+    db.prepare('SELECT * FROM telegram_submitters WHERE telegram_user_id = ?').bind(input.userId),
+    branchStatement(db),
+    db
+      .prepare(
+        `SELECT ${COLUMNS} FROM submissions s
+         WHERE s.status = 'draft' AND s.submitter_id = (SELECT id FROM telegram_submitters WHERE telegram_user_id = ?)`
+      )
+      .bind(input.userId),
+  ]);
+  return {
+    claimed: (claim.meta.changes ?? 0) === 1,
+    withinLimit: withinRateLimit(rate),
+    submitter: (submitter.results[0] as Submitter | undefined) ?? null,
+    branch: (branch.results[0] as Branch | undefined) ?? null,
+    draft: (draft.results[0] as Submission | undefined) ?? null,
+  };
 }
 
 /** Telegram retries deliveries; each update_id is processed at most once. */
@@ -212,29 +271,28 @@ export async function createDraft(
 
 export async function updateDraft(db: D1Database, draft: Submission, patch: DraftPatch): Promise<Submission> {
   const columns = DRAFT_COLUMNS.filter((column) => patch[column] !== undefined);
-  if (columns.length) {
-    await db
-      .prepare(
-        `UPDATE submissions SET ${columns.map((column) => `${column} = ?`).join(', ')}, updated_at = datetime('now')
-         WHERE id = ? AND submitter_id = ? AND status = 'draft'`
-      )
-      .bind(...columns.map((column) => patch[column] ?? null), draft.id, draft.submitter_id)
-      .run();
-  }
-  const updated = await getDraft(db, draft.submitter_id);
-  if (!updated || updated.id !== draft.id) throw new Error('That request expired. Start again with /expense or /income.');
+  if (!columns.length) return draft;
+  const updated = await db
+    .prepare(
+      `UPDATE submissions SET ${columns.map((column) => `${column} = ?`).join(', ')}, updated_at = datetime('now')
+       WHERE id = ? AND submitter_id = ? AND status = 'draft' RETURNING ${RETURNING}`
+    )
+    .bind(...columns.map((column) => patch[column] ?? null), draft.id, draft.submitter_id)
+    .first<Submission>();
+  if (!updated) throw new Error(DRAFT_EXPIRED);
   return updated;
 }
 
 export async function setDraftFile(db: D1Database, draft: Submission, file: SubmissionFile): Promise<Submission> {
-  await db
+  const updated = await db
     .prepare(
       `UPDATE submissions SET file_bytes = ?, file_mime = ?, file_name = ?, file_size = ?, file_sha256 = ?,
-       updated_at = datetime('now') WHERE id = ? AND submitter_id = ? AND status = 'draft'`
+       updated_at = datetime('now') WHERE id = ? AND submitter_id = ? AND status = 'draft' RETURNING ${RETURNING}`
     )
     .bind(file.bytes, file.mime, file.filename, file.size_bytes, file.sha256, draft.id, draft.submitter_id)
-    .run();
-  return updateDraft(db, draft, {});
+    .first<Submission>();
+  if (!updated) throw new Error(DRAFT_EXPIRED);
+  return updated;
 }
 
 export async function deleteDraft(db: D1Database, submitterId: number): Promise<void> {

@@ -355,3 +355,19 @@ describe('staff bot housekeeping and webhook', () => {
     expect((await post('anything')).status).toBe(503);
   });
 });
+
+describe('staff bot delivery', () => {
+  it('answers a tap first and loads what it needs in one database batch', async () => {
+    await allowStaff();
+    await staffTap('expense');
+    const batch = vi.spyOn(DB, 'batch');
+    sent = [];
+    await staffTap('cancel');
+    expect(sent.filter((m) => m.bot === 'staff').map((m) => m.method).slice(0, 2).sort()).toEqual([
+      'answerCallbackQuery',
+      'sendChatAction',
+    ]);
+    expect(lastText('staff')).toBe('Cancelled.');
+    expect(batch).toHaveBeenCalledTimes(1);
+  });
+});

@@ -13,6 +13,8 @@ type Sent = { method: string; body: Record<string, any> };
 let sent: Sent[] = [];
 let updateId = 1000;
 let aiAnswer: Record<string, unknown> = {};
+/** Telegram refuses an answer to a button tap that arrives too late. */
+let refuseAnswers = false;
 
 const botEnv = () =>
   ({
@@ -104,12 +106,16 @@ beforeEach(async () => {
 
   sent = [];
   aiAnswer = {};
+  refuseAnswers = false;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (url.includes('/file/bot')) return new Response(JPEG);
     const method = url.split('/').pop()!;
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
     sent.push({ method, body });
+    if (method === 'answerCallbackQuery' && refuseAnswers) {
+      return Response.json({ ok: false, description: 'Bad Request: query is too old and response timeout expired' }, { status: 400 });
+    }
     if (method === 'getFile') {
       return Response.json({ ok: true, result: { file_id: body.file_id, file_path: 'photos/receipt.jpg', file_size: JPEG.length } });
     }
@@ -311,5 +317,30 @@ describe('Telegram receipt photos', () => {
       currency: settings.currency,
       expense_date: addDaysISO(todayInTz(settings.timezone), -1),
     });
+  });
+});
+
+describe('Telegram delivery', () => {
+  it('answers a button tap first and loads what it needs in one database batch', async () => {
+    const batch = vi.spyOn(DB, 'batch');
+    await tap('list:invoices');
+    expect(sent.map((m) => m.method).slice(0, 2).sort()).toEqual(['answerCallbackQuery', 'sendChatAction']);
+    expect(lastMessage()).toContain('<b>Invoices</b>');
+    // The claim, rate limit, connection, company and session arrive together.
+    expect(batch).toHaveBeenCalledTimes(1);
+  });
+
+  it('still acts on a tap when Telegram refuses the late answer', async () => {
+    refuseAnswers = true;
+    await text('/newinvoice');
+    await tap(`client:${clientId}`);
+    expect(lastMessage()).toContain('Client: <b>ResVR Inc.</b>');
+  });
+
+  it('ignores a re-delivered update', async () => {
+    const update = { update_id: ++updateId, message: { message_id: updateId, chat, from: { id: USER }, text: '/help' } };
+    await handleTelegramUpdate(botEnv(), update);
+    await handleTelegramUpdate(botEnv(), update);
+    expect(messages().filter((m) => m.includes('Invoice bot'))).toHaveLength(1);
   });
 });

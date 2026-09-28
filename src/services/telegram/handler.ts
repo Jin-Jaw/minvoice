@@ -25,6 +25,7 @@ import {
   markInvoiceSent,
   recordManualPayment,
   storeExpenseInvoiceImport,
+  type Branch,
   type Invoice,
 } from '../../db/queries';
 import { addDaysISO, formatDateHuman, todayInTz } from '../../lib/dates';
@@ -50,18 +51,18 @@ import {
 import {
   addInvoiceAttachment,
   asEmailAttachments,
+  beginUpdate,
   claimUpdate,
   clearSession,
   consumeLinkToken,
-  consumeRateLimit,
-  getConnection,
   getSession,
   listInvoiceAttachments,
   saveSession,
   setConnectionBranch,
   sha256Hex,
-  touchConnection,
+  type UpdateStart,
 } from './repository';
+import { acknowledgeUpdate, logUpdateTiming } from './delivery';
 import { esc, evidenceSource, humanError, sanitizeFilename, sniffMime } from './util';
 import {
   handleRejectReason,
@@ -151,8 +152,8 @@ const LINE_ITEM_FORMAT =
   'Format: <b>description - price</b>, e.g.\n<code>Tech art support - 2500</code>\n<code>Shader work - 3 x 450</code>';
 
 export async function handleTelegramUpdate(env: Bindings, update: TelegramUpdate): Promise<void> {
+  const startedAt = Date.now();
   const api = new TelegramApi(env.TELEGRAM_BOT_TOKEN!);
-  if (!(await claimUpdate(env.DB, update.update_id))) return;
   const callback = update.callback_query;
   const message = update.message ?? callback?.message;
   const user = update.message?.from ?? callback?.from;
@@ -161,16 +162,37 @@ export async function handleTelegramUpdate(env: Bindings, update: TelegramUpdate
   const chatId = String(message.chat.id);
 
   if (message.chat.type !== 'private') {
-    if (update.message?.text?.startsWith('/start')) {
+    if (update.message?.text?.startsWith('/start') && (await claimUpdate(env.DB, update.update_id))) {
       await api.sendMessage(chatId, 'Open a private chat with this bot to connect your invoicing account.');
     }
     return;
   }
-  if (!(await consumeRateLimit(env.DB, userId))) {
-    await api.sendMessage(chatId, 'Please slow down for a moment and try again.');
-    return;
-  }
 
+  const acknowledged = acknowledgeUpdate(api, update, chatId);
+  try {
+    const start = await beginUpdate(env.DB, update.update_id, userId, chatId, user.username);
+    if (!start.claimed) return;
+    if (!start.withinLimit) {
+      await api.sendMessage(chatId, 'Please slow down for a moment and try again.');
+      return;
+    }
+    await handleClaimedUpdate(env, api, update, userId, chatId, start);
+  } finally {
+    await acknowledged;
+    logUpdateTiming('admin', update, startedAt);
+  }
+}
+
+async function handleClaimedUpdate(
+  env: Bindings,
+  api: TelegramApi,
+  update: TelegramUpdate,
+  userId: string,
+  chatId: string,
+  start: UpdateStart
+): Promise<void> {
+  const callback = update.callback_query;
+  const user = (update.message?.from ?? callback?.from)!;
   try {
     if (update.message?.text?.startsWith('/start')) {
       const token = update.message.text.trim().split(/\s+/, 2)[1];
@@ -193,22 +215,19 @@ export async function handleTelegramUpdate(env: Bindings, update: TelegramUpdate
       }
     }
 
-    const connection = await getConnection(env.DB, userId);
+    const { connection, branch } = start;
     if (!connection) {
       await api.sendMessage(chatId, 'Connect this Telegram account from the invoicing app first: Settings → Telegram.');
       return;
     }
-    await touchConnection(env.DB, userId, chatId, user.username);
-    const branch = await getBranch(env.DB, connection.branch_id);
     if (!branch) throw new Error('Your selected workspace is no longer available.');
     const expenseOnly = branch.invoicing_enabled === 0;
     const branchId = connection.branch_id;
 
     if (callback) {
-      await api.answerCallbackQuery(callback.id);
       // Staff requests and access requests work whichever company is active.
       if (await handleReviewCallback(env, api, connection, chatId, callback)) return;
-      await handleCallback(env, api, branchId, userId, chatId, callback);
+      await handleCallback(env, api, branch, userId, chatId, callback);
       return;
     }
     if (update.message?.document || update.message?.photo?.length) {
@@ -242,7 +261,7 @@ export async function handleTelegramUpdate(env: Bindings, update: TelegramUpdate
       return;
     }
 
-    const session = await getSession(env.DB, userId);
+    const session = start.session;
     if (session?.flow === 'reject_submission') {
       await handleRejectReason(env, api, connection, chatId, JSON.parse(session.data_json), text);
       return;
@@ -391,13 +410,13 @@ async function showInvoice(env: Bindings, api: TelegramApi, branchId: number, ch
 async function handleCallback(
   env: Bindings,
   api: TelegramApi,
-  branchId: number,
+  activeBranch: Branch,
   userId: string,
   chatId: string,
   callback: TelegramCallbackQuery
 ): Promise<void> {
   const data = callback.data ?? '';
-  const activeBranch = await getBranch(env.DB, branchId);
+  const branchId = activeBranch.id;
   if (data === 'new') return startNewInvoice(env, api, branchId, userId, chatId);
   if (data === 'expenseupload') return startExpenseInvoiceUpload(env, api, branchId, userId, chatId);
   if (data === 'income') return startAddIncome(env, api, branchId, userId, chatId);

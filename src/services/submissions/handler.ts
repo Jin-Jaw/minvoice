@@ -4,32 +4,31 @@
 // only then is it written to the expenses or income ledger.
 
 import type { Bindings } from '../../env';
-import { getSettings, listBranches, type Branch } from '../../db/queries';
+import { getSettings, listBranches, type Branch, type Settings } from '../../db/queries';
 import { addDaysISO, formatDateHuman, todayInTz } from '../../lib/dates';
 import { EXPENSE_CATEGORIES, isIsoDate, MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
 import { extractExpenseInvoiceText, parseExpenseInvoice, type ParsedExpenseInvoice } from '../../lib/expense-invoice-import';
 import { parseMoneyReply, parseQuickEntry } from '../../lib/telegram-input';
 import { readReceiptImage, parseReceiptFields, type ReceiptImageMime } from '../receipt-ocr';
 import { TelegramApi, type InlineKeyboard, type TelegramMessage, type TelegramUser } from '../telegram/api';
+import { acknowledgeUpdate, logUpdateTiming } from '../telegram/delivery';
 import type { TelegramUpdate } from '../telegram/handler';
-import { consumeRateLimit, sha256Hex } from '../telegram/repository';
+import { sha256Hex } from '../telegram/repository';
 import { esc, evidenceSource, humanError, sanitizeFilename, sniffMime } from '../telegram/util';
 import {
+  beginSubmissionsUpdate,
   claimSubmissionsUpdate,
   createDraft,
   deleteDraft,
-  getDraft,
-  getSubmissionsBranch,
-  getSubmitter,
   listSubmitterRequests,
   requestAccess,
   setDraftFile,
   submitDraft,
-  touchSubmitter,
   updateDraft,
   type DraftPatch,
   type Submission,
   type SubmissionKind,
+  type SubmissionsUpdateStart,
   type Submitter,
 } from './repository';
 import { amountLabel, kindLabel, partyLabel, submissionLines, submissionsMenuKeyboard } from './format';
@@ -41,15 +40,22 @@ type Context = {
   chatId: string;
   submitter: Submitter;
   branch: Branch;
+  /** Loaded once per update; several steps need the timezone or currency. */
+  settings?: Promise<Settings>;
 };
+
+function settingsFor(ctx: Context): Promise<Settings> {
+  ctx.settings ??= getSettings(ctx.env.DB, ctx.branch.id);
+  return ctx.settings;
+}
 
 const NOTE_MAX = 500;
 
 const CANCEL_ROW: InlineKeyboard[number] = [{ text: 'Cancel', callback_data: 'cancel' }];
 
 export async function handleSubmissionsUpdate(env: Bindings, update: TelegramUpdate): Promise<void> {
+  const startedAt = Date.now();
   const api = new TelegramApi(env.SUBMISSIONS_BOT_TOKEN!);
-  if (!(await claimSubmissionsUpdate(env.DB, update.update_id))) return;
   const callback = update.callback_query;
   const message = update.message ?? callback?.message;
   const user = update.message?.from ?? callback?.from;
@@ -58,28 +64,47 @@ export async function handleSubmissionsUpdate(env: Bindings, update: TelegramUpd
   const chatId = String(message.chat.id);
 
   if (message.chat.type !== 'private') {
-    if (update.message?.text?.startsWith('/start')) {
+    if (update.message?.text?.startsWith('/start') && (await claimSubmissionsUpdate(env.DB, update.update_id))) {
       await api.sendMessage(chatId, 'Open a private chat with this bot to send expenses and income.');
     }
     return;
   }
-  // A separate key keeps this budget apart from the same person's admin bot use.
-  if (!(await consumeRateLimit(env.DB, `submissions:${userId}`))) {
-    await api.sendMessage(chatId, 'Please slow down for a moment and try again.');
-    return;
-  }
 
+  const acknowledged = acknowledgeUpdate(api, update, chatId);
   try {
-    if (callback) await api.answerCallbackQuery(callback.id);
-    const branch = await getSubmissionsBranch(env.DB);
+    const name = displayName(user);
+    const username = user.username ?? null;
+    const start = await beginSubmissionsUpdate(env.DB, update.update_id, { userId, chatId, username, displayName: name });
+    if (!start.claimed) return;
+    if (!start.withinLimit) {
+      await api.sendMessage(chatId, 'Please slow down for a moment and try again.');
+      return;
+    }
+    await handleClaimedUpdate(env, api, update, userId, chatId, name, start);
+  } finally {
+    await acknowledged;
+    logUpdateTiming('submissions', update, startedAt);
+  }
+}
+
+async function handleClaimedUpdate(
+  env: Bindings,
+  api: TelegramApi,
+  update: TelegramUpdate,
+  userId: string,
+  chatId: string,
+  name: string,
+  start: SubmissionsUpdateStart
+): Promise<void> {
+  const callback = update.callback_query;
+  try {
+    const { branch, submitter, draft } = start;
     if (!branch) {
       await api.sendMessage(chatId, 'This bot isn’t set up yet. Please ask the admin.');
       return;
     }
-    const name = displayName(user);
-    const username = user.username ?? null;
-    const submitter = await getSubmitter(env.DB, userId);
     if (!submitter) {
+      const username = (update.message?.from ?? callback?.from)?.username ?? null;
       const created = await requestAccess(env.DB, { userId, chatId, username, displayName: name });
       await api.sendMessage(
         chatId,
@@ -88,7 +113,6 @@ export async function handleSubmissionsUpdate(env: Bindings, update: TelegramUpd
       if (created) await notifyAdminsOfAccessRequest(env, created, branch);
       return;
     }
-    await touchSubmitter(env.DB, userId, chatId, username, name);
     if (submitter.status === 'pending') {
       await api.sendMessage(chatId, 'Your access request is still waiting for the admin. I’ll message you once it’s approved.');
       return;
@@ -98,8 +122,7 @@ export async function handleSubmissionsUpdate(env: Bindings, update: TelegramUpd
       return;
     }
 
-    const ctx: Context = { env, api, chatId, submitter: { ...submitter, telegram_chat_id: chatId }, branch };
-    const draft = await getDraft(env.DB, submitter.id);
+    const ctx: Context = { env, api, chatId, submitter, branch };
     if (callback) return handleCallback(ctx, draft, callback.data ?? '');
     if (update.message?.document || update.message?.photo?.length) return receiveFile(ctx, draft, update.message);
 
@@ -170,7 +193,7 @@ async function handleCallback(ctx: Context, draft: Submission | null, data: stri
 }
 
 async function todayFor(ctx: Context): Promise<string> {
-  return todayInTz((await getSettings(ctx.env.DB, ctx.branch.id)).timezone);
+  return todayInTz((await settingsFor(ctx)).timezone);
 }
 
 async function startDraft(ctx: Context, kind: SubmissionKind): Promise<void> {
@@ -221,7 +244,7 @@ async function askStep(ctx: Context, draft: Submission, step: string, note = '')
     return;
   }
   if (step === 'amount') {
-    const currency = current.currency ?? (await getSettings(ctx.env.DB, ctx.branch.id)).currency;
+    const currency = current.currency ?? (await settingsFor(ctx)).currency;
     await api.sendMessage(
       chatId,
       `${note}How much was ${current.kind === 'income' ? 'received' : 'paid'}? Send an amount in ${esc(currency)}, e.g. <b>25</b>, or add a currency, e.g. <b>25 EUR</b>.`,
@@ -417,7 +440,7 @@ async function readEvidence(env: Bindings, bytes: Uint8Array, mime: string): Pro
 // ---------- Review and send ----------
 
 async function showReview(ctx: Context, draft: Submission, note = ''): Promise<void> {
-  const settings = await getSettings(ctx.env.DB, ctx.branch.id);
+  const settings = await settingsFor(ctx);
   // Fill the defaults the sender didn't give, so what they see is what gets sent.
   const defaults: DraftPatch = { step: 'review' };
   if (!draft.entry_date) defaults.entry_date = todayInTz(settings.timezone);

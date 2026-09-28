@@ -1,6 +1,7 @@
 // D1 access for the Telegram bot: account linking, conversation sessions,
 // update de-duplication, rate limiting, and invoice attachments.
 
+import type { Branch } from '../../db/queries';
 import type { EmailAttachment } from '../email';
 
 export type TelegramConnection = {
@@ -151,18 +152,76 @@ export async function claimUpdate(db: D1Database, updateId: number): Promise<boo
   return (result.meta.changes ?? 0) === 1;
 }
 
-/** 30 updates per user per minute. */
-export async function consumeRateLimit(db: D1Database, userId: string): Promise<boolean> {
+const RATE_LIMIT_PER_MINUTE = 30;
+
+/** Counts one update against a user's per-minute window (`key` is the user id, prefixed per bot). */
+export function rateLimitStatement(db: D1Database, key: string): D1PreparedStatement {
   const windowStart = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString().slice(0, 19).replace('T', ' ');
-  const row = await db
+  return db
     .prepare(
       `INSERT INTO telegram_rate_limits (telegram_user_id, window_start, request_count) VALUES (?, ?, 1)
      ON CONFLICT (telegram_user_id, window_start) DO UPDATE SET request_count = request_count + 1
      RETURNING request_count`
     )
-    .bind(userId, windowStart)
-    .first<{ request_count: number }>();
-  return (row?.request_count ?? 100) <= 30;
+    .bind(key, windowStart);
+}
+
+export function withinRateLimit(result: D1Result): boolean {
+  return ((result.results[0] as { request_count: number } | undefined)?.request_count ?? 100) <= RATE_LIMIT_PER_MINUTE;
+}
+
+/** 30 updates per user per minute. */
+export async function consumeRateLimit(db: D1Database, userId: string): Promise<boolean> {
+  return withinRateLimit(await rateLimitStatement(db, userId).run());
+}
+
+export type UpdateStart = {
+  /** False when this update id was already handled (Telegram re-delivered it). */
+  claimed: boolean;
+  withinLimit: boolean;
+  connection: TelegramConnection | null;
+  /** The connection's active company, or null when it is inactive or missing. */
+  branch: Branch | null;
+  session: TelegramSession | null;
+};
+
+/**
+ * Everything the admin bot reads before it handles an update, in one D1
+ * round trip: claim the update id, count it against the rate limit, refresh
+ * the connection's chat details, and load the connection, its company and
+ * the open conversation. Every reply waits on this, so it stays one batch.
+ */
+export async function beginUpdate(
+  db: D1Database,
+  updateId: number,
+  userId: string,
+  chatId: string,
+  username: string | undefined
+): Promise<UpdateStart> {
+  const [claim, rate, , connection, branch, session] = await db.batch([
+    db.prepare('INSERT OR IGNORE INTO telegram_processed_updates (update_id) VALUES (?)').bind(updateId),
+    rateLimitStatement(db, userId),
+    db
+      .prepare(
+        "UPDATE telegram_connections SET telegram_chat_id = ?, telegram_username = ?, last_used_at = datetime('now') WHERE telegram_user_id = ?"
+      )
+      .bind(chatId, username ?? null, userId),
+    db.prepare('SELECT * FROM telegram_connections WHERE telegram_user_id = ?').bind(userId),
+    db
+      .prepare(
+        `SELECT b.* FROM branches b JOIN telegram_connections c ON c.branch_id = b.id
+       WHERE c.telegram_user_id = ? AND b.active = 1`
+      )
+      .bind(userId),
+    db.prepare("SELECT * FROM telegram_sessions WHERE telegram_user_id = ? AND expires_at > datetime('now')").bind(userId),
+  ]);
+  return {
+    claimed: (claim.meta.changes ?? 0) === 1,
+    withinLimit: withinRateLimit(rate),
+    connection: (connection.results[0] as TelegramConnection | undefined) ?? null,
+    branch: (branch.results[0] as Branch | undefined) ?? null,
+    session: (session.results[0] as TelegramSession | undefined) ?? null,
+  };
 }
 
 // ---------- Conversation sessions (30-minute TTL) ----------
