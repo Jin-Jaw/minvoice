@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { addDaysISO, formatDateHuman, formatTimestamp, isValidTimezone, todayInTz } from './dates';
+import {
+  addDaysISO,
+  formatDateHuman,
+  formatTimestamp,
+  isValidTimezone,
+  monthsBetween,
+  shiftMonthYears,
+  todayInTz,
+} from './dates';
 
 describe('todayInTz', () => {
   it('returns ISO dates', () => {
@@ -54,5 +62,45 @@ describe('addDaysISO', () => {
     expect(addDaysISO('2026-07-31', 1)).toBe('2026-08-01'); // month rollover
     expect(addDaysISO('2026-12-31', 1)).toBe('2027-01-01'); // year rollover
     expect(addDaysISO('2028-02-28', 1)).toBe('2028-02-29'); // leap year
+  });
+});
+
+describe('monthsBetween', () => {
+  it('counts calendar months and ignores the day', () => {
+    expect(monthsBetween('2026-08-29', '2026-09-01')).toBe(1);
+    expect(monthsBetween('2026-08-01', '2026-08-31')).toBe(0);
+    expect(monthsBetween('2026-11-15', '2027-02-01')).toBe(3);
+    expect(monthsBetween('2026-09-01', '2026-08-01')).toBe(-1);
+  });
+});
+
+describe('shiftMonthYears', () => {
+  it('moves a monthly line item to the next month', () => {
+    expect(shiftMonthYears('Tech art services : August 2026 - £2,500', 1)).toBe(
+      'Tech art services : September 2026 - £2,500'
+    );
+  });
+
+  it('rolls the year over', () => {
+    expect(shiftMonthYears('Tech art services : December 2026', 1)).toBe('Tech art services : January 2027');
+    expect(shiftMonthYears('Retainer Nov 2026', 3)).toBe('Retainer Feb 2027');
+  });
+
+  it('keeps short names, capitals, and punctuation as written', () => {
+    expect(shiftMonthYears('Aug 2026', 1)).toBe('Sep 2026');
+    expect(shiftMonthYears('Sept. 2026', 1)).toBe('Oct. 2026');
+    expect(shiftMonthYears('AUGUST 2026', 1)).toBe('SEPTEMBER 2026');
+    expect(shiftMonthYears('april, 2026', 1)).toBe('may, 2026');
+    expect(shiftMonthYears('May 2026', 1)).toBe('June 2026');
+  });
+
+  it('changes every month in the text', () => {
+    expect(shiftMonthYears('July 2026 and August 2026', 2)).toBe('September 2026 and October 2026');
+  });
+
+  it('leaves text without a month and year alone', () => {
+    expect(shiftMonthYears('We may ship in March', 1)).toBe('We may ship in March');
+    expect(shiftMonthYears('Decimal 2026 rework', 1)).toBe('Decimal 2026 rework');
+    expect(shiftMonthYears('August 2026', 0)).toBe('August 2026');
   });
 });

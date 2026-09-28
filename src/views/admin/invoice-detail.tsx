@@ -143,7 +143,7 @@ export function InvoiceDetailPage({
             </button>
           </form>
           <form method="post" action={`/admin/invoices/${invoice.id}/duplicate`}>
-            <button type="submit" class="btn btn-secondary" title="Copy this invoice into a new draft dated today">
+            <button type="submit" class="btn btn-secondary" title="Copy this invoice into a new draft dated today. Months written in the lines, like August 2026, move forward to match.">
               <Icon name="duplicate" />
               Duplicate
             </button>

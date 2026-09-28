@@ -9,7 +9,7 @@ import {
   parseAmountToCents,
   type ClientRateCurrency,
 } from '../lib/money';
-import { addDaysISO, isValidTimezone, todayInTz } from '../lib/dates';
+import { addDaysISO, isValidTimezone, monthsBetween, shiftMonthYears, todayInTz } from '../lib/dates';
 import { configWarnings, secretConfigured, trustedSenderQuery } from '../lib/config';
 import { accentUsable, safeAccent } from '../lib/color';
 import { effectiveProviderEnv, encryptStoredSecrets, keySource } from '../lib/providers';
@@ -998,16 +998,19 @@ admin.post('/invoices/:id/duplicate', async (c) => {
   ]);
   const today = todayInTz(settings.timezone);
   const terms = client?.payment_terms_days ?? settings.payment_terms_days;
+  // A monthly invoice names its month ("Tech art services : August 2026").
+  // Move those names forward by as many months as the issue date moves.
+  const monthsLater = Math.max(0, monthsBetween(source.issue_date, today));
 
   const newId = await createInvoice(c.env.DB, branchId, {
     client_id: source.client_id,
     issue_date: today,
     due_date: terms > 0 ? addDaysISO(today, terms) : null,
-    subject: source.subject,
+    subject: source.subject ? shiftMonthYears(source.subject, monthsLater) : source.subject,
     notes: source.notes,
     currency: source.currency,
     items: items.map((it) => ({
-      description: it.description,
+      description: shiftMonthYears(it.description, monthsLater),
       quantity: it.quantity,
       unit_price_cents: it.unit_price_cents,
     })),

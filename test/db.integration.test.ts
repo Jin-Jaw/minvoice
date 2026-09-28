@@ -46,6 +46,7 @@ import {
   updateClient,
   type WebhookPayment,
 } from '../src/db/queries';
+import { todayInTz } from '../src/lib/dates';
 import { LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MINUTES, MAX_OUTBOX_ATTEMPTS } from '../src/lib/outbox';
 import { processEmailOutbox } from '../src/services/outbox';
 
@@ -669,6 +670,46 @@ describe('invoice list ordering and row actions', () => {
       `/admin?status=open&client=${invoice.client_id}&paid=${encodeURIComponent(invoice.number)}`
     );
     expect((await getInvoice(DB, id))?.status).toBe('paid');
+  });
+
+  it('moves the month in a duplicated monthly invoice forward to the new issue month', async () => {
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const today = todayInTz((await getSettings(DB, 1)).timezone);
+    const [year, month] = today.split('-').map(Number);
+    const lastMonth = new Date(Date.UTC(year, month - 2, 1));
+    const monthYear = (d: Date) =>
+      new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(d);
+    const clientId = await createClient(DB, {
+      name: 'Monthly client',
+      email: null,
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    });
+    const sourceId = await createInvoice(DB, {
+      client_id: clientId,
+      issue_date: lastMonth.toISOString().slice(0, 10),
+      due_date: null,
+      subject: null,
+      notes: null,
+      items: [{ description: `Tech art services : ${monthYear(lastMonth)} - £2,500`, quantity: 1, unit_price_cents: 250000 }],
+    });
+
+    const response = await exports.default.fetch(
+      new Request(`https://invoice.test/admin/invoices/${sourceId}/duplicate`, {
+        method: 'POST',
+        headers: { 'sec-fetch-site': 'same-origin', cookie: await loginCookie() },
+        redirect: 'manual',
+      })
+    );
+
+    expect(response.status).toBe(302);
+    const newId = Number(response.headers.get('location')?.split('/').pop());
+    expect((await getInvoice(DB, newId))?.issue_date).toBe(today);
+    const [item] = await getInvoiceItems(DB, newId);
+    expect(item.description).toBe(
+      `Tech art services : ${monthYear(new Date(Date.UTC(year, month - 1, 1)))} - £2,500`
+    );
   });
 });
 
