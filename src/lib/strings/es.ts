@@ -65,4 +65,9 @@ export const es: Strings = {
   receiptBody: (amount, number) =>
     `Hemos recibido su pago de ${amount} por la factura ${number}. ¡Gracias!`,
   receiptView: 'Ver la factura pagada o descargar el PDF:',
+
+  voidSubject: (number) => `La factura ${number} ha sido anulada`,
+  voidBody: (number, subject, total) =>
+    `La factura ${number}${subject ? ` — ${subject}` : ''} por ${total} ha sido anulada y ya no debe pagarse.`,
+  voidNothingDue: 'No tiene que pagar esta factura. Si ya la ha pagado, responda a este correo.',
 };

@@ -113,7 +113,13 @@ export function InvoiceDetailPage({
             </form>
           ) : null}
           {invoice.status === 'sent' ? (
-            <form method="post" action={`/admin/invoices/${invoice.id}/status`}>
+            <form
+              method="post"
+              action={`/admin/invoices/${invoice.id}/status`}
+              data-confirm={`Void invoice ${invoice.number}? It can no longer be paid.${
+                emailEnabled && invoice.client_email ? ` ${invoice.client_email} will be emailed that nothing is due.` : ''
+              }`}
+            >
               <input type="hidden" name="action" value="void" />
               <button type="submit" class="btn btn-danger">
                 Void

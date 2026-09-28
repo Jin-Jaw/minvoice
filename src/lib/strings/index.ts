@@ -1,7 +1,7 @@
 /**
  * Customer-facing strings, one typed object per language. The admin UI stays
  * English; this covers everything a CLIENT sees: the public pay page, the
- * print view, the PDF, and the four outbound email templates.
+ * print view, the PDF, and the five outbound email templates.
  *
  * Design notes:
  * - Interpolations are plain functions, so word order is free per language
@@ -80,6 +80,11 @@ export type Strings = {
   receiptSubject: (number: string) => string;
   receiptBody: (amount: string, number: string) => string;
   receiptView: string;
+
+  // Void notice email
+  voidSubject: (number: string) => string;
+  voidBody: (number: string, subject: string | null, total: string) => string;
+  voidNothingDue: string;
 };
 
 import { en } from './en';

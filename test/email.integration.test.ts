@@ -1,7 +1,21 @@
 import { env, exports } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { createClient, createInvoice, getSettings, type InvoiceWithClient } from '../src/db/queries';
-import { sendInvoiceEmail, sendInvoiceEmailToClientAndOwner, sendPaidNotice, sendTestEmail } from '../src/services/email';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  createClient,
+  createInvoice,
+  getInvoice,
+  getInvoiceEvents,
+  getSettings,
+  markInvoiceSent,
+  type InvoiceWithClient,
+} from '../src/db/queries';
+import {
+  sendInvoiceEmail,
+  sendInvoiceEmailToClientAndOwner,
+  sendPaidNotice,
+  sendTestEmail,
+  sendVoidNoticeEmail,
+} from '../src/services/email';
 import { isBoxed, unbox } from '../src/lib/secretbox';
 import { en } from '../src/lib/strings/en';
 import { todayInTz } from '../src/lib/dates';
@@ -239,6 +253,151 @@ describe('email settings guard', () => {
     expect(owner).toBe('owner@example.test');
     expect(sent.map((message) => message.to)).toEqual(['owner@example.test', 'accounts@client.test']);
     expect(sent.every((message) => message.cc === undefined)).toBe(true);
+  });
+});
+
+describe('void notice', () => {
+  const voidInvoice: InvoiceWithClient = {
+    id: 44,
+    branch_id: 1,
+    number: 'INV-0044',
+    client_id: 7,
+    client_name: 'Stored Client',
+    client_email: 'accounts@client.test',
+    client_address: '1 Client Way',
+    client_locale: null,
+    status: 'sent',
+    currency: 'GBP',
+    issue_date: '2026-08-29',
+    due_date: '2026-09-28',
+    subject: null,
+    notes: 'Bank: Example Bank',
+    tax_rate_bps: 0,
+    subtotal_cents: 10000,
+    tax_cents: 0,
+    total_cents: 10000,
+    public_token: 'void-notice-token',
+    paypal_order_id: null,
+    sent_at: '2026-08-29 12:00:00',
+    paid_at: null,
+    created_at: '2026-08-29 12:00:00',
+    updated_at: '2026-08-29 12:00:00',
+  };
+
+  async function loginCookie(): Promise<string> {
+    const response = await exports.default.fetch(
+      new Request('https://invoice.test/admin/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin' },
+        body: 'password=integration-test-password',
+        redirect: 'manual',
+      })
+    );
+    return response.headers.get('set-cookie')?.split(';')[0] ?? '';
+  }
+
+  async function seedSentInvoice(): Promise<number> {
+    const clientId = await createClient(DB, {
+      name: 'Acme',
+      email: 'ap@acme.test',
+      address: null,
+      default_rate_cents: null,
+      payment_terms_days: null,
+    });
+    const id = await createInvoice(DB, {
+      client_id: clientId,
+      issue_date: '2026-08-01',
+      due_date: null,
+      subject: null,
+      notes: null,
+      items: [{ description: 'Work', quantity: 1, unit_price_cents: 10000 }],
+    });
+    await markInvoiceSent(DB, id);
+    return id;
+  }
+
+  async function postVoid(id: number, body: string): Promise<Response> {
+    return exports.default.fetch(
+      new Request(`https://invoice.test/admin/invoices/${id}/status`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'sec-fetch-site': 'same-origin',
+          cookie: await loginCookie(),
+        },
+        body,
+        redirect: 'manual',
+      })
+    );
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('tells the client nothing is due, without attaching the PDF', async () => {
+    const sent: { to?: string; subject?: string; text?: string; html?: string; attachments?: unknown[] }[] = [];
+    const EMAIL = {
+      async send(message: (typeof sent)[number]) {
+        sent.push(message);
+      },
+    } as unknown as SendEmail;
+
+    await sendVoidNoticeEmail({ ...env, EMAIL }, voidInvoice, await getSettings(DB, 1));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].to).toBe('accounts@client.test');
+    expect(sent[0].subject).toBe('Invoice INV-0044 has been voided');
+    expect(sent[0].attachments).toBeUndefined();
+    expect(sent[0].text).toContain('Invoice INV-0044 for £100.00 has been voided and is no longer payable.');
+    expect(sent[0].text).toContain("You don't need to pay this invoice.");
+    expect(sent[0].html).not.toContain('Bank: Example Bank');
+  });
+
+  it('emails the owner then the client, and voids the invoice after both send', async () => {
+    await DB.prepare(`UPDATE settings SET email_provider = 'resend', resend_api_key = 're_test_void_notice' WHERE id = 1`).run();
+    const recipients: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      recipients.push(...(JSON.parse(String(init?.body)).to as string[]));
+      return Response.json({ id: 'email_1' });
+    });
+    const id = await seedSentInvoice();
+
+    const response = await postVoid(id, 'action=void');
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(`/admin/invoices/${id}?void_emailed=${encodeURIComponent('ap@acme.test')}`);
+    expect(recipients).toEqual(['owner@example.test', 'ap@acme.test']);
+    expect((await getInvoice(DB, id))?.status).toBe('void');
+    const events = await getInvoiceEvents(DB, id);
+    expect(events.map((e) => e.type)).toContain('voided');
+    expect(events.find((e) => e.type === 'emailed')?.detail).toBe(
+      'Void notice emailed to ap@acme.test; separate copy sent to owner@example.test'
+    );
+  });
+
+  it('leaves the invoice unvoided when the email fails', async () => {
+    // The test worker has no send_email binding, so the Cloudflare provider throws.
+    const id = await seedSentInvoice();
+
+    const response = await postVoid(id, 'action=void');
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toContain(`/admin/invoices/${id}?email_error=`);
+    expect(decodeURIComponent(response.headers.get('location') ?? '')).toContain('the invoice was not voided');
+    expect((await getInvoice(DB, id))?.status).toBe('sent');
+  });
+
+  it('voids without emailing when email sending is off', async () => {
+    await DB.prepare(`UPDATE settings SET email_provider = 'none' WHERE id = 1`).run();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const id = await seedSentInvoice();
+
+    const response = await postVoid(id, 'action=void');
+
+    expect(response.headers.get('location')).toBe(`/admin/invoices/${id}`);
+    expect((await getInvoice(DB, id))?.status).toBe('void');
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

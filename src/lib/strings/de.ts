@@ -65,4 +65,9 @@ export const de: Strings = {
   receiptBody: (amount, number) =>
     `Wir haben Ihre Zahlung über ${amount} für die Rechnung ${number} erhalten. Vielen Dank!`,
   receiptView: 'Bezahlte Rechnung ansehen oder als PDF herunterladen:',
+
+  voidSubject: (number) => `Rechnung ${number} wurde storniert`,
+  voidBody: (number, subject, total) =>
+    `Die Rechnung ${number}${subject ? ` — ${subject}` : ''} über ${total} wurde storniert und ist nicht mehr zu bezahlen.`,
+  voidNothingDue: 'Sie müssen diese Rechnung nicht bezahlen. Falls Sie sie bereits bezahlt haben, antworten Sie bitte auf diese E-Mail.',
 };

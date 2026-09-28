@@ -97,7 +97,12 @@ import {
 } from '../db/queries';
 import { DashboardPage, INVOICE_FILTERS, type InvoiceFilter } from '../views/admin/dashboard';
 import { generateInvoicePdf } from '../services/pdf';
-import { sendInvoiceEmail, sendInvoiceEmailToClientAndOwner, sendTestEmail } from '../services/email';
+import {
+  sendInvoiceEmail,
+  sendInvoiceEmailToClientAndOwner,
+  sendTestEmail,
+  sendVoidNoticeToClientAndOwner,
+} from '../services/email';
 import {
   asEmailAttachments,
   createLinkToken,
@@ -674,6 +679,7 @@ admin.get('/invoices/:id', async (c) => {
   ]);
   const timeline = buildTimeline(invoice, payments, events, formatCents);
   const emailedTo = c.req.query('emailed');
+  const voidEmailedTo = c.req.query('void_emailed');
   const emailError = c.req.query('email_error');
 
   return c.html(
@@ -692,7 +698,9 @@ admin.get('/invoices/:id', async (c) => {
       notice={
         emailedTo
           ? `Invoice emailed to ${emailedTo}.`
-          : c.req.query('pdf_saved')
+          : voidEmailedTo
+            ? `Invoice voided. ${voidEmailedTo} was emailed that nothing is due.`
+            : c.req.query('pdf_saved')
             ? 'Original invoice PDF archived.'
             : undefined
       }
@@ -917,6 +925,33 @@ admin.post('/invoices/:id/status', async (c) => {
       break;
     case 'void':
       if (invoice.status === 'draft' || invoice.status === 'sent') {
+        // A client who was sent the invoice is always told about the void.
+        // The email goes first; a failure leaves the invoice unvoided for a retry.
+        const settings = await getSettings(c.env.DB, branchId);
+        if (invoice.status === 'sent' && invoice.client_email && settings.email_provider !== 'none') {
+          let ownerCopyAddress: string;
+          try {
+            const logo = await getLogo(c.env.DB, branchId);
+            ownerCopyAddress = await sendVoidNoticeToClientAndOwner(c.env, invoice, settings, !!logo);
+          } catch (e) {
+            console.error('void notice email failed', e);
+            const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
+            return c.redirect(
+              `/admin/invoices/${id}?email_error=${encodeURIComponent(
+                `Email failed to send — the invoice was not voided. (${reason})`
+              )}`
+            );
+          }
+          await setInvoiceStatus(c.env.DB, id, 'void');
+          await logInvoiceEvent(c.env.DB, id, 'voided');
+          await logInvoiceEvent(
+            c.env.DB,
+            id,
+            'emailed',
+            `Void notice emailed to ${invoice.client_email}; separate copy sent to ${ownerCopyAddress}`
+          );
+          return c.redirect(`/admin/invoices/${id}?void_emailed=${encodeURIComponent(invoice.client_email)}`);
+        }
         await setInvoiceStatus(c.env.DB, id, 'void');
         await logInvoiceEvent(c.env.DB, id, 'voided');
       }

@@ -65,4 +65,9 @@ export const fr: Strings = {
   receiptBody: (amount, number) =>
     `Nous avons bien reçu votre paiement de ${amount} pour la facture ${number}. Merci !`,
   receiptView: 'Voir la facture payée ou télécharger le PDF :',
+
+  voidSubject: (number) => `La facture ${number} a été annulée`,
+  voidBody: (number, subject, total) =>
+    `La facture ${number}${subject ? ` — ${subject}` : ''} d'un montant de ${total} a été annulée et n'est plus à régler.`,
+  voidNothingDue: "Vous n'avez pas à régler cette facture. Si vous l'avez déjà payée, veuillez répondre à cet e-mail.",
 };

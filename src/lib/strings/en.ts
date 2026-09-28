@@ -63,4 +63,9 @@ export const en: Strings = {
   receiptBody: (amount, number) =>
     `We received your payment of ${amount} for invoice ${number}. Thank you!`,
   receiptView: 'View the paid invoice or download a PDF:',
+
+  voidSubject: (number) => `Invoice ${number} has been voided`,
+  voidBody: (number, subject, total) =>
+    `Invoice ${number}${subject ? ` — ${subject}` : ''} for ${total} has been voided and is no longer payable.`,
+  voidNothingDue: "You don't need to pay this invoice. If you have already paid it, please reply to this email.",
 };

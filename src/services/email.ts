@@ -85,6 +85,16 @@ async function deliver(env: Bindings, settings: Settings, m: Mail): Promise<void
   });
 }
 
+/**
+ * Email uses the square logo URL when configured; the uploaded full artwork
+ * remains exclusive to PDF/print. A branch without a square URL falls back
+ * to its uploaded artwork, cropped into the rounded 40px email tile.
+ */
+function emailLogoUrl(env: Bindings, settings: Settings, branchId: number, hasLogo?: boolean): string {
+  if (/^https?:\/\//i.test(settings.logo_url ?? '')) return settings.logo_url!;
+  return hasLogo ? `${env.APP_BASE_URL}/logo/${branchId}` : `${env.APP_BASE_URL}/jinjaw-square.png`;
+}
+
 export function toBase64(bytes: Uint8Array): string {
   let bin = '';
   const CHUNK = 0x8000; // avoid call-stack limits on large PDFs
@@ -119,14 +129,7 @@ export async function sendInvoiceEmail(
   const attachmentFilename = invoicePdfFilename(settings.branch_id, invoice.issue_date);
   // No due date -> no due wording at all; don't invent terms like "on receipt".
   const dueDate = invoice.due_date ? formatDateTag(invoice.due_date, tag) : null;
-  // Email uses the square logo URL when configured; the uploaded full artwork
-  // remains exclusive to PDF/print. A branch without a square URL falls back
-  // to its uploaded artwork, cropped into the rounded 40px email tile.
-  const logoUrl = /^https?:\/\//i.test(settings.logo_url ?? '')
-    ? settings.logo_url!
-    : opts?.hasLogo
-      ? `${env.APP_BASE_URL}/logo/${invoice.branch_id}`
-      : `${env.APP_BASE_URL}/jinjaw-square.png`;
+  const logoUrl = emailLogoUrl(env, settings, invoice.branch_id, opts?.hasLogo);
   const footerIdentity = [
     businessName,
     settings.business_email || null,
@@ -234,6 +237,88 @@ export async function sendInvoiceEmailToClientAndOwner(
   const ownerCopyAddress = settings.business_email?.trim() || 'jad@jin-jaw.co.uk';
   await sendInvoiceEmail(env, invoice, settings, pdfBytes, { copyTo: ownerCopyAddress, hasLogo, extraAttachments });
   await sendInvoiceEmail(env, invoice, settings, pdfBytes, { hasLogo, extraAttachments });
+  return ownerCopyAddress;
+}
+
+/**
+ * Tell the client an invoice they were sent is void and nothing is due.
+ * No PDF is attached. Throws on failure; the void route sends this before it
+ * changes the status, so a failed email leaves the invoice as it was.
+ *
+ * `copyTo` reroutes the identical message to that address instead, the same
+ * way as sendInvoiceEmail.
+ */
+export async function sendVoidNoticeEmail(
+  env: Bindings,
+  invoice: InvoiceWithClient,
+  settings: Settings,
+  opts?: { copyTo?: string; hasLogo?: boolean }
+): Promise<void> {
+  const copyTo = opts?.copyTo;
+  if (!copyTo && !invoice.client_email) throw new Error('client has no email address');
+
+  const businessName = settings.business_name || 'Minvoice';
+  const tag = resolveLocale(settings.locale, invoice.client_locale);
+  const t = getStrings(tag);
+  const total = formatCentsTag(invoice.total_cents, invoice.currency, tag);
+  const logoUrl = emailLogoUrl(env, settings, invoice.branch_id, opts?.hasLogo);
+  const footerIdentity = [businessName, settings.business_email || null].filter(Boolean).join(' · ');
+
+  await deliver(env, settings, {
+    to: copyTo ?? invoice.client_email!,
+    fromName: businessName,
+    ...(settings.business_email ? { replyTo: settings.business_email } : {}),
+    subject: t.voidSubject(invoice.number),
+    text: [
+      t.greeting(invoice.client_name),
+      ``,
+      t.voidBody(invoice.number, invoice.subject, total),
+      ``,
+      t.voidNothingDue,
+      ``,
+      t.emailSignoff,
+      businessName,
+    ].join('\n'),
+    html: `
+<div style="max-width: 560px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Arial, sans-serif; color: #1f272b;">
+  <div style="background: #ffffff; border: 1px solid #e4e7e9; border-radius: 8px; padding: 32px 36px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 0 22px;">
+      <tr>
+        <td style="padding-right: 12px;"><img src="${logoUrl}" alt="" width="40" height="40" style="display: block; width: 40px; height: 40px; object-fit: cover; border-radius: 8px;"></td>
+        <td>
+          <div style="font-size: 17px; font-weight: 700;">${escapeHtml(businessName)}</div>
+          <div style="font-size: 13px; color: #5c686e;">${escapeHtml(t.invoice)} ${escapeHtml(invoice.number)} · ${escapeHtml(t.statusVoid)}</div>
+        </td>
+      </tr>
+    </table>
+    <p style="font-size: 15px; line-height: 1.6; margin: 0 0 12px;">${escapeHtml(t.greeting(invoice.client_name))}</p>
+    <p style="font-size: 15px; line-height: 1.6; margin: 0 0 12px;">
+      ${escapeHtml(t.voidBody(invoice.number, invoice.subject, total))}
+    </p>
+    <p style="font-size: 15px; line-height: 1.6; margin: 0 0 22px;">${escapeHtml(t.voidNothingDue)}</p>
+    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 22px;">
+      ${escapeHtml(t.emailSignoff)}<br>
+      <strong>${escapeHtml(businessName)}</strong>
+    </p>
+    <div style="border-top: 1px solid #eef1f2; padding-top: 14px;">
+      <div style="font-size: 12px; color: #8b969c;">${escapeHtml(t.emailReplyHint)}</div>
+      <div style="font-size: 12px; color: #8b969c; margin-top: 3px;">${escapeHtml(footerIdentity)}</div>
+    </div>
+  </div>
+</div>`,
+  });
+}
+
+/** Owner copy first, then the client, for the same reason as the invoice email. */
+export async function sendVoidNoticeToClientAndOwner(
+  env: Bindings,
+  invoice: InvoiceWithClient,
+  settings: Settings,
+  hasLogo?: boolean
+): Promise<string> {
+  const ownerCopyAddress = settings.business_email?.trim() || 'jad@jin-jaw.co.uk';
+  await sendVoidNoticeEmail(env, invoice, settings, { copyTo: ownerCopyAddress, hasLogo });
+  await sendVoidNoticeEmail(env, invoice, settings, { hasLogo });
   return ownerCopyAddress;
 }
 
