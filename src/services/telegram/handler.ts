@@ -28,6 +28,7 @@ import {
   type Branch,
   type Invoice,
 } from '../../db/queries';
+import { adminUrl } from '../../lib/base-url';
 import { addDaysISO, formatDateHuman, todayInTz } from '../../lib/dates';
 import { computeTotals, formatCents, isSupportedCurrency } from '../../lib/money';
 import { EXPENSE_CATEGORIES, MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
@@ -63,7 +64,7 @@ import {
   type UpdateStart,
 } from './repository';
 import { acknowledgeUpdate, logUpdateTiming } from './delivery';
-import { adminUrl, esc, evidenceSource, humanError, sanitizeFilename, sniffMime } from './util';
+import { esc, evidenceSource, humanError, sanitizeFilename, sniffMime } from './util';
 import {
   handleRejectReason,
   handleReviewCallback,

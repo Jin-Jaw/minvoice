@@ -1,3 +1,6 @@
+import type { Branch } from '../db/queries';
+import type { Bindings } from '../env';
+
 /**
  * Public base URL for links in emails, checkout redirects, and PDFs.
  * A configured non-local APP_BASE_URL wins; otherwise fall back to the
@@ -33,4 +36,13 @@ export function resolveBaseUrl(
     return origin; // unparseable configured value
   }
   return trimmed;
+}
+
+/** A link into the admin app for a record of `branch`. Admin pages take the
+ *  workspace from ?workspace= before the browser's cookie, so naming the
+ *  company's workspace opens the record even when the browser last used
+ *  another workspace. Without a branch the link falls back to the cookie. */
+export function adminUrl(env: Pick<Bindings, 'APP_BASE_URL'>, path: string, branch: Pick<Branch, 'workspace_id'> | null): string {
+  const url = `${env.APP_BASE_URL}${path}`;
+  return branch ? `${url}?workspace=${branch.workspace_id}` : url;
 }

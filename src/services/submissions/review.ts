@@ -4,10 +4,11 @@
 
 import type { Bindings } from '../../env';
 import { getBranch, type Branch } from '../../db/queries';
+import { adminUrl } from '../../lib/base-url';
 import { formatCents } from '../../lib/money';
 import { TelegramApi, telegramApi, type InlineKeyboard, type TelegramCallbackQuery } from '../telegram/api';
 import { clearSession, getSession, saveSession, type TelegramConnection } from '../telegram/repository';
-import { adminUrl, esc } from '../telegram/util';
+import { esc } from '../telegram/util';
 import { amountLabel, kindLabel, submissionLines, submissionsMenuKeyboard } from './format';
 import {
   approveSubmission,

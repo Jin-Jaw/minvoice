@@ -3,11 +3,11 @@
 
 import type { Bindings } from '../../env';
 import { getBranch, getInvoiceById, isOverdue, listBranches, listInvoices } from '../../db/queries';
+import { adminUrl } from '../../lib/base-url';
 import { formatCents } from '../../lib/money';
 import { formatDateHuman, todayInTz } from '../../lib/dates';
 import { telegramApi } from './api';
 import type { TelegramConnection } from './repository';
-import { adminUrl } from './util';
 
 function esc(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

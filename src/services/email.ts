@@ -1,5 +1,6 @@
 import type { Bindings } from '../env';
-import { getInvoiceById, getLogo, getSettings, logInvoiceEvent, type InvoiceItem, type InvoiceWithClient, type Settings } from '../db/queries';
+import { getBranch, getInvoiceById, getLogo, getSettings, logInvoiceEvent, type InvoiceItem, type InvoiceWithClient, type Settings } from '../db/queries';
+import { adminUrl } from '../lib/base-url';
 import { computeTotals, formatCents } from '../lib/money';
 import { addDaysISO, todayInTz } from '../lib/dates';
 import { generateInvoicePdf } from './pdf';
@@ -361,6 +362,7 @@ export async function sendPaidNotice(
   const amount = formatCents(info.amountCents, info.currency);
 
   if (settings.business_email) {
+    const invoiceUrl = adminUrl(env, `/admin/invoices/${invoice.id}`, await getBranch(db, invoice.branch_id));
     await deliver(env, settings, {
         to: settings.business_email,
         fromName: 'Minvoice',
@@ -368,13 +370,13 @@ export async function sendPaidNotice(
         text: [
           `${invoice.client_name} paid invoice ${invoice.number}: ${amount} via ${info.provider}.`,
           ``,
-          `Invoice: ${env.APP_BASE_URL}/admin/invoices/${invoice.id}`,
+          `Invoice: ${invoiceUrl}`,
         ].join('\n'),
         html: `
 <div style="font-family: -apple-system, sans-serif; max-width: 560px; margin: 0 auto; color: #1d1a15;">
   <p style="font-size: 16px;">🎉 <strong>${escapeHtml(invoice.client_name)}</strong> paid invoice
     <strong>${escapeHtml(invoice.number)}</strong>: <strong>${amount}</strong> via ${escapeHtml(info.provider)}.</p>
-  <p><a href="${env.APP_BASE_URL}/admin/invoices/${invoice.id}" style="color: ${accent};">Open the invoice</a></p>
+  <p><a href="${invoiceUrl}" style="color: ${accent};">Open the invoice</a></p>
 </div>`,
     });
   }

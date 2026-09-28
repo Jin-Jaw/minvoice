@@ -1,7 +1,7 @@
 import { env, exports } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getSettings, type InvoiceWithClient } from '../src/db/queries';
-import { sendInvoiceEmail, sendInvoiceEmailToClientAndOwner, sendTestEmail } from '../src/services/email';
+import { createClient, createInvoice, getSettings, type InvoiceWithClient } from '../src/db/queries';
+import { sendInvoiceEmail, sendInvoiceEmailToClientAndOwner, sendPaidNotice, sendTestEmail } from '../src/services/email';
 import { isBoxed, unbox } from '../src/lib/secretbox';
 import { en } from '../src/lib/strings/en';
 import { todayInTz } from '../src/lib/dates';
@@ -239,5 +239,40 @@ describe('email settings guard', () => {
     expect(owner).toBe('owner@example.test');
     expect(sent.map((message) => message.to)).toEqual(['owner@example.test', 'accounts@client.test']);
     expect(sent.every((message) => message.cc === undefined)).toBe(true);
+  });
+});
+
+describe('sendPaidNotice', () => {
+  it('links the invoice in the workspace of its company', async () => {
+    const sent: { to?: string; text?: string; html?: string }[] = [];
+    const EMAIL = {
+      async send(message: (typeof sent)[number]) {
+        sent.push(message);
+      },
+    } as unknown as SendEmail;
+    // Company 2 (Property / Flats) is in workspace 2, so the link must not
+    // depend on the workspace the owner's browser last used.
+    await DB.prepare("UPDATE branches SET business_email = 'flats@example.test' WHERE id = 2").run();
+    const clientId = await createClient(
+      DB,
+      { name: 'Flat 3 tenant', email: null, address: null, default_rate_cents: null, payment_terms_days: null },
+      2
+    );
+    const invoiceId = await createInvoice(DB, 2, {
+      client_id: clientId,
+      issue_date: '2026-09-01',
+      due_date: null,
+      subject: null,
+      notes: null,
+      currency: 'GBP',
+      items: [{ description: 'September rent', quantity: 1, unit_price_cents: 120000 }],
+    });
+
+    await sendPaidNotice({ ...env, EMAIL }, DB, invoiceId, { amountCents: 120000, currency: 'GBP', provider: 'Stripe' });
+
+    const link = `https://invoice.test/admin/invoices/${invoiceId}?workspace=2`;
+    expect(sent.map((message) => message.to)).toEqual(['flats@example.test']);
+    expect(sent[0].text).toContain(`Invoice: ${link}`);
+    expect(sent[0].html).toContain(`href="${link}"`);
   });
 });
