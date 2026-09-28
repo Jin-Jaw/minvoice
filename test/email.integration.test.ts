@@ -317,8 +317,12 @@ describe('void notice', () => {
   }
 
   async function postVoid(id: number, body: string): Promise<Response> {
+    return postTo(`/admin/invoices/${id}/status`, body);
+  }
+
+  async function postTo(path: string, body = ''): Promise<Response> {
     return exports.default.fetch(
-      new Request(`https://invoice.test/admin/invoices/${id}/status`, {
+      new Request(`https://invoice.test${path}`, {
         method: 'POST',
         headers: {
           'content-type': 'application/x-www-form-urlencoded',
@@ -385,6 +389,37 @@ describe('void notice', () => {
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toContain(`/admin/invoices/${id}?email_error=`);
     expect(decodeURIComponent(response.headers.get('location') ?? '')).toContain('the invoice was not voided');
+    expect((await getInvoice(DB, id))?.status).toBe('sent');
+  });
+
+  it('resends the void notice for an invoice that is already void', async () => {
+    await DB.prepare(`UPDATE settings SET email_provider = 'resend', resend_api_key = 're_test_void_notice' WHERE id = 1`).run();
+    const recipients: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      recipients.push(...(JSON.parse(String(init?.body)).to as string[]));
+      return Response.json({ id: 'email_1' });
+    });
+    const id = await seedSentInvoice();
+    await DB.prepare(`UPDATE invoices SET status = 'void' WHERE id = ?`).bind(id).run();
+
+    const response = await postTo(`/admin/invoices/${id}/void-notice`);
+
+    expect(response.headers.get('location')).toBe(`/admin/invoices/${id}?void_emailed=${encodeURIComponent('ap@acme.test')}`);
+    expect(recipients).toEqual(['owner@example.test', 'ap@acme.test']);
+    expect((await getInvoice(DB, id))?.status).toBe('void');
+    expect((await getInvoiceEvents(DB, id)).at(-1)?.detail).toBe(
+      'Void notice emailed to ap@acme.test; separate copy sent to owner@example.test'
+    );
+  });
+
+  it('does not send a void notice for an invoice that is not void', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const id = await seedSentInvoice();
+
+    const response = await postTo(`/admin/invoices/${id}/void-notice`);
+
+    expect(response.headers.get('location')).toBe(`/admin/invoices/${id}`);
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect((await getInvoice(DB, id))?.status).toBe('sent');
   });
 

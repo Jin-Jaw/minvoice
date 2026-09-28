@@ -699,7 +699,7 @@ admin.get('/invoices/:id', async (c) => {
         emailedTo
           ? `Invoice emailed to ${emailedTo}.`
           : voidEmailedTo
-            ? `Invoice voided. ${voidEmailedTo} was emailed that nothing is due.`
+            ? `Void notice emailed to ${voidEmailedTo}.`
             : c.req.query('pdf_saved')
             ? 'Original invoice PDF archived.'
             : undefined
@@ -1081,6 +1081,38 @@ admin.post('/invoices/:id/email-copy', async (c) => {
   }
   await logInvoiceEvent(c.env.DB, id, 'emailed', `Copy emailed to ${to}`);
   return c.redirect(`/admin/invoices/${id}?emailed=${encodeURIComponent(to)}`);
+});
+
+// Send the void notice again, or for the first time on an invoice voided
+// before void notices existed. The status does not change.
+admin.post('/invoices/:id/void-notice', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.notFound();
+
+  const invoice = await getInvoiceById(c.env.DB, id);
+  if (!invoice) return c.notFound();
+  if (invoice.status !== 'void') return c.redirect(`/admin/invoices/${id}`);
+  if (!invoice.client_email) {
+    return c.redirect(`/admin/invoices/${id}?email_error=${encodeURIComponent('Client has no email address.')}`);
+  }
+  const branchId = invoice.branch_id;
+
+  let ownerCopyAddress: string;
+  try {
+    const [settings, logo] = await Promise.all([getSettings(c.env.DB, branchId), getLogo(c.env.DB, branchId)]);
+    ownerCopyAddress = await sendVoidNoticeToClientAndOwner(c.env, invoice, settings, !!logo);
+  } catch (e) {
+    console.error('void notice email failed', e);
+    const reason = e instanceof Error ? e.message.slice(0, 160) : 'unknown error';
+    return c.redirect(`/admin/invoices/${id}?email_error=${encodeURIComponent(`Email failed to send — ${reason}`)}`);
+  }
+  await logInvoiceEvent(
+    c.env.DB,
+    id,
+    'emailed',
+    `Void notice emailed to ${invoice.client_email}; separate copy sent to ${ownerCopyAddress}`
+  );
+  return c.redirect(`/admin/invoices/${id}?void_emailed=${encodeURIComponent(invoice.client_email)}`);
 });
 
 // Regenerate the invoice PDF from current data and archive it, replacing any

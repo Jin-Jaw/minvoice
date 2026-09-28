@@ -126,6 +126,18 @@ export function InvoiceDetailPage({
               </button>
             </form>
           ) : null}
+          {emailEnabled && invoice.status === 'void' && invoice.client_email ? (
+            <form
+              method="post"
+              action={`/admin/invoices/${invoice.id}/void-notice`}
+              data-confirm={`Email ${invoice.client_email} that invoice ${invoice.number} is void and nothing is due?`}
+            >
+              <button type="submit" class="btn btn-secondary">
+                <Icon name="send" />
+                Email void notice
+              </button>
+            </form>
+          ) : null}
           <form
             method="post"
             action={`/admin/invoices/${invoice.id}/status`}
