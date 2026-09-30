@@ -217,6 +217,7 @@ commands are not replayed.
 | `/invoices`, `/drafts`, `/unpaid`, `/overdue` | Up to 10 invoices; each offers View, PDF, Attach files, Send, Mark paid (today, yesterday or a typed date). Send emails a private copy with the attachments to the company's business email, then the client. When the company has no business email, the copy goes to `jad@jin-jaw.co.uk`, hardcoded in `src/services/email.ts`. |
 | `/uploadinvoice`, `/expense` | A PDF (text extraction) or a receipt photo (OCR) → confirm or change amount, date, category, client and paying company → saved as an expense with the file as evidence. PDFs are filed under the company they were billed to. |
 | `/income` | Property / Flats only: money received without an invoice (`income_entries`), counted as "received" in reports. |
+| `/newclient` | Asks for a name and an optional email, then adds the client to the active company. The Property / Flats menu has the same action as "Add client". A client with the same name in the workspace is reused. The expense Client picker has a "New client" button that runs the same steps and returns to the expense. |
 | `/workspace`, `/workspaces` | Switch the company the bot acts for. |
 | `/pending` | Staff requests waiting for approval, oldest first. Tap one to see it again with its invoice and the Approve and Reject buttons (see Staff submissions bot). |
 | `/submitters` | Everyone who asked to use the staff bot, with Allow, Deny and Remove buttons. |

@@ -118,6 +118,8 @@ type ExpenseState = {
   /** targetBranchId came from the invoice's billed-to text. */
   branchDetected?: boolean;
   clientId?: number | null;
+  /** Name typed for a client being added from the Client picker. */
+  newClientName?: string;
 };
 
 const MAX_ATTACHMENT_BYTES = 1024 * 1024;
@@ -128,6 +130,7 @@ const HELP = [
   '',
   '/newinvoice — create a draft',
   '/uploadinvoice — upload a supplier invoice or receipt photo',
+  '/newclient — add a client',
   '/invoices — recent invoices',
   '/drafts — draft invoices',
   '/unpaid — sent and unpaid',
@@ -143,6 +146,7 @@ const EXPENSE_HELP = [
   '',
   '/uploadinvoice — upload a supplier invoice PDF or receipt photo',
   '/income — add income received from a client',
+  '/newclient — add a client or tenant',
   '/workspace — switch company/workspace',
   '/pending — staff requests waiting for approval',
   '/submitters — who can use the staff bot',
@@ -249,6 +253,7 @@ async function handleClaimedUpdate(
         return startExpenseInvoiceUpload(env, api, branchId, userId, chatId);
       }
       if (command === '/income') return startAddIncome(env, api, branchId, userId, chatId);
+      if (command === '/newclient') return startAddClient(env, api, branchId, userId, chatId);
       if (command === '/pending') return showPendingSubmissions(env, api, chatId);
       if (command === '/submitters') return showSubmitters(env, api, chatId);
       if (command === '/workspace' || command === '/workspaces') {
@@ -267,9 +272,9 @@ async function handleClaimedUpdate(
       await handleRejectReason(env, api, connection, chatId, JSON.parse(session.data_json), text);
       return;
     }
-    if (session?.flow === 'create_invoice' && session.step.startsWith('new_client')) {
-      const state = JSON.parse(session.data_json) as NewClientState;
-      await continueNewInvoiceClient(env, api, session.branch_id, userId, chatId, session.step, state, text);
+    if (session && isClientEntryFlow(session.flow) && session.step.startsWith('new_client')) {
+      const state = JSON.parse(session.data_json) as ClientEntryState;
+      await continueNewClient(env, api, session.branch_id, userId, chatId, session.flow, session.step, state, text);
       return;
     }
     if (session?.flow === 'mark_paid') {
@@ -304,7 +309,10 @@ function homeKeyboard(expenseOnly = false): InlineKeyboard {
     return [
       [{ text: '📥 Upload expense invoice', callback_data: 'expenseupload' }],
       [{ text: '💷 Add income from client', callback_data: 'income' }],
-      [{ text: 'Switch workspace', callback_data: 'workspaces' }],
+      [
+        { text: '👤 Add client', callback_data: 'addclient' },
+        { text: 'Switch workspace', callback_data: 'workspaces' },
+      ],
     ];
   }
   return [
@@ -422,6 +430,7 @@ async function handleCallback(
   if (data === 'expenseupload') return startExpenseInvoiceUpload(env, api, branchId, userId, chatId);
   if (data === 'income') return startAddIncome(env, api, branchId, userId, chatId);
   if (data === 'incomenew') return beginNewIncomeClient(env, api, branchId, userId, chatId);
+  if (data === 'addclient') return startAddClient(env, api, branchId, userId, chatId);
   if (data === 'workspaces') return showWorkspaceList(env, api, branchId, chatId);
   if (data === 'cancel') {
     const session = await getSession(env.DB, userId);
@@ -456,6 +465,10 @@ async function handleCallback(
   if (data === 'expback') {
     const { state } = await loadExpenseSession(env, branchId, userId);
     return showExpenseReview(env, api, branchId, userId, chatId, state);
+  }
+  if (data === 'expnewclient') {
+    const { state } = await loadExpenseSession(env, branchId, userId);
+    return askNewClientName(env, api, branchId, userId, chatId, 'expense_invoice', state);
   }
   // Pickers whose value may be 0 ("today", "no client"), so they skip the id check below.
   const picked = data.match(/^(expday|expcat|expclient|expcompany):(\d{1,9})$/);
@@ -630,6 +643,135 @@ async function markPaidOnTypedDate(
   await markInvoicePaid(env, api, chatId, invoice, date === today ? undefined : date);
 }
 
+// ---------- New client ----------
+
+/** Flows that can stop to add a client. The typed name waits in `newClientName` beside the flow's own state. */
+const CLIENT_ENTRY_FLOWS = ['create_invoice', 'add_client', 'expense_invoice'] as const;
+type ClientEntryFlow = (typeof CLIENT_ENTRY_FLOWS)[number];
+type ClientEntryState = { newClientName?: string };
+
+function isClientEntryFlow(flow: string): flow is ClientEntryFlow {
+  return (CLIENT_ENTRY_FLOWS as readonly string[]).includes(flow);
+}
+
+/** A client added from an expense returns to that expense; the other flows cancel. */
+function clientEntryExitRow(flow: ClientEntryFlow): InlineKeyboard[number] {
+  return flow === 'expense_invoice'
+    ? [{ text: 'Back', callback_data: 'expback' }]
+    : [{ text: 'Cancel', callback_data: 'cancel' }];
+}
+
+async function startAddClient(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
+  await askNewClientName(env, api, branchId, userId, chatId, 'add_client', {});
+}
+
+async function askNewClientName(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  flow: ClientEntryFlow,
+  state: ClientEntryState
+): Promise<void> {
+  await saveSession(env.DB, userId, branchId, flow, 'new_client_name', state);
+  await api.sendMessage(chatId, '<b>New client</b>\n\nSend the client’s name (company or person).', [clientEntryExitRow(flow)]);
+}
+
+async function continueNewClient(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  flow: ClientEntryFlow,
+  step: string,
+  state: ClientEntryState,
+  text: string
+): Promise<void> {
+  if (step === 'new_client_name') {
+    const name = text.replace(/\s+/g, ' ').trim();
+    if (name.length < 2 || name.length > 120) throw new Error('Client name must be between 2 and 120 characters.');
+    state.newClientName = name;
+    await saveSession(env.DB, userId, branchId, flow, 'new_client_email', state);
+    const purpose = flow === 'create_invoice' ? ' Invoices are sent there.' : '';
+    await api.sendMessage(chatId, `Email address for <b>${esc(name)}</b>?${purpose}`, [
+      [{ text: 'Skip — add later', callback_data: 'newclientskip' }],
+      clientEntryExitRow(flow),
+    ]);
+    return;
+  }
+  const email = text.trim();
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('That doesn’t look like an email address. Send it again, or tap Skip.');
+  }
+  await saveNewClient(env, api, branchId, userId, chatId, flow, state, email);
+}
+
+async function skipNewClientEmail(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
+  const session = await getSession(env.DB, userId);
+  if (!session || session.branch_id !== branchId || session.step !== 'new_client_email' || !isClientEntryFlow(session.flow)) {
+    throw new Error('That client entry expired. Please start again.');
+  }
+  const state = JSON.parse(session.data_json) as ClientEntryState;
+  await saveNewClient(env, api, branchId, userId, chatId, session.flow, state, null);
+}
+
+/** Reuses a same-named client in the workspace rather than creating a duplicate. */
+async function saveNewClient(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  flow: ClientEntryFlow,
+  state: ClientEntryState,
+  email: string | null
+): Promise<void> {
+  const name = state.newClientName;
+  // An expense's clients belong to the company that paid it, which may not be the active one.
+  const clientBranchId = flow === 'expense_invoice' ? ((state as ExpenseState).targetBranchId ?? branchId) : branchId;
+  const branch = await getBranch(env.DB, clientBranchId);
+  if (!branch || !name) throw new Error('That client entry expired. Please start again.');
+  const existing = (await listClients(env.DB, false, branch.workspace_id)).find(
+    (client) => client.name.localeCompare(name, undefined, { sensitivity: 'accent' }) === 0
+  );
+  const clientId =
+    existing?.id ??
+    (await createClient(
+      env.DB,
+      { name, email, address: null, default_rate_cents: null, payment_terms_days: null },
+      branch.workspace_id
+    ));
+  await linkClientToBranch(env.DB, clientId, branch.id);
+  delete state.newClientName;
+
+  if (flow === 'add_client') {
+    await clearSession(env.DB, userId);
+    await api.sendMessage(
+      chatId,
+      existing
+        ? `<b>${esc(name)}</b> is already a client of <b>${esc(branch.name)}</b>.`
+        : `✅ Client <b>${esc(name)}</b> added to <b>${esc(branch.name)}</b>.`,
+      [
+        [{ text: 'View client', url: adminUrl(env, `/admin/clients/${clientId}`, branch) }],
+        ...homeKeyboard(branch.invoicing_enabled === 0),
+      ]
+    );
+    console.log(JSON.stringify({ event: 'telegram_client_added', branchId: branch.id, clientId, reused: !!existing, userId }));
+    return;
+  }
+  if (!existing) await api.sendMessage(chatId, `✅ Client <b>${esc(name)}</b> added.`);
+  if (flow === 'expense_invoice') {
+    const expense = state as ExpenseState;
+    expense.clientId = clientId;
+    await showExpenseReview(env, api, branchId, userId, chatId, expense);
+    return;
+  }
+  await saveSession(env.DB, userId, branchId, 'create_invoice', 'client', {});
+  await selectClient(env, api, branchId, userId, chatId, clientId);
+}
+
 // ---------- New invoice ----------
 
 const QUICK_CURRENCIES = ['GBP', 'EUR', 'USD'];
@@ -648,73 +790,8 @@ async function startNewInvoice(env: Bindings, api: TelegramApi, branchId: number
   ]);
 }
 
-type NewClientState = { name?: string };
-
 async function beginNewInvoiceClient(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
-  await saveSession(env.DB, userId, branchId, 'create_invoice', 'new_client_name', {});
-  await api.sendMessage(chatId, '<b>New client</b>\n\nSend the client’s name (company or person).', [
-    [{ text: 'Cancel', callback_data: 'cancel' }],
-  ]);
-}
-
-async function continueNewInvoiceClient(
-  env: Bindings,
-  api: TelegramApi,
-  branchId: number,
-  userId: string,
-  chatId: string,
-  step: string,
-  state: NewClientState,
-  text: string
-): Promise<void> {
-  if (step === 'new_client_name') {
-    const name = text.replace(/\s+/g, ' ').trim();
-    if (name.length < 2 || name.length > 120) throw new Error('Client name must be between 2 and 120 characters.');
-    await saveSession(env.DB, userId, branchId, 'create_invoice', 'new_client_email', { name });
-    await api.sendMessage(chatId, `Email address for <b>${esc(name)}</b>? Invoices are sent there.`, [
-      [{ text: 'Skip — add later', callback_data: 'newclientskip' }],
-      [{ text: 'Cancel', callback_data: 'cancel' }],
-    ]);
-    return;
-  }
-  const email = text.trim();
-  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error('That doesn’t look like an email address. Send it again, or tap Skip.');
-  }
-  await createNewInvoiceClient(env, api, branchId, userId, chatId, state, email);
-}
-
-async function skipNewClientEmail(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
-  const { state } = await loadDraft(env, branchId, userId, ['new_client_email']);
-  await createNewInvoiceClient(env, api, branchId, userId, chatId, state as unknown as NewClientState, null);
-}
-
-/** Reuses a same-named client in the workspace rather than creating a duplicate. */
-async function createNewInvoiceClient(
-  env: Bindings,
-  api: TelegramApi,
-  branchId: number,
-  userId: string,
-  chatId: string,
-  state: NewClientState,
-  email: string | null
-): Promise<void> {
-  const branch = await getBranch(env.DB, branchId);
-  if (!branch || !state.name) throw new Error('That draft expired. Start again with /newinvoice.');
-  const existing = (await listClients(env.DB, false, branch.workspace_id)).find(
-    (client) => client.name.localeCompare(state.name!, undefined, { sensitivity: 'accent' }) === 0
-  );
-  const clientId =
-    existing?.id ??
-    (await createClient(
-      env.DB,
-      { name: state.name, email, address: null, default_rate_cents: null, payment_terms_days: null },
-      branch.workspace_id
-    ));
-  await linkClientToBranch(env.DB, clientId, branchId);
-  await saveSession(env.DB, userId, branchId, 'create_invoice', 'client', {});
-  if (!existing) await api.sendMessage(chatId, `✅ Client <b>${esc(state.name)}</b> added.`);
-  await selectClient(env, api, branchId, userId, chatId, clientId);
+  await askNewClientName(env, api, branchId, userId, chatId, 'create_invoice', {});
 }
 
 async function loadDraft(env: Bindings, branchId: number, userId: string, steps?: string[]) {
@@ -1619,6 +1696,7 @@ async function editExpenseField(
         ...clients.map((client) => [
           { text: `${client.id === state.clientId ? '✓ ' : ''}${client.name}`.slice(0, 60), callback_data: `expclient:${client.id}` },
         ]),
+        [{ text: '➕ New client', callback_data: 'expnewclient' }],
         [{ text: 'No client', callback_data: 'expclient:0' }],
         [{ text: 'Back', callback_data: 'expback' }],
       ]

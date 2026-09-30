@@ -257,6 +257,54 @@ describe('Telegram invoice extras', () => {
   });
 });
 
+describe('Telegram new client', () => {
+  it('adds a client to Property / Flats from the menu and reuses a same-named one', async () => {
+    await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
+    await text('/help');
+    expect(buttons().map((b) => b.callback_data)).toContain('addclient');
+    await tap('addclient');
+    await text('Flat 2 tenant');
+    expect(lastMessage()).not.toContain('Invoices are sent there');
+    await tap('newclientskip');
+    expect(lastMessage()).toContain('Client <b>Flat 2 tenant</b> added to');
+
+    const client = await DB.prepare('SELECT * FROM clients WHERE name = ?')
+      .bind('Flat 2 tenant')
+      .first<{ id: number; email: string | null; workspace_id: number }>();
+    expect(client).toMatchObject({ email: null, workspace_id: 2 });
+    const link = await DB.prepare('SELECT branch_id FROM client_branches WHERE client_id = ?').bind(client!.id).first();
+    expect(link).toEqual({ branch_id: 2 });
+    expect(linkTo('View client')).toBe(`https://invoice.test/admin/clients/${client!.id}?workspace=2`);
+
+    await text('/newclient');
+    await text('flat 2 TENANT');
+    await text('tenant@flat.test');
+    expect(lastMessage()).toContain('is already a client of');
+    const count = await DB.prepare('SELECT COUNT(*) AS n FROM clients WHERE workspace_id = 2').first<{ n: number }>();
+    expect(count?.n).toBe(1);
+  });
+
+  it('adds a client from the expense Client picker and saves the expense against it', async () => {
+    await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
+    aiAnswer = { total: 45, currency: 'GBP', supplier: 'Plumb Fix', date: '2026-09-18', category: 'Other' };
+    await text('/uploadinvoice');
+    await photo();
+    await tap('expedit:client');
+    await tap('expnewclient');
+    await text('Flat 4 tenant');
+    await text('flat4@tenant.test');
+    expect(lastMessage()).toContain('Client: Flat 4 tenant');
+    await tap('expenseconfirm:1');
+
+    const client = await DB.prepare('SELECT id, workspace_id FROM clients WHERE name = ?')
+      .bind('Flat 4 tenant')
+      .first<{ id: number; workspace_id: number }>();
+    expect(client?.workspace_id).toBe(2);
+    const expense = await DB.prepare('SELECT branch_id, client_id FROM expenses ORDER BY id DESC LIMIT 1').first();
+    expect(expense).toEqual({ branch_id: 2, client_id: client!.id });
+  });
+});
+
 describe('Telegram receipt photos', () => {
   it('reads the total, allows edits, and saves to the chosen company with the photo as evidence', async () => {
     aiAnswer = { total: 22.96, currency: 'GBP', tax: 3.83, supplier: 'Corner Hardware', date: '2026-09-18', category: 'Other' };
