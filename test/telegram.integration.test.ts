@@ -305,6 +305,55 @@ describe('Telegram new client', () => {
   });
 });
 
+describe('Telegram income invoice', () => {
+  it('attaches an invoice sent at the amount step and saves it with the income', async () => {
+    await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
+    await text('/income');
+    await text('Flat 3 tenant');
+    expect(lastMessage()).toContain('send the invoice as a PDF or photo');
+    await photo();
+    expect(lastMessage()).toContain('attached. It will be saved with this income.');
+    await text('1200');
+    await text('today');
+    await text('none');
+    expect(lastMessage()).toMatch(/Invoice: income-invoice-\d+\.jpg/);
+    await tap('incomeconfirm:1');
+    expect(lastMessage()).toContain('Income saved');
+
+    const income = await DB.prepare('SELECT id, amount_cents FROM income_entries ORDER BY id DESC LIMIT 1').first<{
+      id: number;
+      amount_cents: number;
+    }>();
+    expect(income?.amount_cents).toBe(120000);
+    const evidence = await DB.prepare('SELECT mime, size_bytes FROM income_attachments WHERE income_id = ?')
+      .bind(income!.id)
+      .first();
+    expect(evidence).toEqual({ mime: 'image/jpeg', size_bytes: JPEG.length });
+    const staged = await DB.prepare('SELECT COUNT(*) AS n FROM expense_invoice_imports').first<{ n: number }>();
+    expect(staged?.n).toBe(0);
+  });
+
+  it('attaches from the confirm screen, and Cancel drops the staged file', async () => {
+    await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
+    await text('/income');
+    await text('Flat 5 tenant');
+    await text('950');
+    await text('today');
+    await text('none');
+    expect(lastMessage()).toContain('Invoice: None');
+    await tap('incomefile');
+    await photo();
+    expect(lastMessage()).toContain('Invoice: income-invoice-');
+    expect(buttons().map((b) => b.text)).toContain('📎 Replace invoice');
+    await tap('cancel');
+
+    const staged = await DB.prepare('SELECT COUNT(*) AS n FROM expense_invoice_imports').first<{ n: number }>();
+    expect(staged?.n).toBe(0);
+    const saved = await DB.prepare('SELECT COUNT(*) AS n FROM income_entries').first<{ n: number }>();
+    expect(saved?.n).toBe(0);
+  });
+});
+
 describe('Telegram receipt photos', () => {
   it('reads the total, allows edits, and saves to the chosen company with the photo as evidence', async () => {
     aiAnswer = { total: 22.96, currency: 'GBP', tax: 3.83, supplier: 'Corner Hardware', date: '2026-09-18', category: 'Other' };

@@ -1478,8 +1478,8 @@ export type IncomeDraft = {
   reference: string | null;
 };
 
-export async function createIncome(db: D1Database, income: IncomeDraft): Promise<number> {
-  const result = await db
+function insertIncome(db: D1Database, income: IncomeDraft): D1PreparedStatement {
+  return db
     .prepare(
       `INSERT INTO income_entries
      (branch_id, client_id, payer, income_date, amount_cents, currency, reference)
@@ -1493,9 +1493,45 @@ export async function createIncome(db: D1Database, income: IncomeDraft): Promise
       income.amount_cents,
       income.currency,
       income.reference
-    )
-    .run();
+    );
+}
+
+export async function createIncome(db: D1Database, income: IncomeDraft): Promise<number> {
+  const result = await insertIncome(db, income).run();
   return result.meta.last_row_id;
+}
+
+/**
+ * Writes the income and moves its staged invoice file (an
+ * expense_invoice_imports row) to income_attachments in one D1 batch, the same
+ * way createExpenseFromInvoiceImport does. Returns null when the staged file
+ * expired or a double-submit already used it.
+ */
+export async function createIncomeFromImport(db: D1Database, token: string, income: IncomeDraft): Promise<number | null> {
+  const [created, attached, consumed] = await db.batch([
+    insertIncome(db, income),
+    db.prepare(
+      `INSERT INTO income_attachments (income_id, bytes, mime, filename, size_bytes, sha256)
+       SELECT last_insert_rowid(), bytes, mime, filename, size_bytes, sha256
+       FROM expense_invoice_imports
+       WHERE token = ? AND expires_at > datetime('now')`
+    ).bind(token),
+    db.prepare("DELETE FROM expense_invoice_imports WHERE token = ? AND expires_at > datetime('now')").bind(token),
+  ]);
+
+  const incomeId = created.meta.last_row_id;
+  if (
+    (created.meta.changes ?? 0) === 1 &&
+    (attached.meta.changes ?? 0) === 1 &&
+    (consumed.meta.changes ?? 0) === 1 &&
+    incomeId > 0
+  ) return incomeId;
+
+  // Remove an entry that never got its file so it is not counted twice.
+  if ((created.meta.changes ?? 0) === 1 && incomeId > 0) {
+    await db.prepare('DELETE FROM income_entries WHERE id = ?').bind(incomeId).run();
+  }
+  return null;
 }
 
 // ---------- Reports ----------

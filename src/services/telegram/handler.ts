@@ -6,6 +6,7 @@ import {
   createClient,
   createExpenseFromInvoiceImport,
   createIncome,
+  createIncomeFromImport,
   createInvoice,
   deleteExpenseInvoiceImport,
   getBranch,
@@ -107,6 +108,9 @@ type IncomeState = {
   amountCents?: number;
   incomeDate?: string;
   reference?: string | null;
+  /** Staged invoice file (an expense_invoice_imports token), saved with the income. */
+  fileToken?: string;
+  fileName?: string;
 };
 
 type ExpenseState = {
@@ -430,14 +434,22 @@ async function handleCallback(
   if (data === 'expenseupload') return startExpenseInvoiceUpload(env, api, branchId, userId, chatId);
   if (data === 'income') return startAddIncome(env, api, branchId, userId, chatId);
   if (data === 'incomenew') return beginNewIncomeClient(env, api, branchId, userId, chatId);
+  if (data === 'incomefile') return askIncomeFile(env, api, branchId, userId, chatId);
+  if (data === 'incomeback') {
+    const state = await loadIncomeSession(env, branchId, userId, ['file']);
+    return showIncomeReview(env, api, branchId, userId, chatId, state);
+  }
   if (data === 'addclient') return startAddClient(env, api, branchId, userId, chatId);
   if (data === 'workspaces') return showWorkspaceList(env, api, branchId, chatId);
   if (data === 'cancel') {
     const session = await getSession(env.DB, userId);
-    if (session?.flow === 'expense_invoice') {
-      const token = (JSON.parse(session.data_json) as ExpenseState).token;
-      if (token) await deleteExpenseInvoiceImport(env.DB, token);
-    }
+    const staged =
+      session?.flow === 'expense_invoice'
+        ? (JSON.parse(session.data_json) as ExpenseState).token
+        : session?.flow === 'add_income'
+          ? (JSON.parse(session.data_json) as IncomeState).fileToken
+          : undefined;
+    if (staged) await deleteExpenseInvoiceImport(env.DB, staged);
     await clearSession(env.DB, userId);
     await api.sendMessage(chatId, 'Cancelled.', homeKeyboard(activeBranch?.invoicing_enabled === 0));
     return;
@@ -1386,7 +1398,7 @@ async function askIncomeAmount(
     chatId,
     `Amount received from <b>${esc(state.clientName)}</b>?\n\nSend an amount in ${esc(
       settings.currency
-    )}, or include another currency such as <b>1200 EUR</b>.`
+    )}, or include another currency such as <b>1200 EUR</b>.\n\n📎 You can also send the invoice as a PDF or photo.`
   );
 }
 
@@ -1430,30 +1442,96 @@ async function continueAddIncome(
   }
   if (step === 'reference') {
     state.reference = text.toLowerCase() === 'none' ? null : text.slice(0, 300);
-    await saveSession(env.DB, userId, branchId, 'add_income', 'confirm', state);
-    await api.sendMessage(
-      chatId,
-      [
-        '<b>Confirm income</b>',
-        '',
-        `From: ${esc(state.clientName)}`,
-        `Amount: ${esc(formatCents(state.amountCents!, state.currency!))}`,
-        `Date: ${esc(state.incomeDate!)}`,
-        `Reference: ${esc(state.reference ?? 'None')}`,
-      ].join('\n'),
-      [[{ text: 'Save income', callback_data: 'incomeconfirm:1' }], [{ text: 'Cancel', callback_data: 'cancel' }]]
-    );
+    await showIncomeReview(env, api, branchId, userId, chatId, state);
+    return;
   }
+  if (step === 'file') throw new Error('Send the invoice as a PDF or photo, or tap Back.');
+}
+
+async function loadIncomeSession(env: Bindings, branchId: number, userId: string, steps: string[]): Promise<IncomeState> {
+  const session = await getSession(env.DB, userId);
+  if (!session || session.branch_id !== branchId || session.flow !== 'add_income' || !steps.includes(session.step)) {
+    throw new Error('That income entry expired. Start again with /income.');
+  }
+  return JSON.parse(session.data_json) as IncomeState;
+}
+
+async function showIncomeReview(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  state: IncomeState
+): Promise<void> {
+  await saveSession(env.DB, userId, branchId, 'add_income', 'confirm', state);
+  await api.sendMessage(
+    chatId,
+    [
+      '<b>Confirm income</b>',
+      '',
+      `From: ${esc(state.clientName)}`,
+      `Amount: ${esc(formatCents(state.amountCents!, state.currency!))}`,
+      `Date: ${esc(state.incomeDate!)}`,
+      `Reference: ${esc(state.reference ?? 'None')}`,
+      `Invoice: ${esc(state.fileName ?? 'None')}`,
+    ].join('\n'),
+    [
+      [{ text: 'Save income', callback_data: 'incomeconfirm:1' }],
+      [{ text: state.fileToken ? '📎 Replace invoice' : '📎 Attach invoice', callback_data: 'incomefile' }],
+      [{ text: 'Cancel', callback_data: 'cancel' }],
+    ]
+  );
+}
+
+async function askIncomeFile(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
+  const state = await loadIncomeSession(env, branchId, userId, ['confirm']);
+  await saveSession(env.DB, userId, branchId, 'add_income', 'file', state);
+  await api.sendMessage(chatId, 'Send the invoice as a PDF or photo (maximum 1.5 MB).', [
+    [{ text: 'Back', callback_data: 'incomeback' }],
+  ]);
+}
+
+/** A file sent once the payer is chosen becomes the income's invoice; another one replaces it. */
+async function attachIncomeFile(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  step: string,
+  state: IncomeState,
+  message: TelegramMessage
+): Promise<void> {
+  if (step === 'client' || step === 'new_client') throw new Error('Choose who paid first, then send the invoice.');
+  const source = evidenceSource(message);
+  if ((source.size ?? 0) > MAX_EXPENSE_ATTACHMENT_BYTES) throw new Error('That file is larger than the 1.5 MB limit.');
+  const bytes = await api.downloadFile(source.fileId, MAX_EXPENSE_ATTACHMENT_BYTES);
+  const mime = sniffMime(bytes);
+  if (!mime || (mime === 'application/pdf') !== (source.declaredMime === 'application/pdf')) {
+    throw new Error('The file contents are not a valid PDF, JPG, PNG or WebP.');
+  }
+  const token = newExpenseImportToken();
+  const filename = sanitizeFilename(source.name ?? `income-invoice-${message.message_id}`, mime);
+  await storeExpenseInvoiceImport(env.DB, token, {
+    bytes,
+    mime,
+    filename,
+    size_bytes: bytes.byteLength,
+    sha256: await sha256Hex(bytes),
+  });
+  if (state.fileToken) await deleteExpenseInvoiceImport(env.DB, state.fileToken);
+  state.fileToken = token;
+  state.fileName = filename;
+  if (step === 'file' || step === 'confirm') return showIncomeReview(env, api, branchId, userId, chatId, state);
+  await saveSession(env.DB, userId, branchId, 'add_income', step, state);
+  await api.sendMessage(chatId, `📎 <b>${esc(filename)}</b> attached. It will be saved with this income.`);
 }
 
 async function confirmIncome(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {
-  const session = await getSession(env.DB, userId);
-  if (!session || session.branch_id !== branchId || session.flow !== 'add_income' || session.step !== 'confirm') {
-    throw new Error('That income entry expired. Start again with /income.');
-  }
+  const state = await loadIncomeSession(env, branchId, userId, ['confirm']);
   const branch = await getBranch(env.DB, branchId);
   if (!branch || branch.invoicing_enabled !== 0) throw new Error('Direct income is unavailable in this workspace.');
-  const state = JSON.parse(session.data_json) as IncomeState;
   if (!state.clientName || !state.amountCents || !state.currency || !state.incomeDate) {
     throw new Error('That income entry is incomplete.');
   }
@@ -1474,7 +1552,7 @@ async function confirmIncome(env: Bindings, api: TelegramApi, branchId: number, 
       await linkClientToBranch(env.DB, clientId, branchId);
     }
   }
-  const incomeId = await createIncome(env.DB, {
+  const income = {
     branch_id: branchId,
     client_id: clientId,
     payer: state.clientName,
@@ -1482,11 +1560,17 @@ async function confirmIncome(env: Bindings, api: TelegramApi, branchId: number, 
     amount_cents: state.amountCents,
     currency: state.currency,
     reference: state.reference ?? null,
-  });
+  };
+  const incomeId = state.fileToken
+    ? await createIncomeFromImport(env.DB, state.fileToken, income)
+    : await createIncome(env.DB, income);
+  if (!incomeId) throw new Error('That income was already saved, or its invoice file expired. Start again with /income.');
   await clearSession(env.DB, userId);
   await api.sendMessage(
     chatId,
-    `✅ Income saved: <b>${esc(state.clientName)}</b> — ${esc(formatCents(state.amountCents, state.currency))}`,
+    `✅ Income saved: <b>${esc(state.clientName)}</b> — ${esc(formatCents(state.amountCents, state.currency))}${
+      state.fileName ? `\nInvoice: ${esc(state.fileName)}` : ''
+    }`,
     [[{ text: 'View reports', url: adminUrl(env, '/admin/reports', branch) }], ...homeKeyboard(true)]
   );
   console.log(JSON.stringify({ event: 'telegram_income_created', branchId, incomeId, userId }));
@@ -1849,6 +1933,10 @@ async function handleAttachment(
   message: TelegramMessage
 ): Promise<void> {
   const session = await getSession(env.DB, userId);
+  if (session?.branch_id === branchId && session.flow === 'add_income') {
+    const state = JSON.parse(session.data_json) as IncomeState;
+    return attachIncomeFile(env, api, branchId, userId, chatId, session.step, state, message);
+  }
   if (session?.branch_id === branchId && session.flow === 'expense_invoice') {
     // A new file mid-review replaces the pending import.
     const pending = (JSON.parse(session.data_json) as ExpenseState).token;
