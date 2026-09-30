@@ -37,13 +37,16 @@ import {
   detectExpenseBranch,
   extractExpenseInvoiceText,
   parseExpenseInvoice,
+  parseIncomeDocument,
+  type IncomeAmountKind,
+  type IncomeDocumentRead,
   type ParsedExpenseInvoice,
 } from '../../lib/expense-invoice-import';
 import { invoicePdfFilename } from '../../lib/invoice-filename';
 import { parseLineItem, parseMoneyReply, type LineItemInput } from '../../lib/telegram-input';
 import { generateInvoicePdf } from '../pdf';
 import { sendInvoiceEmailToClientAndOwner } from '../email';
-import { readReceiptImage, type ReceiptImageMime } from '../receipt-ocr';
+import { readIncomeImage, readReceiptImage, type ReceiptImageMime } from '../receipt-ocr';
 import {
   TelegramApi,
   type InlineKeyboard,
@@ -65,7 +68,7 @@ import {
   type UpdateStart,
 } from './repository';
 import { acknowledgeUpdate, logUpdateTiming } from './delivery';
-import { esc, evidenceSource, humanError, sanitizeFilename, sniffMime } from './util';
+import { esc, evidenceSource, humanError, sanitizeFilename, sniffMime, type SniffedMime } from './util';
 import {
   handleRejectReason,
   handleReviewCallback,
@@ -111,6 +114,10 @@ type IncomeState = {
   /** Staged invoice file (an expense_invoice_imports token), saved with the income. */
   fileToken?: string;
   fileName?: string;
+  /** Amounts read from the file, offered as buttons until an amount is chosen. */
+  amountOptions?: { kind: IncomeAmountKind; cents: number; currency: string }[];
+  /** Payment or statement date read from the file. */
+  fileDate?: string | null;
 };
 
 type ExpenseState = {
@@ -435,6 +442,9 @@ async function handleCallback(
   if (data === 'income') return startAddIncome(env, api, branchId, userId, chatId);
   if (data === 'incomenew') return beginNewIncomeClient(env, api, branchId, userId, chatId);
   if (data === 'incomefile') return askIncomeFile(env, api, branchId, userId, chatId);
+  if (data === 'incomedayfile' || data === 'incomedaytoday') {
+    return chooseIncomeDate(env, api, branchId, userId, chatId, data === 'incomedayfile');
+  }
   if (data === 'incomeback') {
     const state = await loadIncomeSession(env, branchId, userId, ['file']);
     return showIncomeReview(env, api, branchId, userId, chatId, state);
@@ -511,6 +521,7 @@ async function handleCallback(
   if (action === 'expenseconfirm') return confirmExpenseImport(env, api, branchId, userId, chatId);
   if (action === 'expenseamount') return askExpenseAmount(env, api, branchId, userId, chatId);
   if (action === 'incomeclient') return selectIncomeClient(env, api, branchId, userId, chatId, id);
+  if (action === 'incomeamt') return chooseIncomeAmount(env, api, branchId, userId, chatId, id);
   if (action === 'incomeconfirm') return confirmIncome(env, api, branchId, userId, chatId);
   if (activeBranch?.invoicing_enabled === 0) return explainExpenseOnly(api, chatId);
   if (action === 'inv') return showInvoice(env, api, branchId, chatId, id);
@@ -1398,7 +1409,7 @@ async function askIncomeAmount(
     chatId,
     `Amount received from <b>${esc(state.clientName)}</b>?\n\nSend an amount in ${esc(
       settings.currency
-    )}, or include another currency such as <b>1200 EUR</b>.\n\n📎 You can also send the invoice as a PDF or photo.`
+    )}, or include another currency such as <b>1200 EUR</b>.\n\n📎 Or send the statement, invoice or receipt as a PDF or photo and I’ll read the amount.`
   );
 }
 
@@ -1421,13 +1432,7 @@ async function continueAddIncome(
   if (step === 'amount') {
     const money = parseMoneyReply(text);
     if (!money) throw new Error('Enter a valid amount greater than zero, e.g. 1200 or 1200 EUR.');
-    state.amountCents = money.cents;
-    state.currency = money.currency ?? state.currency;
-    const settings = await getSettings(env.DB, branchId);
-    state.incomeDate = todayInTz(settings.timezone);
-    await saveSession(env.DB, userId, branchId, 'add_income', 'date', state);
-    await api.sendMessage(chatId, `Date received? Send YYYY-MM-DD or <b>today</b> (${state.incomeDate}).`);
-    return;
+    return setIncomeAmount(env, api, branchId, userId, chatId, state, money.cents, money.currency ?? state.currency!);
   }
   if (step === 'date') {
     if (text.toLowerCase() !== 'today' && text.toLowerCase() !== 'default') {
@@ -1436,9 +1441,7 @@ async function continueAddIncome(
       }
       state.incomeDate = text;
     }
-    await saveSession(env.DB, userId, branchId, 'add_income', 'reference', state);
-    await api.sendMessage(chatId, 'Reference or note? Send text, or <b>none</b>.');
-    return;
+    return askIncomeReference(env, api, branchId, userId, chatId, state);
   }
   if (step === 'reference') {
     state.reference = text.toLowerCase() === 'none' ? null : text.slice(0, 300);
@@ -1446,6 +1449,91 @@ async function continueAddIncome(
     return;
   }
   if (step === 'file') throw new Error('Send the invoice as a PDF or photo, or tap Back.');
+}
+
+const INCOME_AMOUNT_LABELS: Record<IncomeAmountKind, string> = {
+  paid: 'paid to you',
+  gross: 'before fees',
+  total: 'total',
+};
+
+async function setIncomeAmount(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  state: IncomeState,
+  cents: number,
+  currency: string
+): Promise<void> {
+  state.amountCents = cents;
+  state.currency = currency;
+  delete state.amountOptions;
+  const today = todayInTz((await getSettings(env.DB, branchId)).timezone);
+  state.incomeDate = today;
+  await saveSession(env.DB, userId, branchId, 'add_income', 'date', state);
+  const keyboard: InlineKeyboard = [];
+  if (state.fileDate && state.fileDate !== today) {
+    keyboard.push([{ text: `📄 ${formatDateHuman(state.fileDate)} (from the file)`, callback_data: 'incomedayfile' }]);
+  }
+  keyboard.push([{ text: `Today (${formatDateHuman(today)})`, callback_data: 'incomedaytoday' }]);
+  await api.sendMessage(chatId, 'Date received? Tap an option or send a date (YYYY-MM-DD).', keyboard);
+}
+
+async function chooseIncomeAmount(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  position: number
+): Promise<void> {
+  const state = await loadIncomeSession(env, branchId, userId, ['amount']);
+  const option = state.amountOptions?.[position - 1];
+  if (!option) throw new Error('That amount is no longer available. Send the amount received.');
+  await setIncomeAmount(env, api, branchId, userId, chatId, state, option.cents, option.currency);
+}
+
+async function chooseIncomeDate(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  fromFile: boolean
+): Promise<void> {
+  const state = await loadIncomeSession(env, branchId, userId, ['date']);
+  if (fromFile) {
+    if (!state.fileDate) throw new Error('That date is no longer available. Send the date received.');
+    state.incomeDate = state.fileDate;
+  } else {
+    state.incomeDate = todayInTz((await getSettings(env.DB, branchId)).timezone);
+  }
+  await askIncomeReference(env, api, branchId, userId, chatId, state);
+}
+
+async function askIncomeReference(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  state: IncomeState
+): Promise<void> {
+  await saveSession(env.DB, userId, branchId, 'add_income', 'reference', state);
+  await api.sendMessage(chatId, 'Reference or note? Send text, or <b>none</b>.');
+}
+
+/** Amount options and a date from the attached file. Unreadable files offer nothing, and the bot asks for the amount. */
+async function readIncomeFile(env: Bindings, bytes: Uint8Array, mime: SniffedMime): Promise<IncomeDocumentRead> {
+  if (mime !== 'application/pdf') return readIncomeImage(env.AI, bytes, mime);
+  try {
+    const { lines } = await extractExpenseInvoiceText(bytes);
+    return parseIncomeDocument(lines);
+  } catch {
+    return { options: [], date: null };
+  }
 }
 
 async function loadIncomeSession(env: Bindings, branchId: number, userId: string, steps: string[]): Promise<IncomeState> {
@@ -1524,8 +1612,43 @@ async function attachIncomeFile(
   state.fileToken = token;
   state.fileName = filename;
   if (step === 'file' || step === 'confirm') return showIncomeReview(env, api, branchId, userId, chatId, state);
-  await saveSession(env.DB, userId, branchId, 'add_income', step, state);
-  await api.sendMessage(chatId, `📎 <b>${esc(filename)}</b> attached. It will be saved with this income.`);
+  if (step !== 'amount') {
+    await saveSession(env.DB, userId, branchId, 'add_income', step, state);
+    await api.sendMessage(chatId, `📎 <b>${esc(filename)}</b> attached. It will be saved with this income.`);
+    return;
+  }
+
+  // Before an amount is typed, offer the amounts the file shows.
+  await api.sendChatAction(chatId, 'typing').catch(() => undefined);
+  const read = await readIncomeFile(env, bytes, mime);
+  const options = read.options.slice(0, 3).map((option) => ({ ...option, currency: option.currency ?? state.currency! }));
+  state.amountOptions = options;
+  state.fileDate = read.date;
+  await saveSession(env.DB, userId, branchId, 'add_income', 'amount', state);
+  if (!options.length) {
+    await api.sendMessage(
+      chatId,
+      `📎 <b>${esc(filename)}</b> attached. I couldn’t find an amount in it.\n\nSend the amount received, e.g. <b>1200</b> or <b>1200 EUR</b>.`,
+      [[{ text: 'Cancel', callback_data: 'cancel' }]]
+    );
+    return;
+  }
+  const found = options.map(
+    (option) => `• ${esc(formatCents(option.cents, option.currency))} ${INCOME_AMOUNT_LABELS[option.kind]}`
+  );
+  await api.sendMessage(
+    chatId,
+    `📎 <b>${esc(filename)}</b> attached.\n\nAmounts in the file:\n${found.join('\n')}\n\nTap the amount you received, or type it.`,
+    [
+      ...options.map((option, index) => [
+        {
+          text: `✅ ${formatCents(option.cents, option.currency)} ${INCOME_AMOUNT_LABELS[option.kind]}`,
+          callback_data: `incomeamt:${index + 1}`,
+        },
+      ]),
+      [{ text: 'Cancel', callback_data: 'cancel' }],
+    ]
+  );
 }
 
 async function confirmIncome(env: Bindings, api: TelegramApi, branchId: number, userId: string, chatId: string): Promise<void> {

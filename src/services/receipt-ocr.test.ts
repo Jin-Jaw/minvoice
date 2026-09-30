@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseReceiptFields, readReceiptImage } from './receipt-ocr';
+import { parseIncomeFields, parseReceiptFields, readIncomeImage, readReceiptImage } from './receipt-ocr';
 
 describe('parseReceiptFields', () => {
   it('maps a complete model answer', () => {
@@ -79,5 +79,23 @@ describe('readReceiptImage', () => {
     const failing = { run: async () => { throw new Error('boom'); } } as unknown as Ai;
     expect((await readReceiptImage(failing, jpeg, 'image/jpeg')).amountCents).toBeNull();
     expect((await readReceiptImage(undefined, jpeg, 'image/jpeg')).amountCents).toBeNull();
+  });
+});
+
+describe('parseIncomeFields', () => {
+  it('offers the paid amount first and the gross amount when it differs', () => {
+    expect(parseIncomeFields({ paid: 267.6, gross: 1200, currency: 'gbp', date: '2026-09-29' })).toEqual({
+      options: [
+        { kind: 'paid', cents: 26760, currency: 'GBP' },
+        { kind: 'gross', cents: 120000, currency: 'GBP' },
+      ],
+      date: '2026-09-29',
+    });
+    expect(parseIncomeFields('{"paid": 950, "gross": 950}').options).toEqual([{ kind: 'paid', cents: 95000, currency: null }]);
+  });
+
+  it('offers nothing when the model fails', async () => {
+    const failing = { run: async () => { throw new Error('boom'); } } as unknown as Ai;
+    expect(await readIncomeImage(failing, new Uint8Array([0xff, 0xd8, 0xff]), 'image/jpeg')).toEqual({ options: [], date: null });
   });
 });

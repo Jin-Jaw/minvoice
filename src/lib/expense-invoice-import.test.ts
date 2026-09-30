@@ -4,6 +4,7 @@ import {
   detectExpenseBranch,
   extractExpenseInvoiceText,
   parseExpenseInvoice,
+  parseIncomeDocument,
 } from './expense-invoice-import';
 
 describe('expense invoice extraction', () => {
@@ -125,5 +126,46 @@ describe('expense invoice parser', () => {
       'Currency was not found. Choose the invoice currency.',
       'Supplier name was not found. Enter who was paid.',
     ]);
+  });
+});
+
+describe('income document parsing', () => {
+  it('offers the payment to the landlord and the rent before fees from a letting statement', () => {
+    const lines = [
+      'Landlord Rental Statement',
+      'Statement Date 29/09/2026',
+      'Date Description In (£) Out (£) Balance (£)',
+      'Opening Balance',
+      '29/09/2026 Advance Rent for period from 28/09/2026 to 1,200.00 1,200.00',
+      '29/09/2026 Letting Fee (28/09/2026 to 27/09/2027) rent 570.00 630.00',
+      '29/09/2026 Management Fee @ 11.00% 158.40 267.60',
+      '29/09/2026 Payment To Example Landlord 267.60',
+      'Invoice Number Invoice Date Net (£) VAT (£) Gross (£) Paid (£)',
+      'Total 777.00 155.40 932.40',
+      'Account Name Sort Code Account Number Amount Paid This Statement (£)',
+      'Example Landlord 112233 ****1234 267.60',
+    ];
+    expect(parseIncomeDocument(lines)).toEqual({
+      options: [
+        { kind: 'paid', cents: 26760, currency: 'GBP' },
+        { kind: 'gross', cents: 120000, currency: 'GBP' },
+      ],
+      date: '2026-09-29',
+    });
+  });
+
+  it('reads a column header value from the next line and adds up rent lines', () => {
+    const lines = ['Rent received 950.00', 'Rent received 950.00 1,900.00', 'Commission 95.00', 'Amount Paid', '1,805.00'];
+    expect(parseIncomeDocument(lines).options).toEqual([
+      { kind: 'paid', cents: 180500, currency: null },
+      { kind: 'gross', cents: 190000, currency: null },
+    ]);
+  });
+
+  it('falls back to the final total and ignores dates written with dots', () => {
+    expect(parseIncomeDocument(['Invoice 12', 'Date: 03.09.2026', 'Total: £450.00'])).toEqual({
+      options: [{ kind: 'total', cents: 45000, currency: 'GBP' }],
+      date: '2026-09-03',
+    });
   });
 });

@@ -295,6 +295,65 @@ export function parseExpenseInvoice(lines: string[], buyerNames: string[] = []):
   };
 }
 
+// ---------- Income documents (rent statements, remittances, receipts) ----------
+
+/** paid: what reached the recipient after deductions; gross: before fees; total: an invoice's final total. */
+export type IncomeAmountKind = 'paid' | 'gross' | 'total';
+export type IncomeAmountOption = { kind: IncomeAmountKind; cents: number; currency: string | null };
+export type IncomeDocumentRead = { options: IncomeAmountOption[]; date: string | null };
+
+const PAID_LABEL =
+  /\b(?:amount\s+paid|paid\s+to\s+you|payment\s+to|net\s+(?:payment|amount|rent|income)|total\s+(?:paid|received)|amount\s+received|remittance)\b/i;
+const RENT_LABEL = /\brent\b/i;
+const NOT_RENT = /\b(?:fees?|commission|charges?|deposit|vat|insurance)\b/i;
+
+/** Amounts written with two decimals ("1,200.00", "£267.60"), which skips dates, sort codes and account numbers. */
+function decimalAmounts(line: string): MoneyCandidate[] {
+  const amounts: MoneyCandidate[] = [];
+  for (const match of line.matchAll(/(?<![\d.,])(?:[£€$]\s?)?(?:\d{1,3}(?:[,.']\d{3})+|\d+)[.,]\d{2}(?![\d]|[.,]\d)/g)) {
+    const cents = parseMoneyNumber(match[0]);
+    if (cents) amounts.push({ cents, currency: detectCurrency(match[0]) });
+  }
+  return amounts;
+}
+
+/**
+ * Suggests the amount received from a document, for the user to choose from.
+ * A letting agent's statement gives the payment to the landlord and the rent
+ * before fees; other documents fall back to their final total.
+ */
+export function parseIncomeDocument(lines: string[]): IncomeDocumentRead {
+  const documentCurrency = detectCurrency(lines.join(' '));
+  const options: IncomeAmountOption[] = [];
+  const add = (kind: IncomeAmountKind, money: MoneyCandidate | undefined) => {
+    if (money && !options.some((option) => option.cents === money.cents)) {
+      options.push({ kind, cents: money.cents, currency: money.currency ?? documentCurrency });
+    }
+  };
+
+  // The last payment line is the final one. A column header carries its value on the next line.
+  let paid: MoneyCandidate | undefined;
+  lines.forEach((line, index) => {
+    if (!PAID_LABEL.test(line)) return;
+    paid = decimalAmounts(line).at(-1) ?? decimalAmounts(lines[index + 1] ?? '').at(-1) ?? paid;
+  });
+  add('paid', paid);
+
+  // The first amount on a rent line is the money in; later ones are running balances.
+  const rentLines = lines.filter((line) => RENT_LABEL.test(line) && !NOT_RENT.test(line) && decimalAmounts(line).length);
+  const totalRent = rentLines.find((line) => /\btotal\b/i.test(line));
+  const rentAmounts = (totalRent ? [totalRent] : rentLines).map((line) => decimalAmounts(line)[0]);
+  if (rentAmounts.length) {
+    add('gross', { cents: rentAmounts.reduce((sum, money) => sum + money.cents, 0), currency: rentAmounts[0].currency });
+  }
+
+  if (!options.length) {
+    const total = finalTotal(lines);
+    if (total.amountCents) add('total', { cents: total.amountCents, currency: total.currency });
+  }
+  return { options, date: labelledDate(lines) };
+}
+
 /** Match an invoice's billed-to/prepared-for text to one of the user's companies. */
 export function detectExpenseBranch(lines: string[], branches: Array<{ id: number; name: string }>): number | null {
   const text = normal(lines.join(' '));

@@ -1,8 +1,8 @@
-// Read the key fields from a receipt/invoice photo with a Workers AI vision
-// model. The result is only ever a suggestion: the bot always asks the user
-// to confirm or correct the amount before an expense is written.
+// Read the key fields from a receipt, invoice or statement photo with a
+// Workers AI vision model. The result is only ever a suggestion: the bot
+// always asks the user to confirm or correct the amount before saving.
 
-import type { ParsedExpenseInvoice } from '../lib/expense-invoice-import';
+import type { IncomeAmountOption, IncomeDocumentRead, ParsedExpenseInvoice } from '../lib/expense-invoice-import';
 import { EXPENSE_CATEGORIES } from '../lib/expenses';
 import { isSupportedCurrency } from '../lib/money';
 
@@ -67,22 +67,22 @@ function isoDate(value: unknown): string | null {
   return value;
 }
 
-/** Model output (object or JSON text, possibly fenced) → the importer's parsed shape. */
-export function parseReceiptFields(raw: unknown): ParsedExpenseInvoice {
-  let fields: Record<string, unknown> = {};
-  if (raw && typeof raw === 'object') {
-    fields = raw as Record<string, unknown>;
-  } else if (typeof raw === 'string') {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        fields = JSON.parse(match[0]) as Record<string, unknown>;
-      } catch {
-        fields = {};
-      }
-    }
+/** Model output as an object, or as JSON text that may be wrapped in prose or code fences. */
+function jsonFields(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+  if (typeof raw !== 'string') return {};
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return {};
+  try {
+    return JSON.parse(match[0]) as Record<string, unknown>;
+  } catch {
+    return {};
   }
+}
 
+/** Model output → the importer's parsed shape. */
+export function parseReceiptFields(raw: unknown): ParsedExpenseInvoice {
+  const fields = jsonFields(raw);
   const code = text(fields.currency, 10)?.toUpperCase() ?? null;
   const currency = code && /^[A-Z]{3}$/.test(code) && isSupportedCurrency(code) ? code : null;
   const amountCents = amountToCents(fields.total);
@@ -117,27 +117,83 @@ export async function readReceiptImage(
   bytes: Uint8Array,
   mime: ReceiptImageMime
 ): Promise<ParsedExpenseInvoice> {
-  if (!ai) return parseReceiptFields(null);
+  const raw = await askVisionModel(ai, PROMPT, RESPONSE_SCHEMA, 'Extract the fields from this receipt.', bytes, mime);
+  return parseReceiptFields(raw);
+}
+
+const INCOME_PROMPT = [
+  'You read documents that show money received, for bookkeeping: letting agent rent statements, remittance advice, payment receipts and invoices.',
+  'Return JSON only, with these keys:',
+  '- paid: the amount actually paid to the recipient after any fees or deductions, as a plain number, e.g. 267.6. On a rent statement this is the payment to the landlord. null if not shown.',
+  '- gross: the amount before fees or deductions, such as the rent collected, as a plain number. null if not shown or the same as paid.',
+  '- currency: ISO 4217 code (GBP for £, EUR for €, USD for $ unless another dollar is stated). null if unknown.',
+  '- date: the payment or statement date as YYYY-MM-DD, or null.',
+  'Never guess a number you cannot read.',
+].join('\n');
+
+const INCOME_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    paid: { type: ['number', 'null'] },
+    gross: { type: ['number', 'null'] },
+    currency: { type: ['string', 'null'] },
+    date: { type: ['string', 'null'] },
+  },
+  required: ['paid', 'gross', 'currency', 'date'],
+};
+
+/** Model output for an income document → amount options for the user to choose from. */
+export function parseIncomeFields(raw: unknown): IncomeDocumentRead {
+  const fields = jsonFields(raw);
+  const code = text(fields.currency, 10)?.toUpperCase() ?? null;
+  const currency = code && /^[A-Z]{3}$/.test(code) && isSupportedCurrency(code) ? code : null;
+  const options: IncomeAmountOption[] = [];
+  const paid = amountToCents(fields.paid);
+  const gross = amountToCents(fields.gross);
+  if (paid !== null) options.push({ kind: 'paid', cents: paid, currency });
+  if (gross !== null && gross !== paid) options.push({ kind: 'gross', cents: gross, currency });
+  return { options, date: isoDate(fields.date) };
+}
+
+/** Never throws, like readReceiptImage: a failed read offers no amounts and the bot asks for one. */
+export async function readIncomeImage(
+  ai: Ai | undefined,
+  bytes: Uint8Array,
+  mime: ReceiptImageMime
+): Promise<IncomeDocumentRead> {
+  const raw = await askVisionModel(ai, INCOME_PROMPT, INCOME_RESPONSE_SCHEMA, 'Extract the fields from this document.', bytes, mime);
+  return parseIncomeFields(raw);
+}
+
+async function askVisionModel(
+  ai: Ai | undefined,
+  prompt: string,
+  schema: object,
+  instruction: string,
+  bytes: Uint8Array,
+  mime: ReceiptImageMime
+): Promise<unknown> {
+  if (!ai) return null;
   try {
     const result = (await ai.run(RECEIPT_MODEL as Parameters<Ai['run']>[0], {
       messages: [
-        { role: 'system', content: PROMPT },
+        { role: 'system', content: prompt },
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'Extract the fields from this receipt.' },
+            { type: 'text', text: instruction },
             { type: 'image_url', image_url: { url: `data:${mime};base64,${toBase64(bytes)}` } },
           ],
         },
       ],
-      response_format: { type: 'json_schema', json_schema: RESPONSE_SCHEMA },
+      response_format: { type: 'json_schema', json_schema: schema },
       max_tokens: 300,
       temperature: 0,
     } as never)) as { response?: unknown; choices?: { message?: { content?: unknown } }[] };
     // Workers AI returns the JSON in `response`; the OpenAI-style copy is a fallback.
-    return parseReceiptFields(result?.response ?? result?.choices?.[0]?.message?.content ?? null);
+    return result?.response ?? result?.choices?.[0]?.message?.content ?? null;
   } catch (error) {
     console.error(JSON.stringify({ event: 'receipt_ocr_failed', error: String(error) }));
-    return parseReceiptFields(null);
+    return null;
   }
 }

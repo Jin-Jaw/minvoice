@@ -306,13 +306,39 @@ describe('Telegram new client', () => {
 });
 
 describe('Telegram income invoice', () => {
-  it('attaches an invoice sent at the amount step and saves it with the income', async () => {
+  it('reads the amounts from a statement photo and saves the chosen one with the file and its date', async () => {
+    await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
+    aiAnswer = { paid: 267.6, gross: 1200, currency: 'GBP', date: '2026-09-29' };
+    await text('/income');
+    await text('Flat 3 tenant');
+    await photo();
+    expect(lastMessage()).toContain('£267.60 paid to you');
+    expect(buttons().map((b) => b.text)).toEqual(['✅ £267.60 paid to you', '✅ £1,200.00 before fees', 'Cancel']);
+    await tap('incomeamt:1');
+    expect(buttons().map((b) => b.callback_data)).toContain('incomedayfile');
+    await tap('incomedayfile');
+    await text('none');
+    expect(lastMessage()).toContain('Amount: £267.60');
+    expect(lastMessage()).toContain('Date: 2026-09-29');
+    await tap('incomeconfirm:1');
+
+    const income = await DB.prepare('SELECT id, amount_cents, income_date FROM income_entries ORDER BY id DESC LIMIT 1').first<{
+      id: number;
+      amount_cents: number;
+      income_date: string;
+    }>();
+    expect(income).toMatchObject({ amount_cents: 26760, income_date: '2026-09-29' });
+    const files = await DB.prepare('SELECT COUNT(*) AS n FROM income_attachments WHERE income_id = ?').bind(income!.id).first();
+    expect(files).toEqual({ n: 1 });
+  });
+
+  it('attaches an unreadable file at the amount step and saves it with a typed amount', async () => {
     await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
     await text('/income');
     await text('Flat 3 tenant');
-    expect(lastMessage()).toContain('send the invoice as a PDF or photo');
+    expect(lastMessage()).toContain('I’ll read the amount');
     await photo();
-    expect(lastMessage()).toContain('attached. It will be saved with this income.');
+    expect(lastMessage()).toContain('I couldn’t find an amount in it.');
     await text('1200');
     await text('today');
     await text('none');
