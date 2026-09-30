@@ -82,3 +82,8 @@ export function expenseEvidenceFile(expenseId: number, attachment: { id: number;
   const base = `/admin/expenses/${expenseId}/attachments/${attachment.id}`;
   return { viewUrl: `${base}/view`, downloadUrl: base, mime: attachment.mime, filename: attachment.filename };
 }
+
+export function incomeEvidenceFile(incomeId: number, attachment: { id: number; mime: string; filename: string }): EvidenceFile {
+  const base = `/admin/income/${incomeId}/attachments/${attachment.id}`;
+  return { viewUrl: `${base}/view`, downloadUrl: base, mime: attachment.mime, filename: attachment.filename };
+}

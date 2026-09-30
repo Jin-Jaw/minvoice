@@ -108,10 +108,21 @@ open the evidence viewer. Images show full size on a click; PDFs show in the
 browser's PDF reader. Previous and Next move between an expense's files, and
 Open and Download stay available. The viewer loads
 `/admin/expenses/:id/attachments/:attachmentId/view`, which serves the file
-inline. That route and the staged import file are the only responses that
-allow same-origin framing (`frame-ancestors 'self'`, `X-Frame-Options:
-SAMEORIGIN`, see `src/lib/evidence-preview.ts`); every other response denies
-framing. Mobile browsers without a built-in PDF reader need Open or Download.
+inline. That route, the income file route below and the staged import file
+are the only responses that allow same-origin framing (`frame-ancestors
+'self'`, `X-Frame-Options: SAMEORIGIN`, see `src/lib/evidence-preview.ts`);
+every other response denies framing. Mobile browsers without a built-in PDF
+reader need Open or Download.
+
+## Income
+
+The Income page (`/admin/income`) lists money received without an invoice
+from this app (`income_entries`), such as rent in Property / Flats and income
+approved from the staff bot. Entries are added from the Telegram bots; the web
+app has no form for new entries. Each row shows its files (`income_attachments`)
+in the same evidence viewer as expenses, served from
+`/admin/income/:id/attachments/:attachmentId/view`. "Upload invoice" adds a
+file, and Void keeps an entry on file but removes it from report totals.
 
 ## Workspaces
 
@@ -216,7 +227,7 @@ commands are not replayed.
 | `/newinvoice` | Pick or add a client → optional "Repeat last invoice" → currency buttons → lines as `description - price` or `description - 3 x 450` (running subtotal, undo) → due-date buttons → saved payment details → summary where lines, invoice date, due date, tax and payment details can each be changed → create. |
 | `/invoices`, `/drafts`, `/unpaid`, `/overdue` | Up to 10 invoices; each offers View, PDF, Attach files, Send, Mark paid (today, yesterday or a typed date). Send emails a private copy with the attachments to the company's business email, then the client. When the company has no business email, the copy goes to `jad@jin-jaw.co.uk`, hardcoded in `src/services/email.ts`. |
 | `/uploadinvoice`, `/expense` | A PDF (text extraction) or a receipt photo (OCR) → confirm or change amount, date, category, client and paying company → saved as an expense with the file as evidence. PDFs are filed under the company they were billed to. |
-| `/income` | Property / Flats only: money received without an invoice (`income_entries`), counted as "received" in reports. A PDF or photo sent after the payer is chosen, or through "Attach invoice" on the confirm screen, is saved with the entry in `income_attachments`. The web app has no page that shows these files yet. |
+| `/income` | Property / Flats only: money received without an invoice (`income_entries`), counted as "received" in reports. A PDF or photo sent after the payer is chosen, or through "Attach invoice" on the confirm screen, is saved with the entry in `income_attachments` and shown on the Income page. |
 | `/newclient` | Asks for a name and an optional email, then adds the client to the active company. The Property / Flats menu has the same action as "Add client". A client with the same name in the workspace is reused. The expense Client picker has a "New client" button that runs the same steps and returns to the expense. |
 | `/workspace`, `/workspaces` | Switch the company the bot acts for. |
 | `/pending` | Staff requests waiting for approval, oldest first. Tap one to see it again with its invoice and the Approve and Reject buttons (see Staff submissions bot). |

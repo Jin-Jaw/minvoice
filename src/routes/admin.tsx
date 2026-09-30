@@ -46,6 +46,9 @@ import {
   getExpense,
   getExpenseAttachment,
   getExpenseInvoiceImport,
+  getIncome,
+  getIncomeAttachment,
+  addIncomeAttachment,
   getInvoiceById,
   linkClientToBranch,
   getInvoiceEvents,
@@ -63,6 +66,8 @@ import {
   listExpenseAttachments,
   listWorkspaceExpenseAttachmentMeta,
   listWorkspaceExpenseAttachments,
+  listIncome,
+  listWorkspaceIncomeAttachmentMeta,
   listExpenses,
   listInvoices,
   getInvoiceSourcePdfMeta,
@@ -80,6 +85,7 @@ import {
   setLogo,
   setInvoiceSourcePdf,
   setExpenseVoided,
+  setIncomeVoided,
   storeExpenseInvoiceImport,
   updateClient,
   updateExpense,
@@ -119,6 +125,7 @@ import { InvoiceFormPage } from '../views/admin/invoice-form';
 import { InvoiceDetailPage } from '../views/admin/invoice-detail';
 import { ClientEditPage, ClientNewPage, ClientsPage } from '../views/admin/clients';
 import { PaymentsPage } from '../views/admin/payments';
+import { IncomePage } from '../views/admin/income';
 import { ReportsPage } from '../views/admin/reports';
 import { SettingsPage } from '../views/admin/settings';
 import { SetupPage } from '../views/admin/setup';
@@ -1619,6 +1626,62 @@ admin.post('/expenses/:id/attachments/:attachmentId/delete', async (c) => {
   if (!(await deleteExpenseAttachment(c.env.DB, id, attachmentId))) return c.notFound();
   return c.redirect(`/admin/expenses/${id}?saved=1#evidence`);
 });
+
+// ---------- Income (money received without an invoice) ----------
+
+admin.get('/income', async (c) => {
+  const branches = await listBranches(c.env.DB, c.get('workspaceId'));
+  const requestedBranch = Number(c.req.query('company'));
+  const branchId = branches.some((branch) => branch.id === requestedBranch) ? requestedBranch : null;
+  const [income, attachments] = await Promise.all([
+    listIncome(c.env.DB, branchId, c.get('workspaceId')),
+    listWorkspaceIncomeAttachmentMeta(c.env.DB, c.get('workspaceId')),
+  ]);
+  return c.html(
+    <IncomePage
+      income={income}
+      attachments={attachments}
+      branches={branches}
+      branchId={branchId}
+      nonce={c.get('secureHeadersNonce')}
+    />
+  );
+});
+
+admin.post('/income/:id/void', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0 || !(await getIncome(c.env.DB, id, c.get('workspaceId')))) return c.notFound();
+  const body = (await c.req.parseBody()) as Record<string, string>;
+  await setIncomeVoided(c.env.DB, id, body.action !== 'restore');
+  return c.redirect('/admin/income');
+});
+
+admin.post('/income/:id/attachments', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0 || !(await getIncome(c.env.DB, id, c.get('workspaceId')))) return c.notFound();
+  const body = await c.req.parseBody();
+  const evidence = body.evidence;
+  if (!(evidence instanceof File)) return c.text('Choose an invoice file.', 400);
+  const prepared = await prepareExpenseAttachment(evidence);
+  if (!prepared.file) return c.text(prepared.error ?? 'Invalid invoice file.', 400);
+  await addIncomeAttachment(c.env.DB, id, prepared.file);
+  return c.redirect('/admin/income');
+});
+
+async function incomeAttachmentResponse(c: Context<AppEnv>, disposition: 'inline' | 'attachment'): Promise<Response> {
+  const id = Number(c.req.param('id'));
+  const attachmentId = Number(c.req.param('attachmentId'));
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) return c.notFound();
+  if (!(await getIncome(c.env.DB, id, c.get('workspaceId')))) return c.notFound();
+  const attachment = await getIncomeAttachment(c.env.DB, id, attachmentId);
+  if (!attachment) return c.notFound();
+  return evidenceFileResponse(attachment, disposition);
+}
+
+admin.get('/income/:id/attachments/:attachmentId', (c) => incomeAttachmentResponse(c, 'attachment'));
+
+// Shown in the evidence viewer, or by the browser when opened on its own.
+admin.get('/income/:id/attachments/:attachmentId/view', (c) => incomeAttachmentResponse(c, 'inline'));
 
 // ---------- CSV export ----------
 

@@ -120,6 +120,7 @@ beforeEach(async () => {
     DB.prepare('DELETE FROM expense_invoice_imports'),
     DB.prepare('DELETE FROM expense_attachments'),
     DB.prepare('DELETE FROM expenses'),
+    DB.prepare('DELETE FROM income_entries'),
     DB.prepare('DELETE FROM payments'),
     DB.prepare('DELETE FROM invoice_events'),
     DB.prepare('DELETE FROM invoice_items'),
@@ -417,6 +418,60 @@ describe('expense ledger and evidence', () => {
     });
     const [otherMeta] = await listExpenseAttachments(DB, otherExpenseId);
     expect((await get(`/admin/expenses/${otherExpenseId}/attachments/${otherMeta.id}/view?workspace=1`)).status).toBe(404);
+  });
+
+  it('lists income with its files, uploads and voids, and keeps other workspaces out', async () => {
+    const flats = await DB.prepare(
+      `INSERT INTO branches (name, workspace_id, invoicing_enabled) VALUES ('Flats Co', 2, 0) RETURNING id`
+    ).first<{ id: number }>();
+    const insertIncome = (branchId: number, payer: string) =>
+      DB.prepare(
+        `INSERT INTO income_entries (branch_id, payer, income_date, amount_cents, currency, reference)
+         VALUES (?, ?, '2026-09-20', 120000, 'GBP', 'September rent') RETURNING id`
+      )
+        .bind(branchId, payer)
+        .first<{ id: number }>();
+    const incomeId = (await insertIncome(flats!.id, 'Flat 3 tenant'))!.id;
+    const bytes = new TextEncoder().encode('%PDF-1.7\nrent invoice');
+    const attachment = await DB.prepare(
+      `INSERT INTO income_attachments (income_id, bytes, mime, filename, size_bytes, sha256)
+       VALUES (?, ?, 'application/pdf', 'rent.pdf', ?, ?) RETURNING id`
+    )
+      .bind(incomeId, bytes, bytes.byteLength, 'd'.repeat(64))
+      .first<{ id: number }>();
+    await DB.prepare('UPDATE settings SET setup_complete = 1 WHERE id = 1').run();
+    const cookie = await loginCookie();
+    const get = (path: string) => exports.default.fetch(new Request(`https://invoice.test${path}`, { headers: { cookie } }));
+    const post = (path: string, body: FormData | URLSearchParams) =>
+      exports.default.fetch(new Request(`https://invoice.test${path}`, {
+        method: 'POST', headers: { cookie, 'sec-fetch-site': 'same-origin' }, body, redirect: 'manual',
+      }));
+
+    const list = await (await get('/admin/income?workspace=2')).text();
+    expect(list).toContain('Flat 3 tenant');
+    expect(list).toContain('September rent');
+    expect(list).toContain('View 1 file');
+    expect(list).toContain(`href="/admin/income/${incomeId}/attachments/${attachment!.id}/view"`);
+
+    const preview = await get(`/admin/income/${incomeId}/attachments/${attachment!.id}/view?workspace=2`);
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get('content-disposition')).toContain('inline;');
+    expect(preview.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+    expect(new Uint8Array(await preview.arrayBuffer())).toEqual(bytes);
+    expect((await get(`/admin/income/${incomeId}/attachments/${attachment!.id}/view?workspace=1`)).status).toBe(404);
+    expect(await (await get('/admin/income?workspace=1')).text()).not.toContain('Flat 3 tenant');
+
+    const bare = (await insertIncome(flats!.id, 'Flat 5 tenant'))!.id;
+    const form = new FormData();
+    form.set('evidence', new File(['%PDF-1.7\nreceipt'], 'receipt.pdf', { type: 'application/pdf' }));
+    expect((await post(`/admin/income/${bare}/attachments?workspace=2`, form)).status).toBe(302);
+    const uploaded = await DB.prepare('SELECT filename FROM income_attachments WHERE income_id = ?').bind(bare).first();
+    expect(uploaded).toEqual({ filename: 'receipt.pdf' });
+
+    expect((await post(`/admin/income/${bare}/void?workspace=2`, new URLSearchParams({ action: 'void' }))).status).toBe(302);
+    const voided = await DB.prepare('SELECT voided_at FROM income_entries WHERE id = ?').bind(bare).first<{ voided_at: string | null }>();
+    expect(voided?.voided_at).not.toBeNull();
+    expect((await post(`/admin/income/${bare}/void?workspace=1`, new URLSearchParams({ action: 'restore' }))).status).toBe(404);
   });
 
   it('rejects a spoofed image upload and accepts a genuine PDF through the admin form', async () => {

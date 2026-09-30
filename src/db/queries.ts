@@ -1534,6 +1534,113 @@ export async function createIncomeFromImport(db: D1Database, token: string, inco
   return null;
 }
 
+export type IncomeListRow = {
+  id: number;
+  branch_id: number;
+  client_id: number | null;
+  payer: string;
+  income_date: string;
+  amount_cents: number;
+  currency: string;
+  reference: string | null;
+  created_at: string;
+  voided_at: string | null;
+  branch_name: string;
+  client_name: string | null;
+  attachment_count: number;
+};
+
+export type IncomeAttachmentMeta = Omit<ExpenseAttachmentMeta, 'expense_id'> & { income_id: number };
+export type IncomeAttachment = IncomeAttachmentMeta & { bytes: Uint8Array };
+
+const INCOME_LIST_SELECT = `SELECT i.*, b.name AS branch_name, c.name AS client_name,
+       (SELECT COUNT(*) FROM income_attachments a WHERE a.income_id = i.id) AS attachment_count
+     FROM income_entries i
+     JOIN branches b ON b.id = i.branch_id
+     LEFT JOIN clients c ON c.id = i.client_id`;
+
+/** Income in a workspace, newest first. A NULL branch means all companies; voided rows stay visible. */
+export async function listIncome(db: D1Database, branchId: number | null, workspaceId: number): Promise<IncomeListRow[]> {
+  return (
+    await db
+      .prepare(
+        `${INCOME_LIST_SELECT}
+         WHERE b.workspace_id = ?2 AND (?1 IS NULL OR i.branch_id = ?1)
+         ORDER BY i.income_date DESC, i.id DESC`
+      )
+      .bind(branchId, workspaceId)
+      .all<IncomeListRow>()
+  ).results;
+}
+
+export function getIncome(db: D1Database, id: number, workspaceId: number): Promise<IncomeListRow | null> {
+  return db
+    .prepare(`${INCOME_LIST_SELECT} WHERE i.id = ? AND b.workspace_id = ?`)
+    .bind(id, workspaceId)
+    .first<IncomeListRow>();
+}
+
+/** Soft-void keeps the entry and its files but removes it from report totals. */
+export async function setIncomeVoided(db: D1Database, id: number, voided: boolean): Promise<boolean> {
+  const result = await db
+    .prepare(`UPDATE income_entries SET voided_at = CASE WHEN ? THEN datetime('now') ELSE NULL END WHERE id = ?`)
+    .bind(voided ? 1 : 0, id)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/** File details (no bytes) for every income entry in a workspace, for the income list viewer. */
+export async function listWorkspaceIncomeAttachmentMeta(db: D1Database, workspaceId: number): Promise<IncomeAttachmentMeta[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT a.id, a.income_id, a.mime, a.filename, a.size_bytes, a.sha256, a.uploaded_at
+         FROM income_attachments a
+         JOIN income_entries i ON i.id = a.income_id
+         JOIN branches b ON b.id = i.branch_id
+         WHERE b.workspace_id = ?
+         ORDER BY a.income_id, a.id`
+      )
+      .bind(workspaceId)
+      .all<IncomeAttachmentMeta>()
+  ).results;
+}
+
+export async function getIncomeAttachment(
+  db: D1Database,
+  incomeId: number,
+  attachmentId: number
+): Promise<IncomeAttachment | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, income_id, bytes, mime, filename, size_bytes, sha256, uploaded_at
+       FROM income_attachments WHERE id = ? AND income_id = ?`
+    )
+    .bind(attachmentId, incomeId)
+    .first<Omit<IncomeAttachment, 'bytes'> & { bytes: ArrayBuffer | number[] }>();
+  if (!row) return null;
+  return {
+    ...row,
+    bytes: row.bytes instanceof ArrayBuffer ? new Uint8Array(row.bytes) : Uint8Array.from(row.bytes),
+  };
+}
+
+/** Returns false when the same bytes are already attached to this entry. */
+export async function addIncomeAttachment(
+  db: D1Database,
+  incomeId: number,
+  file: Pick<IncomeAttachment, 'bytes' | 'mime' | 'filename' | 'size_bytes' | 'sha256'>
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT OR IGNORE INTO income_attachments
+       (income_id, bytes, mime, filename, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(incomeId, file.bytes, file.mime, file.filename, file.size_bytes, file.sha256)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
 // ---------- Reports ----------
 
 export type MonthlyReportRow = {

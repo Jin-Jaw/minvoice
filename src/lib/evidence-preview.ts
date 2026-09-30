@@ -1,11 +1,12 @@
 /**
- * Expense evidence the admin pages preview in the evidence viewer. PDFs show
- * in a same-origin frame, so these responses are the only ones that relax
- * frame-ancestors and X-Frame-Options from 'none'/DENY to same-origin.
+ * Expense and income evidence the admin pages preview in the evidence viewer.
+ * PDFs show in a same-origin frame, so these responses are the only ones that
+ * relax frame-ancestors and X-Frame-Options from 'none'/DENY to same-origin.
  */
 const FRAMEABLE_EVIDENCE_PATHS = [
   /^\/admin\/expenses\/\d+\/attachments\/\d+\/view$/,
   /^\/admin\/expenses\/import\/[a-f0-9]{64}\/file$/,
+  /^\/admin\/income\/\d+\/attachments\/\d+\/view$/,
 ];
 
 export function isFrameableEvidencePath(path: string): boolean {
