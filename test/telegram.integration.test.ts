@@ -181,6 +181,35 @@ describe('Telegram /newinvoice', () => {
     const items = await getInvoiceItems(DB, created!.id);
     expect(items.map((i) => i.description)).toEqual(['Retainer']);
   });
+
+  it('moves the month in a repeated monthly invoice forward to the current month', async () => {
+    const settings = await getSettings(DB, 1);
+    const today = todayInTz(settings.timezone);
+    const endOfLastMonth = addDaysISO(`${today.slice(0, 8)}01`, -1);
+    const monthYear = (date: string) =>
+      new Date(`${date}T00:00:00Z`).toLocaleString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const monthlyId = await createInvoice(DB, 1, {
+      client_id: clientId,
+      issue_date: endOfLastMonth,
+      due_date: null,
+      subject: `Tech art services : ${monthYear(endOfLastMonth)}`,
+      notes: null,
+      currency: 'USD',
+      items: [{ description: `Tech art services : ${monthYear(endOfLastMonth)}`, quantity: 1, unit_price_cents: 1225700 }],
+    });
+
+    await text('/newinvoice');
+    await tap(`client:${clientId}`);
+    expect(buttons().map((b) => b.callback_data)).toContain(`repeat:${monthlyId}`);
+    await tap(`repeat:${monthlyId}`);
+    expect(lastMessage()).toContain(`Tech art services : ${monthYear(today)}`);
+    await tap('create:1');
+
+    const created = await DB.prepare('SELECT id, subject FROM invoices ORDER BY id DESC LIMIT 1').first<{ id: number; subject: string }>();
+    expect(created?.subject).toBe(`Tech art services : ${monthYear(today)}`);
+    const items = await getInvoiceItems(DB, created!.id);
+    expect(items.map((i) => i.description)).toEqual([`Tech art services : ${monthYear(today)}`]);
+  });
 });
 
 describe('Telegram invoice extras', () => {
@@ -448,6 +477,49 @@ describe('Telegram receipt photos', () => {
       currency: settings.currency,
       expense_date: addDaysISO(todayInTz(settings.timezone), -1),
     });
+  });
+
+  it('queues several receipts and reviews them one at a time', async () => {
+    aiAnswer = { total: 10.5, currency: 'GBP', supplier: 'Corner Cafe', date: '2026-09-18', category: 'Other' };
+    await text('/uploadinvoice');
+    await photo();
+    await photo();
+    await photo();
+    // The first is reviewed; the other two wait and are acknowledged with a reaction.
+    expect(messages().filter((m) => m.includes('Is the total right?'))).toHaveLength(1);
+    expect(sent.filter((m) => m.method === 'setMessageReaction')).toHaveLength(2);
+
+    await tap('expenseconfirm:1');
+    expect(messages().at(-2)).toContain('✅ Expense saved');
+    expect(lastMessage()).toContain('1 more receipt waiting');
+    expect(buttons().map((b) => b.callback_data)).toEqual(expect.arrayContaining(['expskip', 'expcancelall']));
+    await tap('expskip');
+    expect(lastMessage()).toContain('Is the total right?');
+    expect(lastMessage()).not.toContain('waiting');
+    expect(buttons().map((b) => b.callback_data)).not.toContain('expskip');
+    await tap('expenseconfirm:1');
+    expect(lastMessage()).toContain('✅ Expense saved');
+    expect(buttons().map((b) => b.callback_data)).toContain('expenseupload');
+
+    const expenses = await DB.prepare('SELECT COUNT(*) AS n FROM expenses').first<{ n: number }>();
+    expect(expenses?.n).toBe(2);
+    const staged = await DB.prepare('SELECT COUNT(*) AS n FROM expense_invoice_imports').first<{ n: number }>();
+    expect(staged?.n).toBe(0);
+  });
+
+  it('moves on to the next receipt on Cancel, and discards the rest on Cancel all', async () => {
+    aiAnswer = { total: 10.5, currency: 'GBP', supplier: 'Corner Cafe', date: '2026-09-18', category: 'Other' };
+    await photo();
+    await photo();
+    await photo();
+    await tap('cancel');
+    expect(lastMessage()).toContain('1 more receipt waiting');
+    await tap('expcancelall');
+    expect(lastMessage()).toBe('Cancelled. The receipt waiting was discarded.');
+    const staged = await DB.prepare('SELECT COUNT(*) AS n FROM expense_invoice_imports').first<{ n: number }>();
+    expect(staged?.n).toBe(0);
+    const expenses = await DB.prepare('SELECT COUNT(*) AS n FROM expenses').first<{ n: number }>();
+    expect(expenses?.n).toBe(0);
   });
 });
 

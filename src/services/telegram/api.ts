@@ -91,6 +91,15 @@ export class TelegramApi {
     return this.call('sendChatAction', { chat_id: chatId, action });
   }
 
+  /** A quiet acknowledgement on the user's own message, such as 👍 on a queued receipt. */
+  setMessageReaction(chatId: string, messageId: number, emoji: string): Promise<boolean> {
+    return this.call('setMessageReaction', {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{ type: 'emoji', emoji }],
+    });
+  }
+
   getFile(fileId: string): Promise<TelegramFile> {
     return this.call('getFile', { file_id: fileId });
   }
