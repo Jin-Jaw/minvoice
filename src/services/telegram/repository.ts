@@ -257,6 +257,77 @@ export async function clearSession(db: D1Database, userId: string): Promise<void
   await db.prepare('DELETE FROM telegram_sessions WHERE telegram_user_id = ?').bind(userId).run();
 }
 
+// ---------- Receipt queue ----------
+// An album of receipts arrives as parallel webhook deliveries. Each file is
+// staged and queued, and only the update that claims the session reviews one;
+// the rest wait until the receipt under review is saved or skipped.
+
+/** Put a staged expense import in the user's queue, in message order. */
+export async function queueExpenseImport(db: D1Database, token: string, userId: string, order: number): Promise<void> {
+  await db
+    .prepare('UPDATE expense_invoice_imports SET queued_for = ?, queued_order = ? WHERE token = ?')
+    .bind(userId, order, token)
+    .run();
+}
+
+export async function countQueuedExpenseImports(db: D1Database, userId: string): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM expense_invoice_imports WHERE queued_for = ? AND expires_at > datetime('now')")
+    .bind(userId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/** Take the oldest queued import off the queue and return its token. */
+export async function popQueuedExpenseImport(db: D1Database, userId: string): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `UPDATE expense_invoice_imports SET queued_for = NULL, queued_order = NULL
+       WHERE token = (SELECT token FROM expense_invoice_imports
+                      WHERE queued_for = ? AND expires_at > datetime('now')
+                      ORDER BY queued_order, created_at LIMIT 1)
+       RETURNING token`
+    )
+    .bind(userId)
+    .first<{ token: string }>();
+  return row?.token ?? null;
+}
+
+export async function discardQueuedExpenseImports(db: D1Database, userId: string): Promise<number> {
+  const result = await db.prepare('DELETE FROM expense_invoice_imports WHERE queued_for = ?').bind(userId).run();
+  return result.meta.changes ?? 0;
+}
+
+/**
+ * Atomically start a receipt review: succeeds only when nothing else is in
+ * progress (no live session, or an upload prompt for the same company), so
+ * exactly one of several parallel deliveries wins.
+ */
+export async function claimReceiptReview(db: D1Database, userId: string, branchId: number): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT INTO telegram_sessions (telegram_user_id, branch_id, flow, step, data_json, expires_at)
+     VALUES (?, ?, 'expense_invoice', 'reading', '{}', datetime('now', '+30 minutes'))
+     ON CONFLICT (telegram_user_id) DO UPDATE SET branch_id = excluded.branch_id, flow = excluded.flow,
+       step = excluded.step, data_json = excluded.data_json, expires_at = excluded.expires_at,
+       updated_at = datetime('now')
+     WHERE (telegram_sessions.flow = 'expense_invoice' AND telegram_sessions.step = 'file'
+            AND telegram_sessions.branch_id = excluded.branch_id)
+        OR telegram_sessions.expires_at <= datetime('now')`
+    )
+    .bind(userId, branchId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/** Give up a claim that found nothing to review. */
+export async function releaseReceiptReview(db: D1Database, userId: string): Promise<void> {
+  await db
+    .prepare("DELETE FROM telegram_sessions WHERE telegram_user_id = ? AND flow = 'expense_invoice' AND step = 'reading'")
+    .bind(userId)
+    .run();
+}
+
 // ---------- Invoice attachments ----------
 
 export async function addInvoiceAttachment(

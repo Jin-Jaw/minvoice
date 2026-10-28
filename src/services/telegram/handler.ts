@@ -11,6 +11,7 @@ import {
   deleteExpenseInvoiceImport,
   getBranch,
   getClientForBranch,
+  getExpenseInvoiceImport,
   getInvoice,
   getInvoiceItems,
   getInvoiceSourcePdf,
@@ -30,7 +31,7 @@ import {
   type Invoice,
 } from '../../db/queries';
 import { adminUrl } from '../../lib/base-url';
-import { addDaysISO, formatDateHuman, todayInTz } from '../../lib/dates';
+import { addDaysISO, formatDateHuman, monthsBetween, shiftMonthYears, todayInTz } from '../../lib/dates';
 import { computeTotals, formatCents, isSupportedCurrency } from '../../lib/money';
 import { EXPENSE_CATEGORIES, MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
 import {
@@ -57,11 +58,17 @@ import {
   addInvoiceAttachment,
   asEmailAttachments,
   beginUpdate,
+  claimReceiptReview,
   claimUpdate,
   clearSession,
   consumeLinkToken,
+  countQueuedExpenseImports,
+  discardQueuedExpenseImports,
   getSession,
   listInvoiceAttachments,
+  popQueuedExpenseImport,
+  queueExpenseImport,
+  releaseReceiptReview,
   saveSession,
   setConnectionBranch,
   sha256Hex,
@@ -135,12 +142,14 @@ type ExpenseState = {
 
 const MAX_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_LINE_ITEMS = 20;
+/** Receipts one user can have waiting for review (a Telegram album holds 10). */
+const MAX_QUEUED_RECEIPTS = 20;
 
 const HELP = [
   '<b>Invoice bot</b>',
   '',
   '/newinvoice — create a draft',
-  '/uploadinvoice — upload a supplier invoice or receipt photo',
+  '/uploadinvoice — upload supplier invoices or receipt photos, one or many',
   '/newclient — add a client',
   '/invoices — recent invoices',
   '/drafts — draft invoices',
@@ -155,7 +164,7 @@ const HELP = [
 const EXPENSE_HELP = [
   '<b>Property / Flats expenses</b>',
   '',
-  '/uploadinvoice — upload a supplier invoice PDF or receipt photo',
+  '/uploadinvoice — upload supplier invoice PDFs or receipt photos, one or many',
   '/income — add income received from a client',
   '/newclient — add a client or tenant',
   '/workspace — switch company/workspace',
@@ -451,7 +460,7 @@ async function handleCallback(
   }
   if (data === 'addclient') return startAddClient(env, api, branchId, userId, chatId);
   if (data === 'workspaces') return showWorkspaceList(env, api, branchId, chatId);
-  if (data === 'cancel') {
+  if (data === 'cancel' || data === 'expskip' || data === 'expcancelall') {
     const session = await getSession(env.DB, userId);
     const staged =
       session?.flow === 'expense_invoice'
@@ -461,7 +470,25 @@ async function handleCallback(
           : undefined;
     if (staged) await deleteExpenseInvoiceImport(env.DB, staged);
     await clearSession(env.DB, userId);
-    await api.sendMessage(chatId, 'Cancelled.', homeKeyboard(activeBranch?.invoicing_enabled === 0));
+    // Cancel or Skip on one receipt moves on to the next one waiting; Cancel all drops those too.
+    const discarded = data === 'expcancelall' ? await discardQueuedExpenseImports(env.DB, userId) : 0;
+    if (
+      session?.flow === 'expense_invoice' &&
+      !discarded &&
+      (await countQueuedExpenseImports(env.DB, userId)) &&
+      (await reviewNextReceipt(env, api, branchId, userId, chatId))
+    ) {
+      return;
+    }
+    await api.sendMessage(
+      chatId,
+      discarded
+        ? `Cancelled. ${discarded === 1 ? 'The receipt waiting was' : `The ${discarded} receipts waiting were`} discarded.`
+        : data === 'expskip'
+          ? 'Skipped. No more receipts waiting.'
+          : 'Cancelled.',
+      homeKeyboard(activeBranch?.invoicing_enabled === 0)
+    );
     return;
   }
   if (data === 'attachdone') {
@@ -1124,7 +1151,11 @@ async function choosePaymentDetails(
   await setPaymentDetails(env, api, branchId, userId, chatId, state, saved || null);
 }
 
-/** Copy a previous invoice's lines, currency and payment details, dated today. */
+/**
+ * Copy a previous invoice's lines, currency and payment details, dated today.
+ * Months written in the lines ("Tech art services : September 2026") move
+ * forward to the draft's month, as Duplicate does in the web app.
+ */
 async function repeatInvoice(
   env: Bindings,
   api: TelegramApi,
@@ -1138,13 +1169,14 @@ async function repeatInvoice(
   if (!source || source.client_id !== state.clientId) throw new Error('That invoice can’t be repeated for this client.');
   const items = await getInvoiceItems(env.DB, invoiceId);
   if (!items.length) throw new Error(`${source.number} has no line items to copy.`);
+  const monthsLater = Math.max(0, monthsBetween(source.issue_date, state.issueDate));
   state.items = items.slice(0, MAX_LINE_ITEMS).map((item) => ({
-    description: item.description,
+    description: shiftMonthYears(item.description, monthsLater),
     quantity: item.quantity,
     unit_price_cents: item.unit_price_cents,
   }));
   state.currency = source.currency;
-  state.subject = source.subject;
+  state.subject = source.subject ? shiftMonthYears(source.subject, monthsLater) : source.subject;
   state.notes = source.notes;
   state.notesChosen = true;
   state.repeatedFrom = source.number;
@@ -1711,14 +1743,20 @@ async function startExpenseInvoiceUpload(
   const branch = await getBranch(env.DB, branchId);
   if (!branch) throw new Error('That workspace is unavailable.');
   await saveSession(env.DB, userId, branchId, 'expense_invoice', 'file', {});
+  // Receipts left waiting from an earlier batch come first.
+  if ((await countQueuedExpenseImports(env.DB, userId)) && (await reviewNextReceipt(env, api, branchId, userId, chatId))) return;
   await api.sendMessage(
     chatId,
-    '<b>Upload a supplier invoice or receipt</b>\n\nSend a text-based PDF or a photo of the receipt (maximum 1.5 MB). I’ll read the supplier, date and total for you to confirm.',
+    '<b>Upload supplier invoices or receipts</b>\n\nSend text-based PDFs or photos of receipts (maximum 1.5 MB each). Send several at once, or an album, and I’ll go through them one by one. I’ll read the supplier, date and total of each for you to confirm.',
     [[{ text: 'Cancel', callback_data: 'cancel' }]]
   );
 }
 
-async function handleExpenseInvoiceUpload(
+/**
+ * A file sent for an expense: stage it, queue it, and review it now unless
+ * another receipt is already under review. A queued file gets a 👍 instead.
+ */
+async function queueExpenseFile(
   env: Bindings,
   api: TelegramApi,
   branchId: number,
@@ -1726,6 +1764,9 @@ async function handleExpenseInvoiceUpload(
   chatId: string,
   message: TelegramMessage
 ): Promise<void> {
+  if ((await countQueuedExpenseImports(env.DB, userId)) >= MAX_QUEUED_RECEIPTS) {
+    throw new Error(`Up to ${MAX_QUEUED_RECEIPTS} receipts can wait at once. Save or skip these first.`);
+  }
   const source = evidenceSource(message);
   if ((source.size ?? 0) > MAX_EXPENSE_ATTACHMENT_BYTES) throw new Error('That file is larger than the 1.5 MB limit.');
   const bytes = await api.downloadFile(source.fileId, MAX_EXPENSE_ATTACHMENT_BYTES);
@@ -1733,23 +1774,6 @@ async function handleExpenseInvoiceUpload(
   if (!mime || (mime === 'application/pdf') !== (source.declaredMime === 'application/pdf')) {
     throw new Error('The file contents are not a valid PDF, JPG, PNG or WebP.');
   }
-  await api.sendChatAction(chatId, 'typing').catch(() => undefined);
-
-  const settings = await getSettings(env.DB, branchId);
-  let parsed: ParsedExpenseInvoice;
-  let detectedBranch: number | null = null;
-  if (mime === 'application/pdf') {
-    const extraction = await extractExpenseInvoiceText(bytes);
-    const branches = await listBranches(env.DB);
-    parsed = parseExpenseInvoice(extraction.lines, branches.map((branch) => branch.name));
-    // Supplier invoices name who they were billed to; file them under that company.
-    detectedBranch = detectExpenseBranch(extraction.lines, branches);
-  } else {
-    parsed = await readReceiptImage(env.AI, bytes, mime as ReceiptImageMime);
-  }
-  if (!parsed.currency) parsed.currency = settings.currency;
-  if (!parsed.expenseDate) parsed.expenseDate = todayInTz(settings.timezone);
-
   const token = newExpenseImportToken();
   const fallbackName = mime === 'application/pdf' ? `supplier-invoice-${message.message_id}` : `receipt-${message.message_id}`;
   await storeExpenseInvoiceImport(env.DB, token, {
@@ -1759,10 +1783,77 @@ async function handleExpenseInvoiceUpload(
     size_bytes: bytes.byteLength,
     sha256: await sha256Hex(bytes),
   });
+  await queueExpenseImport(env.DB, token, userId, message.message_id);
+  if ((await reviewNextReceipt(env, api, branchId, userId, chatId)) !== token) {
+    await api.setMessageReaction(chatId, message.message_id, '👍').catch(() => undefined);
+  }
+}
+
+/**
+ * Show the next queued receipt unless one is already under review, and
+ * return its token. A receipt that can't be read is reported and dropped, and
+ * the one after it is shown instead.
+ */
+async function reviewNextReceipt(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string
+): Promise<string | null> {
+  for (let attempt = 0; attempt <= MAX_QUEUED_RECEIPTS; attempt++) {
+    if (!(await claimReceiptReview(env.DB, userId, branchId))) return null;
+    const token = await popQueuedExpenseImport(env.DB, userId);
+    if (!token) {
+      await releaseReceiptReview(env.DB, userId);
+      // A file queued while this claim was held could not claim it itself.
+      if (await countQueuedExpenseImports(env.DB, userId)) continue;
+      return null;
+    }
+    try {
+      await reviewStagedExpense(env, api, branchId, userId, chatId, token);
+      return token;
+    } catch (error) {
+      console.error(JSON.stringify({ event: 'telegram_receipt_read_failed', userId, error: String(error) }));
+      await deleteExpenseInvoiceImport(env.DB, token);
+      await releaseReceiptReview(env.DB, userId);
+      await api.sendMessage(chatId, `❌ ${humanError(error)}`).catch(() => undefined);
+    }
+  }
+  return null;
+}
+
+async function reviewStagedExpense(
+  env: Bindings,
+  api: TelegramApi,
+  branchId: number,
+  userId: string,
+  chatId: string,
+  token: string
+): Promise<void> {
+  const file = await getExpenseInvoiceImport(env.DB, token);
+  if (!file) throw new Error('That receipt expired. Send it again.');
+  await api.sendChatAction(chatId, 'typing').catch(() => undefined);
+
+  const settings = await getSettings(env.DB, branchId);
+  let parsed: ParsedExpenseInvoice;
+  let detectedBranch: number | null = null;
+  if (file.mime === 'application/pdf') {
+    const extraction = await extractExpenseInvoiceText(file.bytes);
+    const branches = await listBranches(env.DB);
+    parsed = parseExpenseInvoice(extraction.lines, branches.map((branch) => branch.name));
+    // Supplier invoices name who they were billed to; file them under that company.
+    detectedBranch = detectExpenseBranch(extraction.lines, branches);
+  } else {
+    parsed = await readReceiptImage(env.AI, file.bytes, file.mime as ReceiptImageMime);
+  }
+  if (!parsed.currency) parsed.currency = settings.currency;
+  if (!parsed.expenseDate) parsed.expenseDate = todayInTz(settings.timezone);
+
   const state: ExpenseState = {
     token,
     parsed,
-    kind: mime === 'application/pdf' ? 'pdf' : 'image',
+    kind: file.mime === 'application/pdf' ? 'pdf' : 'image',
     targetBranchId: detectedBranch ?? branchId,
     branchDetected: detectedBranch !== null && detectedBranch !== branchId,
     clientId: null,
@@ -1770,14 +1861,31 @@ async function handleExpenseInvoiceUpload(
 
   if (parsed.amountCents === null) {
     await saveSession(env.DB, userId, branchId, 'expense_invoice', 'amount', state);
+    const waiting = await countQueuedExpenseImports(env.DB, userId);
     await api.sendMessage(
       chatId,
-      `${await expenseSummary(env, state)}\n\nI couldn’t read the total. Send the amount paid, e.g. <b>12.40</b> or <b>12.40 EUR</b>.`,
-      [await reviewInAppRow(env, state), [{ text: 'Cancel', callback_data: 'cancel' }]]
+      `${await expenseSummary(env, state)}${waitingLine(waiting)}\n\nI couldn’t read the total. Send the amount paid, e.g. <b>12.40</b> or <b>12.40 EUR</b>.`,
+      [await reviewInAppRow(env, state), ...queueControls(waiting)]
     );
     return;
   }
   await showExpenseReview(env, api, branchId, userId, chatId, state, 'Is the total right?');
+}
+
+function waitingLine(waiting: number): string {
+  if (!waiting) return '';
+  return `\n\n📥 ${waiting} more ${waiting === 1 ? 'receipt' : 'receipts'} waiting.`;
+}
+
+/** Cancel on its own, or Skip and Cancel all while other receipts wait. */
+function queueControls(waiting: number): InlineKeyboard {
+  if (!waiting) return [[{ text: 'Cancel', callback_data: 'cancel' }]];
+  return [
+    [
+      { text: '⏭ Skip this one', callback_data: 'expskip' },
+      { text: 'Cancel all', callback_data: 'expcancelall' },
+    ],
+  ];
 }
 
 /** Opens the staged import in the workspace of the company it is filed under. */
@@ -1825,8 +1933,10 @@ async function showExpenseReview(
   const parsed = state.parsed!;
   if (parsed.amountCents === null || !parsed.currency) return askExpenseAmount(env, api, branchId, userId, chatId);
   await saveSession(env.DB, userId, branchId, 'expense_invoice', 'confirm', state);
-  const multipleCompanies = (await listBranches(env.DB)).length > 1;
-  await api.sendMessage(chatId, `${await expenseSummary(env, state)}\n\n${question}`, [
+  const [branches, waiting] = await Promise.all([listBranches(env.DB), countQueuedExpenseImports(env.DB, userId)]);
+  const multipleCompanies = branches.length > 1;
+  const reviewInApp = (await reviewInAppRow(env, state))[0];
+  await api.sendMessage(chatId, `${await expenseSummary(env, state)}${waitingLine(waiting)}\n\n${question}`, [
     [{ text: `✅ Save ${formatCents(parsed.amountCents, parsed.currency)}`, callback_data: 'expenseconfirm:1' }],
     [
       { text: '✏️ Amount', callback_data: 'expenseamount:1' },
@@ -1837,7 +1947,7 @@ async function showExpenseReview(
       { text: '👤 Client', callback_data: 'expedit:client' },
     ],
     ...(multipleCompanies ? [[{ text: '🏢 Company', callback_data: 'expedit:company' }]] : []),
-    [(await reviewInAppRow(env, state))[0], { text: 'Cancel', callback_data: 'cancel' }],
+    ...(waiting ? [[reviewInApp], ...queueControls(waiting)] : [[reviewInApp, { text: 'Cancel', callback_data: 'cancel' }]]),
   ]);
 }
 
@@ -2033,16 +2143,18 @@ async function confirmExpenseImport(env: Bindings, api: TelegramApi, branchId: n
     currency: parsed.currency,
   });
   if (!expenseId) throw new Error('That expense import expired or was already saved.');
+  // Clear before counting: a receipt queued after this point claims the review itself.
   await clearSession(env.DB, userId);
-  const active = await getBranch(env.DB, branchId);
+  const [active, waiting] = await Promise.all([getBranch(env.DB, branchId), countQueuedExpenseImports(env.DB, userId)]);
   await api.sendMessage(
     chatId,
     `✅ Expense saved to <b>${esc(target.name)}</b>: ${esc(parsed.payee)} — ${esc(formatCents(parsed.amountCents, parsed.currency))}`,
     [
       [{ text: 'View expense', url: adminUrl(env, `/admin/expenses/${expenseId}`, target) }],
-      ...homeKeyboard(active?.invoicing_enabled === 0),
+      ...(waiting ? [] : homeKeyboard(active?.invoicing_enabled === 0)),
     ]
   );
+  if (waiting) await reviewNextReceipt(env, api, branchId, userId, chatId);
 }
 
 // ---------- Files sent to the bot ----------
@@ -2061,14 +2173,12 @@ async function handleAttachment(
     return attachIncomeFile(env, api, branchId, userId, chatId, session.step, state, message);
   }
   if (session?.branch_id === branchId && session.flow === 'expense_invoice') {
-    // A new file mid-review replaces the pending import.
-    const pending = (JSON.parse(session.data_json) as ExpenseState).token;
-    if (pending) await deleteExpenseInvoiceImport(env.DB, pending);
-    return handleExpenseInvoiceUpload(env, api, branchId, userId, chatId, message);
+    // A new file mid-review waits behind the receipt under review.
+    return queueExpenseFile(env, api, branchId, userId, chatId, message);
   }
   if (!session || session.branch_id !== branchId || session.flow !== 'attach_invoice') {
     // No flow in progress: a file on its own is treated as an expense upload.
-    if (!session) return handleExpenseInvoiceUpload(env, api, branchId, userId, chatId, message);
+    if (!session) return queueExpenseFile(env, api, branchId, userId, chatId, message);
     throw new Error('Choose “Attach files” on an invoice before sending a file.');
   }
   const invoiceId = Number((JSON.parse(session.data_json) as { invoiceId: number }).invoiceId);
