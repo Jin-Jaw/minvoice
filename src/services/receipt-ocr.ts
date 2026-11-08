@@ -57,7 +57,9 @@ function text(value: unknown, max: number): string | null {
   return cleaned && cleaned.toLowerCase() !== 'null' ? cleaned.slice(0, max) : null;
 }
 
-function isoDate(value: unknown): string | null {
+function isoDate(raw: unknown): string | null {
+  // Bank receipts print 2026/10/13, and the model sometimes copies it as is.
+  const value = typeof raw === 'string' ? raw.replace(/^(\d{4})\/(\d{2})\/(\d{2})$/, '$1-$2-$3') : raw;
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const parsed = new Date(`${value}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return null;
@@ -121,13 +123,16 @@ export async function readReceiptImage(
   return parseReceiptFields(raw);
 }
 
+// Tested against a BLOM Bank receipt photo (USD 12,048.00 less 48.00
+// commission, net 12,000.00), upright and on its side: paid is the net amount.
 const INCOME_PROMPT = [
-  'You read documents that show money received, for bookkeeping: letting agent rent statements, remittance advice, payment receipts and invoices.',
+  'You read documents that show money received, for bookkeeping: bank receipts, letting agent rent statements, remittance advice, payment receipts and invoices.',
   'Return JSON only, with these keys:',
-  '- paid: the amount actually paid to the recipient after any fees or deductions, as a plain number, e.g. 267.6. On a rent statement this is the payment to the landlord. null if not shown.',
-  '- gross: the amount before fees or deductions, such as the rent collected, as a plain number. null if not shown or the same as paid.',
+  '- paid: the amount actually paid to the recipient after any fees or deductions, as a plain number, e.g. 267.6. On a rent statement this is the payment to the landlord. On a bank receipt this is the net amount after the bank’s commission (المبلغ الصافي). null if not shown.',
+  '- gross: the amount before fees or deductions, such as the rent collected or a bank transfer before commission, as a plain number. null if not shown or the same as paid.',
   '- currency: ISO 4217 code (GBP for £, EUR for €, USD for $ unless another dollar is stated). null if unknown.',
   '- date: the payment or statement date as YYYY-MM-DD, or null.',
+  '- reference: the transaction, transfer or document number, or null.',
   'Never guess a number you cannot read.',
 ].join('\n');
 
@@ -138,8 +143,9 @@ const INCOME_RESPONSE_SCHEMA = {
     gross: { type: ['number', 'null'] },
     currency: { type: ['string', 'null'] },
     date: { type: ['string', 'null'] },
+    reference: { type: ['string', 'null'] },
   },
-  required: ['paid', 'gross', 'currency', 'date'],
+  required: ['paid', 'gross', 'currency', 'date', 'reference'],
 };
 
 /** Model output for an income document → amount options for the user to choose from. */
@@ -152,7 +158,8 @@ export function parseIncomeFields(raw: unknown): IncomeDocumentRead {
   const gross = amountToCents(fields.gross);
   if (paid !== null) options.push({ kind: 'paid', cents: paid, currency });
   if (gross !== null && gross !== paid) options.push({ kind: 'gross', cents: gross, currency });
-  return { options, date: isoDate(fields.date) };
+  const reference = text(fields.reference, 80);
+  return { options, date: isoDate(fields.date), ...(reference ? { reference } : {}) };
 }
 
 /** Never throws, like readReceiptImage: a failed read offers no amounts and the bot asks for one. */

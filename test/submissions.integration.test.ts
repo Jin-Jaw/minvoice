@@ -279,7 +279,7 @@ describe('staff income requests', () => {
     expect(lastText('staff')).toContain('Reason: Wrong month, please resend');
   });
 
-  it('approves an income photo from the Adhoc client without asking who paid, and keeps the invoice', async () => {
+  it('approves a bank receipt photo from the Adhoc client at the net amount, and keeps the receipt', async () => {
     const clientId = await createClient(
       DB,
       { name: 'AdHoc Studio Inc', email: null, address: null, default_rate_cents: null, payment_terms_days: null },
@@ -287,12 +287,14 @@ describe('staff income requests', () => {
     );
     await linkClientToBranch(DB, clientId, arabiaBranch);
     await allowStaff();
-    // The reader names the issuer as the supplier; income never uses it.
-    aiAnswer = { total: 800, currency: 'USD', supplier: 'Jin&Jaw Arabia S.A.R.L', date: '2026-09-10', reference: 'JJA-7' };
+    // A BLOM Bank receipt: USD 12,048.00 less 48.00 commission. The income
+    // reader's net amount is used; `total` is what the expense reader would take.
+    aiAnswer = { paid: 12000, gross: 12048, total: 12048, currency: 'USD', date: '2026-10-13', reference: '024/02/353/1659133/1/3' };
     await staffPhoto();
     expect(lastText('staff')).toContain('Is this an expense or income?');
     await staffTap('kind:income');
     expect(lastText('staff')).toContain('Received from: AdHoc Studio Inc');
+    expect(lastText('staff')).toContain('Amount: <b>$12,000.00</b>');
     expect(withText('staff').map(textOf).join('\n')).not.toContain('Who paid?');
     await staffTap('submit');
     await adminTap(buttonsOf(last('admin')).find((b) => b.callback_data?.startsWith('subok:'))!.callback_data!);
@@ -302,11 +304,11 @@ describe('staff income requests', () => {
       branch_id: arabiaBranch,
       client_id: clientId,
       payer: 'AdHoc Studio Inc',
-      amount_cents: 80000,
+      amount_cents: 1200000,
       currency: 'USD',
-      income_date: '2026-09-10',
+      income_date: '2026-10-13',
     });
-    expect(String(income!.reference)).toContain('JJA-7');
+    expect(String(income!.reference)).toContain('024/02/353/1659133/1/3');
     const evidence = await DB.prepare('SELECT mime FROM income_attachments WHERE income_id = ?').bind(income!.id).first('mime');
     expect(evidence).toBe('image/jpeg');
   });

@@ -190,7 +190,7 @@ function labelledDate(lines: string[]): string | null {
   return null;
 }
 
-function invoiceReference(lines: string[]): string | null {
+export function invoiceReference(lines: string[]): string | null {
   for (const line of lines) {
     const labelled = line.match(/\binvoice\s*(?:number|no\.?|#)\s*:?\s*([A-Z0-9][A-Z0-9./_-]*)/i);
     if (labelled) return labelled[1].slice(0, 120);
@@ -300,7 +300,7 @@ export function parseExpenseInvoice(lines: string[], buyerNames: string[] = []):
 /** paid: what reached the recipient after deductions; gross: before fees; total: an invoice's final total. */
 export type IncomeAmountKind = 'paid' | 'gross' | 'total';
 export type IncomeAmountOption = { kind: IncomeAmountKind; cents: number; currency: string | null };
-export type IncomeDocumentRead = { options: IncomeAmountOption[]; date: string | null };
+export type IncomeDocumentRead = { options: IncomeAmountOption[]; date: string | null; reference?: string | null };
 
 const PAID_LABEL =
   /\b(?:amount\s+paid|paid\s+to\s+you|payment\s+to|net\s+(?:payment|amount|rent|income)|total\s+(?:paid|received)|amount\s+received|remittance)\b/i;

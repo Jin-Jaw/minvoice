@@ -227,7 +227,7 @@ commands are not replayed.
 | `/newinvoice` | Pick or add a client → optional "Repeat last invoice" (copies the newest non-void invoice for that client; a month written as `September 2026` in its lines and subject moves forward to the new invoice date, as Duplicate does in the web app) → currency buttons → lines as `description - price` or `description - 3 x 450` (running subtotal, undo) → due-date buttons → saved payment details → summary where lines, invoice date, due date, tax and payment details can each be changed → create. |
 | `/invoices`, `/drafts`, `/unpaid`, `/overdue` | Up to 10 invoices; each offers View, PDF, Attach files, Send, Mark paid (today, yesterday or a typed date). Send emails a private copy with the attachments to the company's business email, then the client. When the company has no business email, the copy goes to `jad@jin-jaw.co.uk`, hardcoded in `src/services/email.ts`. |
 | `/uploadinvoice`, `/expense` | One or more PDFs (text extraction) or receipt photos (OCR), sent separately or as an album → each is reviewed in turn: confirm or change amount, date, category, client and paying company → saved as an expense with the file as evidence. Files sent while one is under review wait in a queue (the bot reacts 👍 to each); the review shows how many are waiting. Cancel or Skip drops only the receipt on screen and moves to the next; Cancel all also discards the queue. Up to 20 can wait; queued files expire after 24 hours like other staged imports. PDFs are filed under the company they were billed to. |
-| `/income` | Property / Flats only: money received without an invoice (`income_entries`), counted as "received" in reports. A PDF or photo sent after the payer is chosen, or through "Attach invoice" on the confirm screen, is saved with the entry in `income_attachments` and shown on the Income page. A file sent at the amount question is also read: `parseIncomeDocument` handles PDF text and `readIncomeImage` handles photos (Workers AI). From a letting agent statement the bot offers the payment to the landlord ("paid to you") and the rent before fees; from other documents it offers the final total. The bot also offers the date read from the file. The user always picks or types the amount. |
+| `/income` | Property / Flats only: money received without an invoice (`income_entries`), counted as "received" in reports. A PDF or photo sent after the payer is chosen, or through "Attach invoice" on the confirm screen, is saved with the entry in `income_attachments` and shown on the Income page. A file sent at the amount question is also read: `parseIncomeDocument` handles PDF text and `readIncomeImage` handles photos (Workers AI). From a letting agent statement the bot offers the payment to the landlord ("paid to you") and the rent before fees; from a bank receipt photo, the net amount after the bank's commission ("paid to you") and the amount before it; from other documents it offers the final total. The bot also offers the date read from the file. The user always picks or types the amount. |
 | `/newclient` | Asks for a name and an optional email, then adds the client to the active company. The Property / Flats menu has the same action as "Add client". A client with the same name in the workspace is reused. The expense Client picker has a "New client" button that runs the same steps and returns to the expense. |
 | `/workspace`, `/workspaces` | Switch the company the bot acts for. |
 | `/pending` | Staff requests waiting for approval, oldest first. Tap one to see it again with its invoice and the Approve and Reject buttons (see Staff submissions bot). |
@@ -283,14 +283,17 @@ admin bot. `/submitters` also shows the link to share with staff when
 
 `/expense` or `/income` in the staff bot starts a request. The sender then
 sends a photo or PDF of the invoice, or types it, for example
-`Taxi to airport 25` or `120 EUR`. Photos are read by the same Workers AI
-model as receipt photos in the admin bot, and PDFs by the same text
-extraction as supplier invoices. Income always comes from Adhoc, so the bot
-never asks who paid: it records the company's first active client whose name
-starts with "Adhoc" (AdHoc Studio Inc), or just "Adhoc" if there is none. It
-ignores the supplier it reads from an income invoice, which is Jin&Jaw Arabia
-itself, and any name typed with the amount. A file or an amount sent without
-a command makes the bot ask whether it is an expense or income.
+`Taxi to airport 25` or `120 EUR`. Expense files are read like receipts and
+supplier invoices in the admin bot. Income files are read like a file sent to
+`/income` in the admin bot (`readIncomeImage` and `parseIncomeDocument`), and
+the request takes the amount that reached the account: on a bank receipt
+that is the net amount after the bank's commission (for example USD
+12,000.00, not the USD 12,048.00 before a 48.00 commission). Income always
+comes from Adhoc, so the bot never asks who paid: it records the company's
+first active client whose name starts with "Adhoc" (AdHoc Studio Inc), or
+just "Adhoc" if there is none. It ignores any name typed with the amount. A
+file or an amount sent without a command makes the bot ask whether it is an
+expense or income.
 
 The summary lets the sender change the amount, the date, the supplier and
 category (expenses only) and a note for the admin, then send it for
