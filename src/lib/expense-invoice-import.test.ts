@@ -162,6 +162,11 @@ describe('income document parsing', () => {
     ]);
   });
 
+  it('takes the net amount from a bank receipt, not the amount before commission', () => {
+    const lines = ['BLOM BANK RECEIPT', 'Date : 2026/10/13', 'Amount : 12,048.00 USD', 'Commission : 48.00 USD', 'Net Amount : 12,000.00 USD'];
+    expect(parseIncomeDocument(lines).options).toEqual([{ kind: 'paid', cents: 1200000, currency: 'USD' }]);
+  });
+
   it('falls back to the final total and ignores dates written with dots', () => {
     expect(parseIncomeDocument(['Invoice 12', 'Date: 03.09.2026', 'Total: £450.00'])).toEqual({
       options: [{ kind: 'total', cents: 45000, currency: 'GBP' }],

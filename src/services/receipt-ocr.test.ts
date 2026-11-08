@@ -94,6 +94,20 @@ describe('parseIncomeFields', () => {
     expect(parseIncomeFields('{"paid": 950, "gross": 950}').options).toEqual([{ kind: 'paid', cents: 95000, currency: null }]);
   });
 
+  it('reads a bank receipt: the net amount after commission first, its reference and a slashed date', () => {
+    // What the model returned for a BLOM Bank receipt: USD 12,048.00 less 48.00 commission.
+    expect(
+      parseIncomeFields({ paid: 12000, gross: 12048, currency: 'USD', date: '2026/10/13', reference: '024/02/353/1659133/1/3' })
+    ).toEqual({
+      options: [
+        { kind: 'paid', cents: 1200000, currency: 'USD' },
+        { kind: 'gross', cents: 1204800, currency: 'USD' },
+      ],
+      date: '2026-10-13',
+      reference: '024/02/353/1659133/1/3',
+    });
+  });
+
   it('offers nothing when the model fails', async () => {
     const failing = { run: async () => { throw new Error('boom'); } } as unknown as Ai;
     expect(await readIncomeImage(failing, new Uint8Array([0xff, 0xd8, 0xff]), 'image/jpeg')).toEqual({ options: [], date: null });

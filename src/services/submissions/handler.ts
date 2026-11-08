@@ -7,9 +7,17 @@ import type { Bindings } from '../../env';
 import { getSettings, listBranches, type Branch, type Settings } from '../../db/queries';
 import { addDaysISO, formatDateHuman, todayInTz } from '../../lib/dates';
 import { EXPENSE_CATEGORIES, isIsoDate, MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
-import { extractExpenseInvoiceText, parseExpenseInvoice, type ParsedExpenseInvoice } from '../../lib/expense-invoice-import';
+import {
+  extractExpenseInvoiceText,
+  invoiceReference,
+  parseExpenseInvoice,
+  parseIncomeDocument,
+  type IncomeAmountKind,
+  type IncomeDocumentRead,
+  type ParsedExpenseInvoice,
+} from '../../lib/expense-invoice-import';
 import { parseMoneyReply, parseQuickEntry } from '../../lib/telegram-input';
-import { readReceiptImage, parseReceiptFields, type ReceiptImageMime } from '../receipt-ocr';
+import { readIncomeImage, readReceiptImage, parseReceiptFields, type ReceiptImageMime } from '../receipt-ocr';
 import { TelegramApi, type InlineKeyboard, type TelegramMessage, type TelegramUser } from '../telegram/api';
 import { acknowledgeUpdate, logUpdateTiming } from '../telegram/delivery';
 import type { TelegramUpdate } from '../telegram/handler';
@@ -398,8 +406,7 @@ function readNote(draft: Submission): string {
 /**
  * Read the draft's file and copy what was found onto it. A value read from
  * the file replaces a typed one, because a new file is usually a correction.
- * Income invoices name the paying client, not the supplier, so the supplier
- * the reader finds is only used for expenses.
+ * Income always comes from Adhoc, so only expenses take the supplier read.
  */
 async function applyEvidence(ctx: Context, draft: Submission): Promise<Submission> {
   const { env } = ctx;
@@ -408,7 +415,10 @@ async function applyEvidence(ctx: Context, draft: Submission): Promise<Submissio
     .first<{ file_bytes: ArrayBuffer | number[] | null }>();
   if (!row?.file_bytes) return draft;
   const bytes = row.file_bytes instanceof ArrayBuffer ? new Uint8Array(row.file_bytes) : Uint8Array.from(row.file_bytes);
-  const parsed = await readEvidence(env, bytes, draft.file_mime!);
+  const parsed =
+    draft.kind === 'income'
+      ? await readIncomeEvidence(env, bytes, draft.file_mime!)
+      : await readEvidence(env, bytes, draft.file_mime!);
   const today = await todayFor(ctx);
   const patch: DraftPatch = {};
   if (parsed.amountCents !== null) {
@@ -436,6 +446,32 @@ async function readEvidence(env: Bindings, bytes: Uint8Array, mime: string): Pro
     console.error(JSON.stringify({ event: 'submission_pdf_read_failed', error: String(error) }));
     return parseReceiptFields(null);
   }
+}
+
+/** The amount that reached the account comes first, e.g. a bank receipt's net amount after commission. */
+const INCOME_AMOUNT_ORDER: readonly IncomeAmountKind[] = ['paid', 'total', 'gross'];
+
+/** Income files are read like files sent to /income in the admin bot. */
+async function readIncomeEvidence(env: Bindings, bytes: Uint8Array, mime: string): Promise<ParsedExpenseInvoice> {
+  let read: IncomeDocumentRead = { options: [], date: null };
+  if (mime !== 'application/pdf') {
+    read = await readIncomeImage(env.AI, bytes, mime as ReceiptImageMime);
+  } else {
+    try {
+      const { lines } = await extractExpenseInvoiceText(bytes);
+      read = { ...parseIncomeDocument(lines), reference: invoiceReference(lines) };
+    } catch (error) {
+      console.error(JSON.stringify({ event: 'submission_pdf_read_failed', error: String(error) }));
+    }
+  }
+  const amount = INCOME_AMOUNT_ORDER.map((kind) => read.options.find((option) => option.kind === kind)).find(Boolean);
+  return {
+    ...parseReceiptFields(null),
+    amountCents: amount?.cents ?? null,
+    currency: amount?.currency ?? null,
+    expenseDate: read.date,
+    reference: read.reference ?? null,
+  };
 }
 
 // ---------- Review and send ----------
