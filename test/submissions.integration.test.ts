@@ -249,6 +249,27 @@ describe('staff expense requests', () => {
     expect(expense).toEqual({ payee: 'Airport Taxi Co', amount_cents: 4500, currency: 'USD', category: 'Travel & accommodation' });
     expect(await DB.prepare('SELECT COUNT(*) AS n FROM expense_attachments').first('n')).toBe(0);
   });
+
+  it('records a bank deposit advice at the amount received, not the converted amount', async () => {
+    await allowStaff();
+    // An LGB Bank cash deposit advice: USD 1,341.89 received, sent on as GBP 1,000.00.
+    aiAnswer = {
+      total: 1000,
+      currency: 'GBP',
+      tax: 7.05,
+      supplier: 'LGB Bank',
+      date: '2026-10-13',
+      received: 1341.89,
+      received_currency: 'USD',
+    };
+    await staffTap('expense');
+    await staffPhoto();
+    expect(lastText('staff')).toContain('Amount: <b>$1,341.89</b>');
+    await staffTap('submit');
+    await adminTap(buttonsOf(last('admin')).find((b) => b.callback_data?.startsWith('subok:'))!.callback_data!);
+    const expense = await DB.prepare('SELECT amount_cents, tax_cents, currency, expense_date FROM expenses').first();
+    expect(expense).toEqual({ amount_cents: 134189, tax_cents: 0, currency: 'USD', expense_date: '2026-10-13' });
+  });
 });
 
 describe('staff income requests', () => {
