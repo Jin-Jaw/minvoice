@@ -107,6 +107,25 @@ function branchStatement(db: D1Database): D1PreparedStatement {
     .bind(SUBMISSIONS_WORKSPACE_SLUG);
 }
 
+/** Staff income always comes from Adhoc, so the bot never asks who paid. */
+const INCOME_PAYER = 'Adhoc';
+
+/**
+ * The payer on staff income: the company's Adhoc client by its full name, so
+ * approval links the entry to that client, or plain "Adhoc" when the company
+ * has no such client.
+ */
+export async function getIncomePayer(db: D1Database, branchId: number): Promise<string> {
+  const name = await db
+    .prepare(
+      `SELECT c.name FROM clients c JOIN client_branches cb ON cb.client_id = c.id
+       WHERE cb.branch_id = ? AND c.archived = 0 AND c.name LIKE ? ORDER BY c.id LIMIT 1`
+    )
+    .bind(branchId, `${INCOME_PAYER}%`)
+    .first<string>('name');
+  return name ?? INCOME_PAYER;
+}
+
 const DRAFT_EXPIRED = 'That request expired. Start again with /expense or /income.';
 
 export type SubmissionsUpdateStart = {

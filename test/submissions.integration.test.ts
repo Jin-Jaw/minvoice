@@ -257,8 +257,10 @@ describe('staff income requests', () => {
     await staffText('Acme Studio 1200');
     expect(lastText('staff')).toContain('Is this an expense or income?');
     await staffTap('kind:income');
-    expect(lastText('staff')).toContain('Received from: Acme Studio');
+    // Income always comes from Adhoc; a typed name is replaced and nobody is asked.
+    expect(lastText('staff')).toContain('Received from: Adhoc');
     expect(lastText('staff')).toContain('Amount: <b>$1,200.00</b>');
+    expect(buttonsOf(last('staff')).map((b) => b.callback_data)).not.toContain('edit:party');
     await staffTap('submit');
 
     const card = last('admin')!;
@@ -277,10 +279,10 @@ describe('staff income requests', () => {
     expect(lastText('staff')).toContain('Reason: Wrong month, please resend');
   });
 
-  it('approves an income photo, links the client by name and keeps the invoice', async () => {
+  it('approves an income photo from the Adhoc client without asking who paid, and keeps the invoice', async () => {
     const clientId = await createClient(
       DB,
-      { name: 'Acme Studio', email: null, address: null, default_rate_cents: null, payment_terms_days: null },
+      { name: 'AdHoc Studio Inc', email: null, address: null, default_rate_cents: null, payment_terms_days: null },
       1
     );
     await linkClientToBranch(DB, clientId, arabiaBranch);
@@ -290,8 +292,8 @@ describe('staff income requests', () => {
     await staffPhoto();
     expect(lastText('staff')).toContain('Is this an expense or income?');
     await staffTap('kind:income');
-    expect(lastText('staff')).toContain('Who paid?');
-    await staffText('acme studio');
+    expect(lastText('staff')).toContain('Received from: AdHoc Studio Inc');
+    expect(withText('staff').map(textOf).join('\n')).not.toContain('Who paid?');
     await staffTap('submit');
     await adminTap(buttonsOf(last('admin')).find((b) => b.callback_data?.startsWith('subok:'))!.callback_data!);
 
@@ -299,7 +301,7 @@ describe('staff income requests', () => {
     expect(income).toMatchObject({
       branch_id: arabiaBranch,
       client_id: clientId,
-      payer: 'acme studio',
+      payer: 'AdHoc Studio Inc',
       amount_cents: 80000,
       currency: 'USD',
       income_date: '2026-09-10',
