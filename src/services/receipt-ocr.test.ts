@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { parseIncomeFields, parseReceiptFields, readIncomeImage, readReceiptImage } from './receipt-ocr';
+import {
+  BANK_ADVICE_MODEL,
+  parseIncomeFields,
+  parseReceiptFields,
+  readIncomeImage,
+  readReceiptImage,
+  RECEIPT_MODEL,
+} from './receipt-ocr';
 
 describe('parseReceiptFields', () => {
   it('maps a complete model answer', () => {
@@ -47,6 +54,23 @@ describe('parseReceiptFields', () => {
     expect(parsed.warnings).toHaveLength(3);
   });
 
+  it('takes the amount received on a bank advice, not the converted amount, and no tax', () => {
+    // An LGB Bank cash deposit advice: USD 1,341.89 received, sent on as GBP 1,000.00.
+    const parsed = parseReceiptFields({
+      total: 1000,
+      currency: 'GBP',
+      tax: 7.05,
+      supplier: 'LGB Bank',
+      date: '2026-10-13',
+      reference: '00132',
+      received: 1341.89,
+      received_currency: 'USD',
+    });
+    expect(parsed).toMatchObject({ amountCents: 134189, currency: 'USD', taxCents: null, expenseDate: '2026-10-13' });
+    // Without a currency on that line, none is guessed; the bot falls back to the company's.
+    expect(parseReceiptFields({ total: 1000, currency: 'GBP', received: 1341.89 }).currency).toBeNull();
+  });
+
   it('ignores tax that is not smaller than the total', () => {
     expect(parseReceiptFields({ total: 10, tax: 10 }).taxCents).toBeNull();
   });
@@ -73,6 +97,38 @@ describe('readReceiptImage', () => {
     expect(parsed.currency).toBe('EUR');
     const image = request.messages[1].content[1];
     expect(image.image_url.url).toBe('data:image/jpeg;base64,/9j/4A==');
+  });
+
+  it('asks Mistral for the amount received on a bank advice, and only then', async () => {
+    const models: string[] = [];
+    const answers: Record<string, unknown> = {
+      [RECEIPT_MODEL]: { total: 1000, currency: 'GBP', supplier: 'LGB Bank', date: '2026-10-13', received: 1332.5, received_currency: 'USD' },
+      [BANK_ADVICE_MODEL]: { total: null, currency: null, received: 1341.89, received_currency: 'USD' },
+    };
+    const ai = {
+      run: async (model: string) => {
+        models.push(model);
+        return { response: answers[model] };
+      },
+    } as unknown as Ai;
+    expect(await readReceiptImage(ai, jpeg, 'image/jpeg')).toMatchObject({
+      amountCents: 134189,
+      currency: 'USD',
+      payee: 'LGB Bank',
+      expenseDate: '2026-10-13',
+    });
+    expect(models).toEqual([RECEIPT_MODEL, BANK_ADVICE_MODEL]);
+
+    // An ordinary receipt has no amount received, so Mistral is not asked.
+    models.length = 0;
+    answers[RECEIPT_MODEL] = { total: 22.96, currency: 'USD', tax: 3.83, received: null };
+    expect((await readReceiptImage(ai, jpeg, 'image/jpeg')).amountCents).toBe(2296);
+    expect(models).toEqual([RECEIPT_MODEL]);
+
+    // When Mistral reads no amount received, Llama's read stands.
+    answers[RECEIPT_MODEL] = { total: 1000, currency: 'GBP', received: 1341.89, received_currency: 'USD' };
+    answers[BANK_ADVICE_MODEL] = { received: null };
+    expect((await readReceiptImage(ai, jpeg, 'image/jpeg')).amountCents).toBe(134189);
   });
 
   it('never throws when the model fails or is missing', async () => {

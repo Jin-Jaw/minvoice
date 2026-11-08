@@ -7,19 +7,26 @@ import { EXPENSE_CATEGORIES } from '../lib/expenses';
 import { isSupportedCurrency } from '../lib/money';
 
 export const RECEIPT_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
+/** Reads a bank advice's AMOUNT RECEIVED, which Llama misreads when the photo is on its side. */
+export const BANK_ADVICE_MODEL = '@cf/mistralai/mistral-small-3.1-24b-instruct';
 
 export type ReceiptImageMime = 'image/jpeg' | 'image/png' | 'image/webp';
 
+// Tested against an LGB Bank cash deposit advice photo (AMOUNT RECEIVED USD
+// 1,341.89, sent on as GBP 1,000.00) and a shop receipt: received is the USD
+// amount on the advice and null on the receipt.
 const PROMPT = [
-  'You read receipts and supplier invoices for bookkeeping.',
+  'You read receipts, supplier invoices and bank advices for bookkeeping.',
   'Return JSON only, with these keys:',
   '- total: the final amount actually paid (after tax and discounts) as a plain number, e.g. 12.4. Not the subtotal, tax, change or tip line alone. null if unreadable.',
-  '- currency: ISO 4217 code (GBP for £, EUR for €, USD for $ unless another dollar is stated). null if unknown.',
+  '- currency: ISO 4217 code of the total (GBP for £, EUR for €, USD for $ unless another dollar is stated). null if unknown.',
   '- tax: total VAT/sales tax as a plain number, or null.',
   '- supplier: the business that was paid, as printed. null if unknown.',
   '- date: the purchase/invoice date as YYYY-MM-DD, or null.',
   '- reference: receipt or invoice number, or null.',
   `- category: one of ${EXPENSE_CATEGORIES.map((c) => JSON.stringify(c)).join(', ')}.`,
+  '- received: only on a bank deposit or transfer advice, the number on the line labelled AMOUNT RECEIVED (the money the bank took from the payer, before converting it), as a plain number. null on any other document.',
+  '- received_currency: the ISO 4217 code printed on that AMOUNT RECEIVED line, or null.',
   'Never guess a number you cannot read.',
 ].join('\n');
 
@@ -33,9 +40,13 @@ const RESPONSE_SCHEMA = {
     date: { type: ['string', 'null'] },
     reference: { type: ['string', 'null'] },
     category: { type: ['string', 'null'] },
+    received: { type: ['number', 'null'] },
+    received_currency: { type: ['string', 'null'] },
   },
-  required: ['total', 'currency', 'tax', 'supplier', 'date', 'reference', 'category'],
+  required: ['total', 'currency', 'tax', 'supplier', 'date', 'reference', 'category', 'received', 'received_currency'],
 };
+
+const RECEIPT_INSTRUCTION = 'Extract the fields from this receipt.';
 
 function toBase64(bytes: Uint8Array): string {
   let binary = '';
@@ -55,6 +66,11 @@ function text(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
   const cleaned = value.replace(/\s+/g, ' ').trim();
   return cleaned && cleaned.toLowerCase() !== 'null' ? cleaned.slice(0, max) : null;
+}
+
+function currencyCode(value: unknown): string | null {
+  const code = text(value, 10)?.toUpperCase() ?? null;
+  return code && /^[A-Z]{3}$/.test(code) && isSupportedCurrency(code) ? code : null;
 }
 
 function isoDate(raw: unknown): string | null {
@@ -85,10 +101,13 @@ function jsonFields(raw: unknown): Record<string, unknown> {
 /** Model output → the importer's parsed shape. */
 export function parseReceiptFields(raw: unknown): ParsedExpenseInvoice {
   const fields = jsonFields(raw);
-  const code = text(fields.currency, 10)?.toUpperCase() ?? null;
-  const currency = code && /^[A-Z]{3}$/.test(code) && isSupportedCurrency(code) ? code : null;
-  const amountCents = amountToCents(fields.total);
-  let taxCents = amountToCents(fields.tax);
+  // On a bank advice the expense is the money the bank took from the payer,
+  // e.g. USD 1,341.89, not the converted amount it sent on (GBP 1,000.00),
+  // and its charges are not tax.
+  const received = amountToCents(fields.received);
+  const currency = currencyCode(received !== null ? fields.received_currency : fields.currency);
+  const amountCents = received ?? amountToCents(fields.total);
+  let taxCents = received !== null ? null : amountToCents(fields.tax);
   if (taxCents !== null && amountCents !== null && taxCents >= amountCents) taxCents = null;
   const category = text(fields.category, 60);
   const payee = text(fields.supplier, 120);
@@ -119,8 +138,13 @@ export async function readReceiptImage(
   bytes: Uint8Array,
   mime: ReceiptImageMime
 ): Promise<ParsedExpenseInvoice> {
-  const raw = await askVisionModel(ai, PROMPT, RESPONSE_SCHEMA, 'Extract the fields from this receipt.', bytes, mime);
-  return parseReceiptFields(raw);
+  const fields = jsonFields(await askVisionModel(ai, RECEIPT_MODEL, PROMPT, RESPONSE_SCHEMA, RECEIPT_INSTRUCTION, bytes, mime));
+  if (amountToCents(fields.received) === null) return parseReceiptFields(fields);
+  // A bank advice. On its side, Llama read 1332.5 (the 1.3325 exchange rate)
+  // as the amount received; Mistral read 1,341.89 in every orientation.
+  const advice = jsonFields(await askVisionModel(ai, BANK_ADVICE_MODEL, PROMPT, RESPONSE_SCHEMA, RECEIPT_INSTRUCTION, bytes, mime));
+  if (amountToCents(advice.received) === null) return parseReceiptFields(fields);
+  return parseReceiptFields({ ...fields, received: advice.received, received_currency: advice.received_currency });
 }
 
 // Tested against a BLOM Bank receipt photo (USD 12,048.00 less 48.00
@@ -151,8 +175,7 @@ const INCOME_RESPONSE_SCHEMA = {
 /** Model output for an income document → amount options for the user to choose from. */
 export function parseIncomeFields(raw: unknown): IncomeDocumentRead {
   const fields = jsonFields(raw);
-  const code = text(fields.currency, 10)?.toUpperCase() ?? null;
-  const currency = code && /^[A-Z]{3}$/.test(code) && isSupportedCurrency(code) ? code : null;
+  const currency = currencyCode(fields.currency);
   const options: IncomeAmountOption[] = [];
   const paid = amountToCents(fields.paid);
   const gross = amountToCents(fields.gross);
@@ -168,12 +191,13 @@ export async function readIncomeImage(
   bytes: Uint8Array,
   mime: ReceiptImageMime
 ): Promise<IncomeDocumentRead> {
-  const raw = await askVisionModel(ai, INCOME_PROMPT, INCOME_RESPONSE_SCHEMA, 'Extract the fields from this document.', bytes, mime);
+  const raw = await askVisionModel(ai, RECEIPT_MODEL, INCOME_PROMPT, INCOME_RESPONSE_SCHEMA, 'Extract the fields from this document.', bytes, mime);
   return parseIncomeFields(raw);
 }
 
 async function askVisionModel(
   ai: Ai | undefined,
+  model: string,
   prompt: string,
   schema: object,
   instruction: string,
@@ -182,7 +206,7 @@ async function askVisionModel(
 ): Promise<unknown> {
   if (!ai) return null;
   try {
-    const result = (await ai.run(RECEIPT_MODEL as Parameters<Ai['run']>[0], {
+    const result = (await ai.run(model as Parameters<Ai['run']>[0], {
       messages: [
         { role: 'system', content: prompt },
         {
@@ -200,7 +224,7 @@ async function askVisionModel(
     // Workers AI returns the JSON in `response`; the OpenAI-style copy is a fallback.
     return result?.response ?? result?.choices?.[0]?.message?.content ?? null;
   } catch (error) {
-    console.error(JSON.stringify({ event: 'receipt_ocr_failed', error: String(error) }));
+    console.error(JSON.stringify({ event: 'receipt_ocr_failed', model, error: String(error) }));
     return null;
   }
 }

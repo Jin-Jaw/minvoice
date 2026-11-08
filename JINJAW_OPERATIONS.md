@@ -168,7 +168,13 @@ does not match `TELEGRAM_WEBHOOK_SECRET`.
   (`AI` binding, model `@cf/meta/llama-4-scout-17b-16e-instruct`, in
   `src/services/receipt-ocr.ts`). The result is only a suggestion; the user
   always confirms or corrects the amount. A failed model call falls back to
-  asking for the amount.
+  asking for the amount. On a bank deposit or transfer advice the amount is
+  the AMOUNT RECEIVED in the currency handed over, including charges (for
+  example USD 1,341.89), not the converted amount sent on (GBP 1,000.00).
+  When Llama finds an AMOUNT RECEIVED, the photo is read a second time by
+  `@cf/mistralai/mistral-small-3.1-24b-instruct` for that amount, because
+  Llama misreads it when the photo is on its side. The staff bot reads
+  expense photos the same way.
 - **Cron:** the daily 15:00 UTC trigger also sends overdue-invoice messages
   and purges expired Telegram sessions, link tokens, processed update ids and
   rate-limit rows.
