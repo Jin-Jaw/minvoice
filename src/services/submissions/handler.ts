@@ -20,6 +20,7 @@ import {
   claimSubmissionsUpdate,
   createDraft,
   deleteDraft,
+  getIncomePayer,
   listSubmitterRequests,
   requestAccess,
   setDraftFile,
@@ -212,7 +213,8 @@ async function cancelDraft(ctx: Context): Promise<void> {
 function nextStep(draft: Submission): string {
   if (!draft.kind) return 'kind';
   if (draft.amount_cents === null) return 'amount';
-  if (!draft.party) return 'party';
+  // Income always comes from Adhoc; showReview fills it in.
+  if (!draft.party && draft.kind !== 'income') return 'party';
   return 'review';
 }
 
@@ -253,9 +255,7 @@ async function askStep(ctx: Context, draft: Submission, step: string, note = '')
     return;
   }
   if (step === 'party') {
-    const question =
-      current.kind === 'income' ? 'Who paid? Send the client’s name.' : 'Who was paid? Send the supplier or shop name.';
-    await api.sendMessage(chatId, `${note}${question}`, [CANCEL_ROW]);
+    await api.sendMessage(chatId, `${note}Who was paid? Send the supplier or shop name.`, [CANCEL_ROW]);
     return;
   }
   if (step === 'date') {
@@ -292,7 +292,8 @@ async function chooseKind(ctx: Context, draft: Submission, kind: SubmissionKind)
 }
 
 async function editField(ctx: Context, draft: Submission, field: string): Promise<void> {
-  if (field === 'amount' || field === 'party' || field === 'date' || field === 'note') return askStep(ctx, draft, field);
+  if (field === 'amount' || field === 'date' || field === 'note') return askStep(ctx, draft, field);
+  if (field === 'party' && draft.kind === 'expense') return askStep(ctx, draft, field);
   if (field === 'category' && draft.kind === 'expense') {
     await ctx.api.sendMessage(ctx.chatId, 'Choose a category.', [
       ...EXPENSE_CATEGORIES.map((category, i) => [
@@ -446,6 +447,8 @@ async function showReview(ctx: Context, draft: Submission, note = ''): Promise<v
   if (!draft.entry_date) defaults.entry_date = todayInTz(settings.timezone);
   if (!draft.currency) defaults.currency = settings.currency;
   if (draft.kind === 'expense' && !draft.category) defaults.category = 'Other';
+  // Replaces any name typed with the amount, e.g. "Acme 1200".
+  if (draft.kind === 'income') defaults.party = await getIncomePayer(ctx.env.DB, ctx.branch.id);
   const current = await updateDraft(ctx.env.DB, draft, defaults);
   const attachHint = current.file_name ? '' : '\n\nYou can still send a photo or PDF of the invoice.';
   await ctx.api.sendMessage(
@@ -456,17 +459,24 @@ async function showReview(ctx: Context, draft: Submission, note = ''): Promise<v
     ).join('\n')}${attachHint}\n\nTap <b>Send for approval</b> when it’s right.`,
     [
       [{ text: '✅ Send for approval', callback_data: 'submit' }],
-      [
-        { text: '✏️ Amount', callback_data: 'edit:amount' },
-        { text: `👤 ${partyLabel(current.kind)}`, callback_data: 'edit:party' },
-      ],
-      [
-        { text: '📅 Date', callback_data: 'edit:date' },
-        current.kind === 'expense'
-          ? { text: '🏷 Category', callback_data: 'edit:category' }
-          : { text: '📝 Note', callback_data: 'edit:note' },
-      ],
-      ...(current.kind === 'expense' ? [[{ text: '📝 Note', callback_data: 'edit:note' }]] : []),
+      ...(current.kind === 'expense'
+        ? [
+            [
+              { text: '✏️ Amount', callback_data: 'edit:amount' },
+              { text: `👤 ${partyLabel(current.kind)}`, callback_data: 'edit:party' },
+            ],
+            [
+              { text: '📅 Date', callback_data: 'edit:date' },
+              { text: '🏷 Category', callback_data: 'edit:category' },
+            ],
+          ]
+        : [
+            [
+              { text: '✏️ Amount', callback_data: 'edit:amount' },
+              { text: '📅 Date', callback_data: 'edit:date' },
+            ],
+          ]),
+      [{ text: '📝 Note', callback_data: 'edit:note' }],
       CANCEL_ROW,
     ]
   );

@@ -285,12 +285,14 @@ admin bot. `/submitters` also shows the link to share with staff when
 sends a photo or PDF of the invoice, or types it, for example
 `Taxi to airport 25` or `120 EUR`. Photos are read by the same Workers AI
 model as receipt photos in the admin bot, and PDFs by the same text
-extraction as supplier invoices. An income invoice names Jin&Jaw Arabia as
-its issuer, so for income the bot ignores the supplier it reads and always
-asks who paid. A file or an amount sent without a command makes the bot ask
-whether it is an expense or income.
+extraction as supplier invoices. Income always comes from Adhoc, so the bot
+never asks who paid: it records the company's first active client whose name
+starts with "Adhoc" (AdHoc Studio Inc), or just "Adhoc" if there is none. It
+ignores the supplier it reads from an income invoice, which is Jin&Jaw Arabia
+itself, and any name typed with the amount. A file or an amount sent without
+a command makes the bot ask whether it is an expense or income.
 
-The summary lets the sender change the amount, the name, the date, the
+The summary lets the sender change the amount, the date, the supplier and
 category (expenses only) and a note for the admin, then send it for
 approval. `/mine` shows their last 10 requests with their status and any
 rejection reason.
