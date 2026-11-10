@@ -49,6 +49,8 @@ type Context = {
   chatId: string;
   submitter: Submitter;
   branch: Branch;
+  /** The message whose button was tapped, when the update is a button tap. */
+  messageId?: number;
   /** Loaded once per update; several steps need the timezone or currency. */
   settings?: Promise<Settings>;
 };
@@ -131,25 +133,31 @@ async function handleClaimedUpdate(
       return;
     }
 
-    const ctx: Context = { env, api, chatId, submitter, branch };
-    if (callback) return handleCallback(ctx, draft, callback.data ?? '');
-    if (update.message?.document || update.message?.photo?.length) return receiveFile(ctx, draft, update.message);
-
-    const text = update.message?.text?.trim() ?? '';
-    const command = text.split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, '');
-    if (command.startsWith('/')) {
-      if (command === '/expense') return startDraft(ctx, 'expense');
-      if (command === '/income') return startDraft(ctx, 'income');
-      if (command === '/mine' || command === '/requests') return showMine(ctx);
-      if (command === '/cancel') return cancelDraft(ctx);
-      return showMenu(ctx, draft);
-    }
-    if (!text) return showMenu(ctx, draft);
-    await receiveText(ctx, draft, text);
+    // Awaited inside the try, so a step's error (an old button, a bad amount)
+    // reaches the sender below instead of failing the webhook.
+    await route({ env, api, chatId, submitter, branch }, update, draft);
   } catch (error) {
     console.error(JSON.stringify({ event: 'submissions_update_failed', updateId: update.update_id, userId, error: String(error) }));
     await api.sendMessage(chatId, `❌ ${humanError(error)}`).catch(() => undefined);
   }
+}
+
+async function route(ctx: Context, update: TelegramUpdate, draft: Submission | null): Promise<void> {
+  const callback = update.callback_query;
+  if (callback) return handleCallback({ ...ctx, messageId: callback.message?.message_id }, draft, callback.data ?? '');
+  if (update.message?.document || update.message?.photo?.length) return receiveFile(ctx, draft, update.message);
+
+  const text = update.message?.text?.trim() ?? '';
+  const command = text.split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, '');
+  if (command.startsWith('/')) {
+    if (command === '/expense') return startDraft(ctx, 'expense');
+    if (command === '/income') return startDraft(ctx, 'income');
+    if (command === '/mine' || command === '/requests') return showMine(ctx);
+    if (command === '/cancel') return cancelDraft(ctx);
+    return showMenu(ctx, draft);
+  }
+  if (!text) return showMenu(ctx, draft);
+  await receiveText(ctx, draft, text);
 }
 
 function displayName(user: TelegramUser): string {
@@ -181,7 +189,15 @@ async function handleCallback(ctx: Context, draft: Submission | null, data: stri
   if (data === 'mine') return showMine(ctx);
   if (data === 'menu') return showMenu(ctx, draft);
   if (data === 'cancel') return cancelDraft(ctx);
-  if (!draft) throw new Error('That request expired. Start again with /expense or /income.');
+  if (!draft) {
+    await clearButtons(ctx);
+    // A second tap on Send for approval, or a tap after it went: the request is with the admin.
+    if (data === 'submit') {
+      await ctx.api.sendMessage(ctx.chatId, 'That request was already sent for approval. Send /mine to see it.', submissionsMenuKeyboard());
+      return;
+    }
+    throw new Error('That request expired. Start again with /expense or /income.');
+  }
   if (data === 'continue' || data === 'back') return continueDraft(ctx, draft);
   if (data === 'kind:expense' || data === 'kind:income') return chooseKind(ctx, draft, data.slice(5) as SubmissionKind);
   if (data === 'submit') return submit(ctx, draft);
@@ -199,6 +215,12 @@ async function handleCallback(ctx: Context, draft: Submission | null, data: stri
     return showReview(ctx, await updateDraft(ctx.env.DB, draft, { category: chosen, step: 'review' }));
   }
   throw new Error('That button is no longer valid. Send /expense or /income to start again.');
+}
+
+/** Removes the buttons from the message that was tapped, so a sent request can't be tapped again. */
+async function clearButtons(ctx: Context): Promise<void> {
+  if (!ctx.messageId) return;
+  await ctx.api.editMessageReplyMarkup(ctx.chatId, ctx.messageId).catch(() => undefined);
 }
 
 async function todayFor(ctx: Context): Promise<string> {
@@ -521,6 +543,7 @@ async function showReview(ctx: Context, draft: Submission, note = ''): Promise<v
 async function submit(ctx: Context, draft: Submission): Promise<void> {
   if (nextStep(draft) !== 'review' || draft.step !== 'review') return continueDraft(ctx, draft);
   if (!(await submitDraft(ctx.env.DB, draft))) throw new Error('That request is missing a detail. Check it and try again.');
+  await clearButtons(ctx);
   await ctx.api.sendMessage(
     ctx.chatId,
     `📨 Sent for approval as request <b>#${draft.id}</b>. I’ll message you when the admin approves or rejects it.`,

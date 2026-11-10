@@ -5,6 +5,7 @@
 import type { Bindings } from '../../env';
 import { getBranch, type Branch } from '../../db/queries';
 import { adminUrl } from '../../lib/base-url';
+import { formatDateHuman } from '../../lib/dates';
 import { formatCents } from '../../lib/money';
 import { TelegramApi, telegramApi, type InlineKeyboard, type TelegramCallbackQuery } from '../telegram/api';
 import { clearSession, getSession, saveSession, type TelegramConnection } from '../telegram/repository';
@@ -281,11 +282,13 @@ async function approve(
   const amount = formatCents(submission.amount_cents!, submission.currency!);
   const link =
     submission.kind === 'income'
-      ? { text: 'View reports', url: adminUrl(env, '/admin/reports', branch) }
+      ? { text: 'View income', url: adminUrl(env, '/admin/income', branch) }
       : { text: 'View expense', url: adminUrl(env, `/admin/expenses/${entryId}`, branch) };
+  // The date decides which month and year the entry counts in, so it's shown.
+  const dated = submission.entry_date ? ` on ${esc(formatDateHuman(submission.entry_date))}` : '';
   await api.sendMessage(
     chatId,
-    `✅ Approved request #${id}. The ${kind} is saved to <b>${esc(branch.name)}</b>: ${esc(submission.party ?? '')}, ${esc(amount)}.`,
+    `✅ Approved request #${id}. The ${kind} is saved to <b>${esc(branch.name)}</b>: ${esc(submission.party ?? '')}, ${esc(amount)}${dated}.`,
     [[link]]
   );
   await tellSubmitter(

@@ -268,20 +268,20 @@ async function handleClaimedUpdate(
         await api.sendMessage(chatId, expenseOnly ? EXPENSE_HELP : HELP, homeKeyboard(expenseOnly));
         return;
       }
-      if (command === '/newinvoice') return startNewInvoice(env, api, branchId, userId, chatId);
+      if (command === '/newinvoice') return await startNewInvoice(env, api, branchId, userId, chatId);
       if (command === '/uploadinvoice' || command === '/expense') {
-        return startExpenseInvoiceUpload(env, api, branchId, userId, chatId);
+        return await startExpenseInvoiceUpload(env, api, branchId, userId, chatId);
       }
-      if (command === '/income') return startAddIncome(env, api, branchId, userId, chatId);
-      if (command === '/newclient') return startAddClient(env, api, branchId, userId, chatId);
-      if (command === '/pending') return showPendingSubmissions(env, api, chatId);
-      if (command === '/submitters') return showSubmitters(env, api, chatId);
+      if (command === '/income') return await startAddIncome(env, api, branchId, userId, chatId);
+      if (command === '/newclient') return await startAddClient(env, api, branchId, userId, chatId);
+      if (command === '/pending') return await showPendingSubmissions(env, api, chatId);
+      if (command === '/submitters') return await showSubmitters(env, api, chatId);
       if (command === '/workspace' || command === '/workspaces') {
-        return showWorkspaceList(env, api, branchId, chatId);
+        return await showWorkspaceList(env, api, branchId, chatId);
       }
       if (['/invoices', '/drafts', '/unpaid', '/overdue'].includes(command)) {
-        if (expenseOnly) return explainExpenseOnly(api, chatId);
-        return showInvoiceList(env, api, branchId, chatId, command.slice(1));
+        if (expenseOnly) return await explainExpenseOnly(api, chatId);
+        return await showInvoiceList(env, api, branchId, chatId, command.slice(1));
       }
       await api.sendMessage(chatId, 'I don’t know that command. Try /help.', homeKeyboard(expenseOnly));
       return;

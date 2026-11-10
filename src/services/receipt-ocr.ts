@@ -73,15 +73,21 @@ function currencyCode(value: unknown): string | null {
   return code && /^[A-Z]{3}$/.test(code) && isSupportedCurrency(code) ? code : null;
 }
 
+/** How far back a date read from a photo may be before it's taken as a misread year. */
+const MAX_READ_DATE_AGE_MS = 366 * 86_400_000;
+
 function isoDate(raw: unknown): string | null {
   // Bank receipts print 2026/10/13, and the model sometimes copies it as is.
   const value = typeof raw === 'string' ? raw.replace(/^(\d{4})\/(\d{2})\/(\d{2})$/, '$1-$2-$3') : raw;
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const parsed = new Date(`${value}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return null;
-  // A receipt from the future (or last century) is a misread, not a date.
-  const year = parsed.getUTCFullYear();
-  if (year < 2000 || parsed.getTime() > Date.now() + 2 * 86_400_000) return null;
+  // A receipt from the future, or from over a year ago, is a misread, not a
+  // date: on a BLOM Bank receipt photographed on its side, 2026/11/10 came
+  // back as 2020-11-10 and filed the income six years back. Files sent to the
+  // bots are recent, and an unread date falls back to today.
+  const time = parsed.getTime();
+  if (time > Date.now() + 2 * 86_400_000 || time < Date.now() - MAX_READ_DATE_AGE_MS) return null;
   return value;
 }
 
