@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   BANK_ADVICE_MODEL,
   parseIncomeFields,
@@ -7,6 +7,14 @@ import {
   readReceiptImage,
   RECEIPT_MODEL,
 } from './receipt-ocr';
+
+// Dates read from a photo must be recent, so the fixtures below need a fixed today.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-10T12:00:00Z') });
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 describe('parseReceiptFields', () => {
   it('maps a complete model answer', () => {
@@ -162,6 +170,13 @@ describe('parseIncomeFields', () => {
       date: '2026-10-13',
       reference: '024/02/353/1659133/1/3',
     });
+  });
+
+  it('drops a date over a year old as a misread year', () => {
+    // A BLOM Bank receipt dated 2026/11/10, photographed on its side, read as 2020.
+    expect(parseIncomeFields({ paid: 12300, currency: 'USD', date: '2020/11/10' }).date).toBeNull();
+    expect(parseIncomeFields({ paid: 12300, currency: 'USD', date: '2025-11-12' }).date).toBe('2025-11-12');
+    expect(parseReceiptFields({ total: 5, date: '2025-11-08' }).expenseDate).toBeNull();
   });
 
   it('offers nothing when the model fails', async () => {

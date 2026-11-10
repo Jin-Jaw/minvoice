@@ -1,6 +1,7 @@
 import { env, exports } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBranch, createClient, linkClientToBranch } from '../src/db/queries';
+import { createBranch, createClient, getSettings, linkClientToBranch } from '../src/db/queries';
+import { addDaysISO, formatDateHuman, todayInTz } from '../src/lib/dates';
 import type { Bindings } from '../src/env';
 import { handleTelegramUpdate } from '../src/services/telegram/handler';
 import { handleSubmissionsUpdate } from '../src/services/submissions/handler';
@@ -16,6 +17,8 @@ let sent: Sent[] = [];
 let updateId = 5000;
 let aiAnswer: Record<string, unknown> = {};
 let arabiaBranch: number;
+/** A date read from a photo; the reader drops dates over a year old as misreads, so it stays recent. */
+const READ_DATE = addDaysISO(todayInTz('UTC'), -20);
 
 const botEnv = () =>
   ({
@@ -186,7 +189,7 @@ describe('staff bot access', () => {
 describe('staff expense requests', () => {
   it('reads a receipt photo, waits for approval, then saves the expense with the photo', async () => {
     await allowStaff();
-    aiAnswer = { total: 22.96, currency: 'USD', tax: 3.83, supplier: 'Corner Hardware', date: '2026-09-18', category: 'Other' };
+    aiAnswer = { total: 22.96, currency: 'USD', tax: 3.83, supplier: 'Corner Hardware', date: READ_DATE, category: 'Other' };
     await staffTap('expense');
     await staffPhoto();
     expect(lastText('staff')).toContain('Paid to: Corner Hardware');
@@ -213,7 +216,7 @@ describe('staff expense requests', () => {
       amount_cents: 2296,
       tax_cents: 383,
       currency: 'USD',
-      expense_date: '2026-09-18',
+      expense_date: READ_DATE,
     });
     expect(String(expense!.description)).toContain('Staff bot request #');
     expect(String(expense!.description)).toContain('Shelves for the office');
@@ -258,7 +261,7 @@ describe('staff expense requests', () => {
       currency: 'GBP',
       tax: 7.05,
       supplier: 'LGB Bank',
-      date: '2026-10-13',
+      date: READ_DATE,
       received: 1341.89,
       received_currency: 'USD',
     };
@@ -268,7 +271,7 @@ describe('staff expense requests', () => {
     await staffTap('submit');
     await adminTap(buttonsOf(last('admin')).find((b) => b.callback_data?.startsWith('subok:'))!.callback_data!);
     const expense = await DB.prepare('SELECT amount_cents, tax_cents, currency, expense_date FROM expenses').first();
-    expect(expense).toEqual({ amount_cents: 134189, tax_cents: 0, currency: 'USD', expense_date: '2026-10-13' });
+    expect(expense).toEqual({ amount_cents: 134189, tax_cents: 0, currency: 'USD', expense_date: READ_DATE });
   });
 });
 
@@ -310,7 +313,7 @@ describe('staff income requests', () => {
     await allowStaff();
     // A BLOM Bank receipt: USD 12,048.00 less 48.00 commission. The income
     // reader's net amount is used; `total` is what the expense reader would take.
-    aiAnswer = { paid: 12000, gross: 12048, total: 12048, currency: 'USD', date: '2026-10-13', reference: '024/02/353/1659133/1/3' };
+    aiAnswer = { paid: 12000, gross: 12048, total: 12048, currency: 'USD', date: READ_DATE, reference: '024/02/353/1659133/1/3' };
     await staffPhoto();
     expect(lastText('staff')).toContain('Is this an expense or income?');
     await staffTap('kind:income');
@@ -327,11 +330,47 @@ describe('staff income requests', () => {
       payer: 'AdHoc Studio Inc',
       amount_cents: 1200000,
       currency: 'USD',
-      income_date: '2026-10-13',
+      income_date: READ_DATE,
     });
     expect(String(income!.reference)).toContain('024/02/353/1659133/1/3');
+    expect(lastText('admin')).toContain(`$12,000.00 on ${formatDateHuman(READ_DATE)}.`);
+    expect(buttonsOf(last('admin')).find((b) => b.url)?.url).toMatch(/\/admin\/income\?workspace=\d+$/);
     const evidence = await DB.prepare('SELECT mime FROM income_attachments WHERE income_id = ?').bind(income!.id).first('mime');
     expect(evidence).toBe('image/jpeg');
+  });
+
+  it('dates a photo read six years back today, not in the past year it was misread as', async () => {
+    await allowStaff();
+    // A BLOM Bank receipt dated 2026/11/10, photographed on its side, read as 2020.
+    const today = todayInTz('UTC');
+    aiAnswer = { paid: 12300, currency: 'USD', date: `${Number(today.slice(0, 4)) - 6}${today.slice(4).replaceAll('-', '/')}` };
+    await staffTap('income');
+    await staffPhoto();
+    const branchToday = todayInTz((await getSettings(DB, arabiaBranch)).timezone);
+    expect(lastText('staff')).toContain(`Date: ${formatDateHuman(branchToday)}`);
+    await staffTap('submit');
+    await adminTap(buttonsOf(last('admin')).find((b) => b.callback_data?.startsWith('subok:'))!.callback_data!);
+    expect(await DB.prepare('SELECT income_date FROM income_entries').first('income_date')).toBe(branchToday);
+  });
+
+  it('answers a second tap on Send for approval without an error, and clears the sent card', async () => {
+    await allowStaff();
+    await staffText('Acme Studio 1200');
+    await staffTap('kind:income');
+    await staffTap('submit');
+    expect(sent.some((m) => m.bot === 'staff' && m.method === 'editMessageReplyMarkup' && m.body.message_id === 1)).toBe(true);
+    await staffTap('submit');
+    expect(lastText('staff')).toContain('already sent for approval');
+    expect(await DB.prepare('SELECT COUNT(*) AS n FROM submissions').first('n')).toBe(1);
+  });
+
+  it('tells the sender when an old button has expired instead of failing the webhook', async () => {
+    await allowStaff();
+    await expect(staffTap('edit:amount')).resolves.toBeUndefined();
+    const expired = withText('staff').map(textOf).filter((text) => text.includes('That request expired'));
+    expect(expired).toHaveLength(1);
+    // The afterEach check fails on any ❌ reply; this one is expected.
+    sent = sent.filter((m) => !textOf(m).includes('That request expired'));
   });
 });
 

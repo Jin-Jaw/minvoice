@@ -27,6 +27,8 @@ const botEnv = () =>
   }) as unknown as Bindings;
 
 const chat = { id: USER, type: 'private' as const };
+/** A date read from a photo; the reader drops dates over a year old as misreads, so it stays recent. */
+const READ_DATE = addDaysISO(todayInTz('UTC'), -20);
 
 async function text(value: string) {
   await handleTelegramUpdate(botEnv(), {
@@ -315,7 +317,7 @@ describe('Telegram new client', () => {
 
   it('adds a client from the expense Client picker and saves the expense against it', async () => {
     await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
-    aiAnswer = { total: 45, currency: 'GBP', supplier: 'Plumb Fix', date: '2026-09-18', category: 'Other' };
+    aiAnswer = { total: 45, currency: 'GBP', supplier: 'Plumb Fix', date: READ_DATE, category: 'Other' };
     await text('/uploadinvoice');
     await photo();
     await tap('expedit:client');
@@ -337,7 +339,7 @@ describe('Telegram new client', () => {
 describe('Telegram income invoice', () => {
   it('reads the amounts from a statement photo and saves the chosen one with the file and its date', async () => {
     await DB.prepare('UPDATE telegram_connections SET branch_id = 2').run();
-    aiAnswer = { paid: 267.6, gross: 1200, currency: 'GBP', date: '2026-09-29' };
+    aiAnswer = { paid: 267.6, gross: 1200, currency: 'GBP', date: READ_DATE };
     await text('/income');
     await text('Flat 3 tenant');
     await photo();
@@ -348,7 +350,7 @@ describe('Telegram income invoice', () => {
     await tap('incomedayfile');
     await text('none');
     expect(lastMessage()).toContain('Amount: £267.60');
-    expect(lastMessage()).toContain('Date: 2026-09-29');
+    expect(lastMessage()).toContain(`Date: ${READ_DATE}`);
     await tap('incomeconfirm:1');
 
     const income = await DB.prepare('SELECT id, amount_cents, income_date FROM income_entries ORDER BY id DESC LIMIT 1').first<{
@@ -356,7 +358,7 @@ describe('Telegram income invoice', () => {
       amount_cents: number;
       income_date: string;
     }>();
-    expect(income).toMatchObject({ amount_cents: 26760, income_date: '2026-09-29' });
+    expect(income).toMatchObject({ amount_cents: 26760, income_date: READ_DATE });
     const files = await DB.prepare('SELECT COUNT(*) AS n FROM income_attachments WHERE income_id = ?').bind(income!.id).first();
     expect(files).toEqual({ n: 1 });
   });
@@ -411,7 +413,7 @@ describe('Telegram income invoice', () => {
 
 describe('Telegram receipt photos', () => {
   it('reads the total, allows edits, and saves to the chosen company with the photo as evidence', async () => {
-    aiAnswer = { total: 22.96, currency: 'GBP', tax: 3.83, supplier: 'Corner Hardware', date: '2026-09-18', category: 'Other' };
+    aiAnswer = { total: 22.96, currency: 'GBP', tax: 3.83, supplier: 'Corner Hardware', date: READ_DATE, category: 'Other' };
     await text('/uploadinvoice');
     await photo();
     expect(lastMessage()).toContain('Total: <b>£22.96</b>');
@@ -441,7 +443,7 @@ describe('Telegram receipt photos', () => {
       amount_cents: 2296,
       tax_cents: 383,
       category: 'Equipment & supplies',
-      expense_date: '2026-09-18',
+      expense_date: READ_DATE,
     });
     expect(linkTo('View expense')).toBe(`https://invoice.test/admin/expenses/${expense!.id}?workspace=2`);
     const evidence = await DB.prepare('SELECT mime FROM expense_attachments WHERE expense_id = ?')
@@ -480,7 +482,7 @@ describe('Telegram receipt photos', () => {
   });
 
   it('queues several receipts and reviews them one at a time', async () => {
-    aiAnswer = { total: 10.5, currency: 'GBP', supplier: 'Corner Cafe', date: '2026-09-18', category: 'Other' };
+    aiAnswer = { total: 10.5, currency: 'GBP', supplier: 'Corner Cafe', date: READ_DATE, category: 'Other' };
     await text('/uploadinvoice');
     await photo();
     await photo();
@@ -508,7 +510,7 @@ describe('Telegram receipt photos', () => {
   });
 
   it('moves on to the next receipt on Cancel, and discards the rest on Cancel all', async () => {
-    aiAnswer = { total: 10.5, currency: 'GBP', supplier: 'Corner Cafe', date: '2026-09-18', category: 'Other' };
+    aiAnswer = { total: 10.5, currency: 'GBP', supplier: 'Corner Cafe', date: READ_DATE, category: 'Other' };
     await photo();
     await photo();
     await photo();
