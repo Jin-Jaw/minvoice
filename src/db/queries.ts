@@ -148,6 +148,8 @@ export type Expense = {
   amount_cents: number;
   tax_cents: number;
   currency: string;
+  /** Whole ounces of gold this expense bought; null for every other expense. */
+  gold_ounces: number | null;
   voided_at: string | null;
   created_at: string;
   updated_at: string;
@@ -171,7 +173,7 @@ export type ExpenseDraft = Pick<
   | 'amount_cents'
   | 'tax_cents'
   | 'currency'
->;
+> & { gold_ounces?: number | null };
 
 export type ExpenseAttachmentMeta = {
   id: number;
@@ -1213,8 +1215,8 @@ export async function createExpense(db: D1Database, expense: ExpenseDraft): Prom
     .prepare(
       `INSERT INTO expenses
        (branch_id, client_id, expense_date, payee, category, description, reference,
-        amount_cents, tax_cents, currency)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        amount_cents, tax_cents, currency, gold_ounces)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       expense.branch_id,
@@ -1226,10 +1228,33 @@ export async function createExpense(db: D1Database, expense: ExpenseDraft): Prom
       expense.reference,
       expense.amount_cents,
       expense.tax_cents,
-      expense.currency
+      expense.currency,
+      expense.gold_ounces ?? null
     )
     .run();
   return result.meta.last_row_id;
+}
+
+/** Gold purchases that still count (not voided), newest first. Their ounces add up to the holding. */
+export async function listGoldPurchases(db: D1Database, branchId: number): Promise<Expense[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT * FROM expenses WHERE branch_id = ? AND gold_ounces IS NOT NULL AND voided_at IS NULL
+         ORDER BY expense_date DESC, id DESC`
+      )
+      .bind(branchId)
+      .all<Expense>()
+  ).results;
+}
+
+/** Ounces of gold the company holds. */
+export async function goldOuncesHeld(db: D1Database, branchId: number): Promise<number> {
+  const total = await db
+    .prepare('SELECT COALESCE(SUM(gold_ounces), 0) AS ounces FROM expenses WHERE branch_id = ? AND voided_at IS NULL')
+    .bind(branchId)
+    .first<number>('ounces');
+  return total ?? 0;
 }
 
 export async function updateExpense(db: D1Database, id: number, expense: ExpenseDraft): Promise<boolean> {

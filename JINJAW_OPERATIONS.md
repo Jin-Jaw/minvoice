@@ -124,6 +124,30 @@ in the same evidence viewer as expenses, served from
 `/admin/income/:id/attachments/:attachmentId/view`. "Upload invoice" adds a
 file, and Void keeps an entry on file but removes it from report totals.
 
+## Gold
+
+Jin&Jaw Arabia sometimes buys gold ounces. A purchase is an expense in the
+`Gold` category, paid to `Gold purchase`, with the number of whole ounces in
+`expenses.gold_ounces` (migration `0022_gold_ounces.sql`). The expense lowers
+cash in reports like any other expense. The gold held is the sum of
+`gold_ounces` over expenses that are not voided, so voiding the expense
+removes the gold.
+
+A purchase is always saved to the Arabia company (the first active company in
+the `jinjaw-arabia` workspace), in that company's currency unless another is
+typed. There are three ways to record one:
+
+- Admin bot: "Buy ounce" (`/buyounce`) asks for the price and saves one
+  ounce. "Buy multiple ounces" (`/gold`, `/buyounces`) asks how many, then the
+  price per ounce, and saves the total. Both show a summary with a Save
+  button first, and work whichever company is active.
+- Staff bot: the same two buttons create a request. Nothing is saved until an
+  admin approves it; `submissions.gold_ounces` carries the count.
+- Web: `/admin/gold` in the Arabia workspace (the "Buy gold" button on the
+  Expenses page) shows the gold held, the purchases, and a form.
+
+There is no selling flow yet, and the gold is not valued at a market price.
+
 ## Workspaces
 
 Use the selector at the top left to move between **Jin&Jaw Ltd**,
@@ -236,6 +260,7 @@ commands are not replayed.
 | `/income` | Property / Flats only: money received without an invoice (`income_entries`), counted as "received" in reports. A PDF or photo sent after the payer is chosen, or through "Attach invoice" on the confirm screen, is saved with the entry in `income_attachments` and shown on the Income page. A file sent at the amount question is also read: `parseIncomeDocument` handles PDF text and `readIncomeImage` handles photos (Workers AI). From a letting agent statement the bot offers the payment to the landlord ("paid to you") and the rent before fees; from a bank receipt photo, the net amount after the bank's commission ("paid to you") and the amount before it; from other documents it offers the final total. The bot also offers the date read from the file. The user always picks or types the amount. |
 | `/newclient` | Asks for a name and an optional email, then adds the client to the active company. The Property / Flats menu has the same action as "Add client". A client with the same name in the workspace is reused. The expense Client picker has a "New client" button that runs the same steps and returns to the expense. |
 | `/workspace`, `/workspaces` | Switch the company the bot acts for. |
+| `/buyounce`, `/gold`, `/buyounces` | Record gold bought for Jin&Jaw Arabia: one ounce at a price, or several ounces at a price per ounce (see Gold). |
 | `/pending` | Staff requests waiting for approval, oldest first. Tap one to see it again with its invoice and the Approve and Reject buttons (see Staff submissions bot). |
 | `/submitters` | Everyone who asked to use the staff bot, with Allow, Deny and Remove buttons. |
 

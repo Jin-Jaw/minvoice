@@ -374,6 +374,99 @@ describe('staff income requests', () => {
   });
 });
 
+describe('gold purchases', () => {
+  const goldRows = () =>
+    DB.prepare(
+      'SELECT branch_id, payee, category, amount_cents, currency, gold_ounces, description FROM expenses ORDER BY id'
+    ).all<Record<string, unknown>>();
+
+  it('saves one ounce from the admin bot as an expense that adds to the gold held', async () => {
+    await adminTap('gold1');
+    expect(lastText('admin')).toContain('What was the price of the ounce?');
+    await adminText('4100.50');
+    expect(lastText('admin')).toContain('1 oz gold at $4,100.50 per ounce');
+    expect(await DB.prepare('SELECT COUNT(*) AS n FROM expenses').first('n')).toBe(0);
+    await adminTap('goldconfirm');
+
+    expect(lastText('admin')).toContain('Gold held now: <b>1 oz</b>');
+    expect((await goldRows()).results).toEqual([
+      {
+        branch_id: arabiaBranch,
+        payee: 'Gold purchase',
+        category: 'Gold',
+        amount_cents: 410050,
+        currency: 'USD',
+        gold_ounces: 1,
+        description: '1 oz gold at $4,100.50 per ounce',
+      },
+    ]);
+  });
+
+  it('asks how many ounces, then the price per ounce, and saves the total', async () => {
+    await adminText('/gold');
+    expect(lastText('admin')).toContain('How many ounces');
+    await adminText('3');
+    expect(lastText('admin')).toContain('What was the price per ounce?');
+    await adminText('4100');
+    expect(lastText('admin')).toContain('Total paid: <b>$12,300.00</b>');
+    await adminTap('goldconfirm');
+
+    const [row] = (await goldRows()).results;
+    expect(row).toMatchObject({ amount_cents: 1230000, gold_ounces: 3, branch_id: arabiaBranch });
+    expect(lastText('admin')).toContain('Gold held now: <b>3 oz</b>');
+
+    // Voiding the expense takes the gold back out of the holding.
+    await DB.prepare("UPDATE expenses SET voided_at = datetime('now')").run();
+    await adminTap('gold1');
+    await adminText('4000');
+    await adminTap('goldconfirm');
+    expect(lastText('admin')).toContain('Gold held now: <b>1 oz</b>');
+  });
+
+  it('adds staff gold only after the admin approves the request', async () => {
+    await allowStaff();
+    await staffTap('goldmany');
+    expect(lastText('staff')).toContain('How many ounces');
+    await staffText('2 oz');
+    expect(lastText('staff')).toContain('What was the price per ounce?');
+    await staffText('4000');
+    expect(lastText('staff')).toContain('Gold purchase request');
+    expect(lastText('staff')).toContain('2 oz gold at $4,000.00 per ounce');
+    expect(lastText('staff')).toContain('Total: <b>$8,000.00</b>');
+    await staffTap('submit');
+    expect(await DB.prepare('SELECT COUNT(*) AS n FROM expenses').first('n')).toBe(0);
+
+    const card = last('admin')!;
+    expect(textOf(card)).toContain('Gold purchase request');
+    await adminTap(buttonsOf(card).find((b) => b.callback_data?.startsWith('subok:'))!.callback_data!);
+    expect(lastText('admin')).toContain('Gold held now: <b>2 oz</b>');
+    expect(lastText('staff')).toContain('Your gold purchase request');
+    const [row] = (await goldRows()).results;
+    expect(row).toMatchObject({ payee: 'Gold purchase', category: 'Gold', amount_cents: 800000, gold_ounces: 2 });
+    expect(String(row.description)).toContain('2 oz gold at $4,000.00 per ounce');
+  });
+
+  it('takes a single staff ounce straight to the price and records nothing when rejected', async () => {
+    await allowStaff();
+    await staffTap('gold1');
+    expect(lastText('staff')).toContain('What was the price of the ounce?');
+    await staffText('4100');
+    // Changing the count keeps the price per ounce.
+    await staffTap('edit:ounces');
+    await staffText('5');
+    expect(lastText('staff')).toContain('Total: <b>$20,500.00</b>');
+    await staffTap('submit');
+
+    const reject = buttonsOf(last('admin')).find((b) => b.callback_data?.startsWith('subno:'))!;
+    await adminTap(reject.callback_data!);
+    const skip = buttonsOf(last('admin')).find((b) => b.callback_data?.startsWith('subnox:'));
+    if (skip) await adminTap(skip.callback_data!);
+    else await adminText('Not bought yet');
+    expect(await DB.prepare('SELECT COUNT(*) AS n FROM expenses').first('n')).toBe(0);
+    expect(await DB.prepare("SELECT status FROM submissions WHERE gold_ounces = 5").first('status')).toBe('rejected');
+  });
+});
+
 describe('admin bot lists', () => {
   it('lists pending requests and shows one again with its buttons', async () => {
     await allowStaff();

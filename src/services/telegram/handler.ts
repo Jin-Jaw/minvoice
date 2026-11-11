@@ -17,6 +17,8 @@ import {
   getInvoiceSourcePdf,
   getLogo,
   getSettings,
+  goldOuncesHeld,
+  createExpense,
   isOverdue,
   linkClientToBranch,
   listBranches,
@@ -34,6 +36,8 @@ import { adminUrl } from '../../lib/base-url';
 import { addDaysISO, formatDateHuman, monthsBetween, shiftMonthYears, todayInTz } from '../../lib/dates';
 import { computeTotals, formatCents, isSupportedCurrency } from '../../lib/money';
 import { EXPENSE_CATEGORIES, MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
+import { GOLD_CATEGORY, GOLD_PAYEE, goldSummary, parseOunces } from '../../lib/gold';
+import { getSubmissionsBranch } from '../submissions/repository';
 import {
   detectExpenseBranch,
   extractExpenseInvoiceText,
@@ -127,6 +131,15 @@ type IncomeState = {
   fileDate?: string | null;
 };
 
+type GoldState = {
+  /** Jin&Jaw Arabia, where every gold purchase is saved. */
+  branchId: number;
+  currency: string;
+  ounces?: number;
+  /** Price per ounce. */
+  unitCents?: number;
+};
+
 type ExpenseState = {
   token?: string;
   parsed?: ParsedExpenseInvoice;
@@ -156,6 +169,7 @@ const HELP = [
   '/unpaid — sent and unpaid',
   '/overdue — overdue invoices',
   '/workspace — switch company/workspace',
+  '/gold — buy gold ounces for Jin&amp;Jaw Arabia',
   '/pending — staff requests waiting for approval',
   '/submitters — who can use the staff bot',
   '/help — show this help',
@@ -168,6 +182,7 @@ const EXPENSE_HELP = [
   '/income — add income received from a client',
   '/newclient — add a client or tenant',
   '/workspace — switch company/workspace',
+  '/gold — buy gold ounces for Jin&amp;Jaw Arabia',
   '/pending — staff requests waiting for approval',
   '/submitters — who can use the staff bot',
   '/help — show this help',
@@ -274,6 +289,8 @@ async function handleClaimedUpdate(
       }
       if (command === '/income') return await startAddIncome(env, api, branchId, userId, chatId);
       if (command === '/newclient') return await startAddClient(env, api, branchId, userId, chatId);
+      if (command === '/buyounce') return await startBuyGold(env, api, userId, chatId, 1);
+      if (command === '/gold' || command === '/buyounces') return await startBuyGold(env, api, userId, chatId, null);
       if (command === '/pending') return await showPendingSubmissions(env, api, chatId);
       if (command === '/submitters') return await showSubmitters(env, api, chatId);
       if (command === '/workspace' || command === '/workspaces') {
@@ -307,6 +324,10 @@ async function handleClaimedUpdate(
       await continueNewInvoice(env, api, session.branch_id, userId, chatId, session.step, state, text);
       return;
     }
+    if (session?.flow === 'buy_gold') {
+      await continueBuyGold(env, api, userId, chatId, session.step, JSON.parse(session.data_json) as GoldState, text);
+      return;
+    }
     if (session?.flow === 'add_income') {
       const state = JSON.parse(session.data_json) as IncomeState;
       await continueAddIncome(env, api, session.branch_id, userId, chatId, session.step, state, text);
@@ -324,10 +345,17 @@ async function handleClaimedUpdate(
   }
 }
 
+/** Gold is always bought for Jin&Jaw Arabia, whichever company is active. */
+const GOLD_ROW: InlineKeyboard[number] = [
+  { text: '🥇 Buy ounce', callback_data: 'gold1' },
+  { text: '🥇 Buy multiple ounces', callback_data: 'goldmany' },
+];
+
 function homeKeyboard(expenseOnly = false): InlineKeyboard {
   if (expenseOnly) {
     return [
       [{ text: '📥 Upload expense invoice', callback_data: 'expenseupload' }],
+    GOLD_ROW,
       [{ text: '💷 Add income from client', callback_data: 'income' }],
       [
         { text: '👤 Add client', callback_data: 'addclient' },
@@ -341,6 +369,7 @@ function homeKeyboard(expenseOnly = false): InlineKeyboard {
       { text: '📄 Invoices', callback_data: 'list:invoices' },
     ],
     [{ text: '📥 Upload expense invoice', callback_data: 'expenseupload' }],
+    GOLD_ROW,
     [
       { text: 'Unpaid', callback_data: 'list:unpaid' },
       { text: 'Overdue', callback_data: 'list:overdue' },
@@ -459,6 +488,9 @@ async function handleCallback(
     return showIncomeReview(env, api, branchId, userId, chatId, state);
   }
   if (data === 'addclient') return startAddClient(env, api, branchId, userId, chatId);
+  if (data === 'gold1') return startBuyGold(env, api, userId, chatId, 1);
+  if (data === 'goldmany') return startBuyGold(env, api, userId, chatId, null);
+  if (data === 'goldconfirm') return confirmBuyGold(env, api, userId, chatId);
   if (data === 'workspaces') return showWorkspaceList(env, api, branchId, chatId);
   if (data === 'cancel' || data === 'expskip' || data === 'expcancelall') {
     const session = await getSession(env.DB, userId);
@@ -1729,6 +1761,110 @@ async function confirmIncome(env: Bindings, api: TelegramApi, branchId: number, 
     [[{ text: 'View reports', url: adminUrl(env, '/admin/reports', branch) }], ...homeKeyboard(true)]
   );
   console.log(JSON.stringify({ event: 'telegram_income_created', branchId, incomeId, userId }));
+}
+
+// ---------- Gold purchases (Jin&Jaw Arabia) ----------
+
+/** One ounce goes straight to the price; several ask how many first. */
+async function startBuyGold(env: Bindings, api: TelegramApi, userId: string, chatId: string, ounces: number | null): Promise<void> {
+  const branch = await getSubmissionsBranch(env.DB);
+  if (!branch) throw new Error('Gold purchases are saved to Jin&Jaw Arabia, and that company isn’t set up.');
+  const settings = await getSettings(env.DB, branch.id);
+  const state: GoldState = { branchId: branch.id, currency: settings.currency };
+  if (ounces) return askGoldPrice(env, api, userId, chatId, { ...state, ounces });
+  await saveSession(env.DB, userId, branch.id, 'buy_gold', 'count', state);
+  await api.sendMessage(chatId, '<b>Buy gold</b>\n\nHow many ounces did you buy? Send a whole number, e.g. <b>3</b>.', [
+    [{ text: 'Cancel', callback_data: 'cancel' }],
+  ]);
+}
+
+async function askGoldPrice(env: Bindings, api: TelegramApi, userId: string, chatId: string, state: GoldState): Promise<void> {
+  await saveSession(env.DB, userId, state.branchId, 'buy_gold', 'price', state);
+  const one = state.ounces === 1;
+  await api.sendMessage(
+    chatId,
+    `<b>Buy ${one ? '1 ounce' : `${state.ounces} ounces`} of gold</b>\n\nWhat was the price ${
+      one ? 'of the ounce' : 'per ounce'
+    }? Send an amount in ${esc(state.currency)}, e.g. <b>4100</b>.`,
+    [[{ text: 'Cancel', callback_data: 'cancel' }]]
+  );
+}
+
+async function continueBuyGold(
+  env: Bindings,
+  api: TelegramApi,
+  userId: string,
+  chatId: string,
+  step: string,
+  state: GoldState,
+  text: string
+): Promise<void> {
+  if (step === 'count') {
+    const ounces = parseOunces(text);
+    if (!ounces) throw new Error('Send a whole number of ounces, e.g. 3.');
+    return askGoldPrice(env, api, userId, chatId, { ...state, ounces });
+  }
+  if (step === 'price') {
+    const money = parseMoneyReply(text);
+    if (!money) throw new Error('Send the price per ounce as an amount greater than zero, e.g. 4100.');
+    const next: GoldState = { ...state, unitCents: money.cents, currency: money.currency ?? state.currency };
+    const [branch, settings] = await Promise.all([getBranch(env.DB, next.branchId), getSettings(env.DB, next.branchId)]);
+    await saveSession(env.DB, userId, next.branchId, 'buy_gold', 'review', next);
+    const total = next.unitCents! * next.ounces!;
+    await api.sendMessage(
+      chatId,
+      [
+        '<b>Gold purchase</b> (not saved yet)',
+        '',
+        `Company: ${esc(branch?.name ?? 'Jin&Jaw Arabia')}`,
+        `Gold: <b>${esc(goldSummary(next.ounces!, total, next.currency))}</b>`,
+        `Total paid: <b>${esc(formatCents(total, next.currency))}</b>`,
+        `Date: ${formatDateHuman(todayInTz(settings.timezone))}`,
+      ].join('\n'),
+      [
+        [{ text: `✅ Save ${formatCents(total, next.currency)}`, callback_data: 'goldconfirm' }],
+        [{ text: 'Cancel', callback_data: 'cancel' }],
+      ]
+    );
+    return;
+  }
+  throw new Error('Tap Save or Cancel on the gold purchase above.');
+}
+
+/** Saves the purchase as an expense that also adds the ounces to the gold holding. */
+async function confirmBuyGold(env: Bindings, api: TelegramApi, userId: string, chatId: string): Promise<void> {
+  const session = await getSession(env.DB, userId);
+  if (!session || session.flow !== 'buy_gold' || session.step !== 'review') {
+    throw new Error('That gold purchase was already saved or has expired. Start again with /gold.');
+  }
+  const state = JSON.parse(session.data_json) as GoldState;
+  const branch = await getBranch(env.DB, state.branchId);
+  if (!branch || !state.ounces || !state.unitCents) throw new Error('That gold purchase is incomplete. Start again with /gold.');
+  // Cleared first, so a second tap on Save finds no purchase to save.
+  await clearSession(env.DB, userId);
+  const settings = await getSettings(env.DB, branch.id);
+  const total = state.unitCents * state.ounces;
+  const summary = goldSummary(state.ounces, total, state.currency);
+  const expenseId = await createExpense(env.DB, {
+    branch_id: branch.id,
+    client_id: null,
+    expense_date: todayInTz(settings.timezone),
+    payee: GOLD_PAYEE,
+    category: GOLD_CATEGORY,
+    description: summary,
+    reference: null,
+    amount_cents: total,
+    tax_cents: 0,
+    currency: state.currency,
+    gold_ounces: state.ounces,
+  });
+  const held = await goldOuncesHeld(env.DB, branch.id);
+  await api.sendMessage(
+    chatId,
+    `✅ Gold saved to <b>${esc(branch.name)}</b>: ${esc(summary)}, ${esc(formatCents(total, state.currency))} in total.\n\nGold held now: <b>${held} oz</b>.`,
+    [[{ text: 'View gold', url: adminUrl(env, '/admin/gold', branch) }]]
+  );
+  console.log(JSON.stringify({ event: 'telegram_gold_bought', branchId: branch.id, expenseId, ounces: state.ounces, userId }));
 }
 
 // ---------- Expense upload (PDF or receipt photo) ----------

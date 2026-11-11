@@ -16,6 +16,7 @@ import {
   type IncomeDocumentRead,
   type ParsedExpenseInvoice,
 } from '../../lib/expense-invoice-import';
+import { GOLD_CATEGORY, GOLD_PAYEE, parseOunces } from '../../lib/gold';
 import { parseMoneyReply, parseQuickEntry } from '../../lib/telegram-input';
 import { readIncomeImage, readReceiptImage, parseReceiptFields, type ReceiptImageMime } from '../receipt-ocr';
 import { TelegramApi, type InlineKeyboard, type TelegramMessage, type TelegramUser } from '../telegram/api';
@@ -40,7 +41,7 @@ import {
   type SubmissionsUpdateStart,
   type Submitter,
 } from './repository';
-import { amountLabel, kindLabel, partyLabel, submissionLines, submissionsMenuKeyboard } from './format';
+import { amountLabel, isGold, kindLabel, partyLabel, submissionLines, submissionsMenuKeyboard } from './format';
 import { notifyAdminsOfAccessRequest, notifyAdminsOfSubmission } from './review';
 
 type Context = {
@@ -152,6 +153,8 @@ async function route(ctx: Context, update: TelegramUpdate, draft: Submission | n
   if (command.startsWith('/')) {
     if (command === '/expense') return startDraft(ctx, 'expense');
     if (command === '/income') return startDraft(ctx, 'income');
+    if (command === '/buyounce') return startGold(ctx, 1);
+    if (command === '/buyounces' || command === '/gold') return startGold(ctx, null);
     if (command === '/mine' || command === '/requests') return showMine(ctx);
     if (command === '/cancel') return cancelDraft(ctx);
     return showMenu(ctx, draft);
@@ -177,6 +180,8 @@ async function showMenu(ctx: Context, draft: Submission | null): Promise<void> {
       '',
       '/expense: money paid out',
       '/income: money received',
+      '/buyounce: one ounce of gold bought',
+      '/buyounces: several ounces of gold bought',
       '/mine: your recent requests',
       '/cancel: drop the request you’re filling in',
     ].join('\n'),
@@ -186,6 +191,8 @@ async function showMenu(ctx: Context, draft: Submission | null): Promise<void> {
 
 async function handleCallback(ctx: Context, draft: Submission | null, data: string): Promise<void> {
   if (data === 'expense' || data === 'income') return startDraft(ctx, data);
+  if (data === 'gold1') return startGold(ctx, 1);
+  if (data === 'goldmany') return startGold(ctx, null);
   if (data === 'mine') return showMine(ctx);
   if (data === 'menu') return showMenu(ctx, draft);
   if (data === 'cancel') return cancelDraft(ctx);
@@ -232,6 +239,17 @@ async function startDraft(ctx: Context, kind: SubmissionKind): Promise<void> {
   await askStep(ctx, draft, 'file');
 }
 
+/** A gold purchase: one ounce goes straight to the price, several ask how many first. */
+async function startGold(ctx: Context, ounces: number | null): Promise<void> {
+  const draft = await createDraft(ctx.env.DB, ctx.submitter.id, ctx.branch.id, {
+    kind: 'expense',
+    category: GOLD_CATEGORY,
+    party: GOLD_PAYEE,
+    ...(ounces ? { gold_ounces: ounces } : {}),
+  });
+  await continueDraft(ctx, draft);
+}
+
 async function cancelDraft(ctx: Context): Promise<void> {
   await deleteDraft(ctx.env.DB, ctx.submitter.id);
   await ctx.api.sendMessage(ctx.chatId, 'Cancelled.', submissionsMenuKeyboard());
@@ -242,6 +260,7 @@ async function cancelDraft(ctx: Context): Promise<void> {
 /** The next thing the draft needs, or 'review' once it can be sent. */
 function nextStep(draft: Submission): string {
   if (!draft.kind) return 'kind';
+  if (isGold(draft)) return draft.gold_ounces === null ? 'gold_count' : draft.amount_cents === null ? 'gold_price' : 'review';
   if (draft.amount_cents === null) return 'amount';
   // Income always comes from Adhoc; showReview fills it in.
   if (!draft.party && draft.kind !== 'income') return 'party';
@@ -284,6 +303,28 @@ async function askStep(ctx: Context, draft: Submission, step: string, note = '')
     );
     return;
   }
+  if (step === 'gold_count') {
+    await api.sendMessage(chatId, `${note}<b>Buy gold</b>
+
+How many ounces were bought? Send a whole number, e.g. <b>3</b>.`, [
+      CANCEL_ROW,
+    ]);
+    return;
+  }
+  if (step === 'gold_price') {
+    const currency = current.currency ?? (await settingsFor(ctx)).currency;
+    const ounces = current.gold_ounces ?? 1;
+    await api.sendMessage(
+      chatId,
+      `${note}<b>Buy ${ounces === 1 ? '1 ounce' : `${ounces} ounces`} of gold</b>
+
+What was the price ${
+        ounces === 1 ? 'of the ounce' : 'per ounce'
+      }? Send an amount in ${esc(currency)}, e.g. <b>4100</b>.`,
+      [CANCEL_ROW]
+    );
+    return;
+  }
   if (step === 'party') {
     await api.sendMessage(chatId, `${note}Who was paid? Send the supplier or shop name.`, [CANCEL_ROW]);
     return;
@@ -322,6 +363,13 @@ async function chooseKind(ctx: Context, draft: Submission, kind: SubmissionKind)
 }
 
 async function editField(ctx: Context, draft: Submission, field: string): Promise<void> {
+  if (isGold(draft)) {
+    // Only the count, the price, the date and the note can change on a gold purchase.
+    if (field === 'ounces') return askStep(ctx, draft, 'gold_count');
+    if (field === 'amount') return askStep(ctx, draft, 'gold_price');
+    if (field === 'date' || field === 'note') return askStep(ctx, draft, field);
+    throw new Error('That option is no longer available.');
+  }
   if (field === 'amount' || field === 'date' || field === 'note') return askStep(ctx, draft, field);
   if (field === 'party' && draft.kind === 'expense') return askStep(ctx, draft, field);
   if (field === 'category' && draft.kind === 'expense') {
@@ -361,6 +409,23 @@ async function receiveText(ctx: Context, draft: Submission | null, text: string)
       ...(quick.party ? { party: quick.party } : {}),
     });
     return continueDraft(ctx, updated);
+  }
+  if (step === 'gold_count') {
+    const ounces = parseOunces(text);
+    if (!ounces) throw new Error('Send a whole number of ounces, e.g. 3.');
+    // A changed count keeps the price per ounce already given.
+    const unitCents = draft.amount_cents !== null && draft.gold_ounces ? Math.round(draft.amount_cents / draft.gold_ounces) : null;
+    return continueDraft(
+      ctx,
+      await updateDraft(env.DB, draft, { gold_ounces: ounces, ...(unitCents ? { amount_cents: unitCents * ounces } : {}) })
+    );
+  }
+  if (step === 'gold_price') {
+    const money = parseMoneyReply(text);
+    if (!money) throw new Error('Send the price per ounce as an amount greater than zero, e.g. 4100.');
+    const patch: DraftPatch = { amount_cents: money.cents * (draft.gold_ounces ?? 1), tax_cents: 0 };
+    if (money.currency) patch.currency = money.currency;
+    return continueDraft(ctx, await updateDraft(env.DB, draft, patch));
   }
   if (step === 'amount') {
     const money = parseMoneyReply(text);
@@ -413,6 +478,8 @@ async function receiveFile(ctx: Context, draft: Submission | null, message: Tele
   let current = draft ?? (await createDraft(env.DB, ctx.submitter.id, ctx.branch.id, {}));
   current = await setDraftFile(env.DB, current, file);
   if (!current.kind) return askStep(ctx, current, 'kind', '📎 Got the file.\n\n');
+  // A gold purchase keeps the file as evidence only; the count and price are typed.
+  if (isGold(current)) return continueDraft(ctx, current, '📎 Got the file.\n\n');
   await api.sendChatAction(ctx.chatId, 'typing').catch(() => undefined);
   current = await applyEvidence(ctx, current);
   await continueDraft(ctx, current, readNote(current));
@@ -504,6 +571,7 @@ async function showReview(ctx: Context, draft: Submission, note = ''): Promise<v
   const defaults: DraftPatch = { step: 'review' };
   if (!draft.entry_date) defaults.entry_date = todayInTz(settings.timezone);
   if (!draft.currency) defaults.currency = settings.currency;
+  const gold = isGold(draft);
   if (draft.kind === 'expense' && !draft.category) defaults.category = 'Other';
   // Replaces any name typed with the amount, e.g. "Acme 1200".
   if (draft.kind === 'income') defaults.party = await getIncomePayer(ctx.env.DB, ctx.branch.id);
@@ -511,13 +579,21 @@ async function showReview(ctx: Context, draft: Submission, note = ''): Promise<v
   const attachHint = current.file_name ? '' : '\n\nYou can still send a photo or PDF of the invoice.';
   await ctx.api.sendMessage(
     ctx.chatId,
-    `${note}<b>${current.kind === 'income' ? 'Income' : 'Expense'} request</b> (not sent yet)\n\n${submissionLines(
+    `${note}<b>${gold ? 'Gold purchase' : current.kind === 'income' ? 'Income' : 'Expense'} request</b> (not sent yet)\n\n${submissionLines(
       current,
       settings.currency
     ).join('\n')}${attachHint}\n\nTap <b>Send for approval</b> when it’s right.`,
     [
       [{ text: '✅ Send for approval', callback_data: 'submit' }],
-      ...(current.kind === 'expense'
+      ...(gold
+        ? [
+            [
+              { text: '🥇 Ounces', callback_data: 'edit:ounces' },
+              { text: '✏️ Price per ounce', callback_data: 'edit:amount' },
+            ],
+            [{ text: '📅 Date', callback_data: 'edit:date' }],
+          ]
+        : current.kind === 'expense'
         ? [
             [
               { text: '✏️ Amount', callback_data: 'edit:amount' },
