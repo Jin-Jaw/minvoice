@@ -118,8 +118,12 @@ reader need Open or Download.
 
 The Income page (`/admin/income`) lists money received without an invoice
 from this app (`income_entries`), such as rent in Property / Flats and income
-approved from the staff bot. Entries are added from the Telegram bots; the web
-app has no form for new entries. Each row shows its files (`income_attachments`)
+approved from the staff bot. Entries are added from the Telegram bots or from
+the "Add income" form at the top of the page, which works in every workspace.
+The form asks for the company, who paid, the date, the amount and the
+currency. A reference and a file are optional, so income can be saved with no
+invoice at all. A payer named exactly like one of the company's clients is
+linked to that client. Each row shows its files (`income_attachments`)
 in the same evidence viewer as expenses, served from
 `/admin/income/:id/attachments/:attachmentId/view`. "Upload invoice" adds a
 file, and Void keeps an entry on file but removes it from report totals.

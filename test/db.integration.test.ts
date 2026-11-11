@@ -472,6 +472,31 @@ describe('expense ledger and evidence', () => {
     const voided = await DB.prepare('SELECT voided_at FROM income_entries WHERE id = ?').bind(bare).first<{ voided_at: string | null }>();
     expect(voided?.voided_at).not.toBeNull();
     expect((await post(`/admin/income/${bare}/void?workspace=1`, new URLSearchParams({ action: 'restore' }))).status).toBe(404);
+
+    // The web form saves income with no invoice file, in the chosen company.
+    const typed = (over: Record<string, string> = {}) =>
+      new URLSearchParams({
+        branch_id: String(flats!.id), payer: 'Flat 7 tenant', amount: '950.50', currency: 'GBP',
+        income_date: '2026-09-21', reference: 'Cash rent', ...over,
+      });
+    expect((await post('/admin/income?workspace=2', typed())).status).toBe(302);
+    const saved = await DB.prepare(
+      `SELECT branch_id, client_id, amount_cents, currency, income_date, reference,
+              (SELECT COUNT(*) FROM income_attachments a WHERE a.income_id = i.id) AS files
+       FROM income_entries i WHERE payer = 'Flat 7 tenant'`
+    ).first();
+    expect(saved).toEqual({
+      branch_id: flats!.id, client_id: null, amount_cents: 95050, currency: 'GBP',
+      income_date: '2026-09-21', reference: 'Cash rent', files: 0,
+    });
+    expect(await (await get('/admin/income?workspace=2')).text()).toContain('Flat 7 tenant');
+
+    // Bad input shows the form again and saves nothing; another workspace's company is refused.
+    const rejected = await post('/admin/income?workspace=2', typed({ payer: 'Nobody', amount: '0' }));
+    expect(rejected.status).toBe(400);
+    expect(await rejected.text()).toContain('Enter the amount received');
+    expect((await post('/admin/income?workspace=1', typed({ payer: 'Nobody' }))).status).toBe(400);
+    expect(await DB.prepare(`SELECT COUNT(*) AS n FROM income_entries WHERE payer = 'Nobody'`).first('n')).toBe(0);
   });
 
   it('rejects a spoofed image upload and accepts a genuine PDF through the admin form', async () => {
