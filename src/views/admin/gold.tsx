@@ -10,6 +10,7 @@ export type GoldFormValues = { ounces: string; price: string; purchase_date: str
 export function GoldPage({
   branch,
   purchases,
+  held,
   values,
   currency,
   error,
@@ -19,13 +20,16 @@ export function GoldPage({
   /** Null when the open workspace is not the one that holds gold. */
   branch: Branch | null;
   purchases: Expense[];
+  /** All ounces held: bought here plus received as income. */
+  held: number;
   values: GoldFormValues;
   currency: string;
   error?: string;
   saved?: boolean;
   nonce?: string;
 }) {
-  const ounces = purchases.reduce((sum, purchase) => sum + (purchase.gold_ounces ?? 0), 0);
+  const bought = purchases.reduce((sum, purchase) => sum + (purchase.gold_ounces ?? 0), 0);
+  const received = held - bought;
   const paid = new Map<string, number>();
   for (const purchase of purchases) paid.set(purchase.currency, (paid.get(purchase.currency) ?? 0) + purchase.amount_cents);
   return (
@@ -52,10 +56,15 @@ export function GoldPage({
           <div class="stat-grid">
             <div class="card stat">
               <span class="stat-label">Gold held</span>
-              <span class="stat-value">{ounces} oz</span>
+              <span class="stat-value">{held} oz</span>
+              {received > 0 ? (
+                <span class="muted">
+                  {bought} oz bought · {received} oz <a href="/admin/income">received as income</a>
+                </span>
+              ) : null}
             </div>
             <div class="card stat">
-              <span class="stat-label">Paid for gold held</span>
+              <span class="stat-label">Paid for gold bought</span>
               {paid.size === 0 ? <span class="stat-value">{formatCents(0, currency)}</span> : null}
               {[...paid].map(([code, cents]) => <span class="stat-value">{formatCents(cents, code)}</span>)}
             </div>

@@ -177,5 +177,42 @@ describe('0019 Arabia workspace split', () => {
     // Gold belongs to the company, so a client filter and other workspaces do not show it.
     expect(await page(`workspace=${workspace!.id}&client=999`)).not.toContain('Gold held');
     expect(await page('workspace=1')).not.toContain('Gold held');
+
+    // Gold received as income adds to the gold held and stays out of the money totals.
+    const addIncome = (workspaceId: number, branchId: number, fields: Record<string, string>) =>
+      exports.default.fetch(
+        new Request(`https://invoice.test/admin/income?workspace=${workspaceId}`, {
+          method: 'POST',
+          headers: { cookie, 'sec-fetch-site': 'same-origin' },
+          body: new URLSearchParams({
+            branch_id: String(branchId), payer: 'Gold Client', currency: 'USD', income_date: '2026-08-16', amount: '', ...fields,
+          }),
+          redirect: 'manual',
+        })
+      );
+    expect((await addIncome(workspace!.id, branch!.id, { gold_ounces: '2' })).status).toBe(302);
+    expect(
+      await DB.prepare(`SELECT amount_cents, currency FROM income_entries WHERE payer = 'Gold Client'`).first()
+    ).toEqual({ amount_cents: 200, currency: 'XAU' });
+
+    const withIncome = await page(`workspace=${workspace!.id}`);
+    expect(withIncome).toContain('5 oz gold');
+    expect(withIncome).not.toContain('XAU');
+    const incomeList = await (
+      await exports.default.fetch(new Request(`https://invoice.test/admin/income?workspace=${workspace!.id}`, { headers: { cookie } }))
+    ).text();
+    expect(incomeList).toContain('2 oz gold');
+    const summary = await reportSummary(DB, null, '2026-08-20', null, workspace!.id);
+    expect(summary.by_currency.map((sums) => sums.currency)).toEqual(['USD']);
+
+    // Voiding the income takes the gold back out.
+    await DB.prepare(`UPDATE income_entries SET voided_at = datetime('now') WHERE payer = 'Gold Client'`).run();
+    expect(await page(`workspace=${workspace!.id}`)).toContain('3 oz gold');
+
+    // Not both an amount and ounces, no gold outside Arabia, and XAU is not a money currency.
+    expect((await addIncome(workspace!.id, branch!.id, { gold_ounces: '2', amount: '10' })).status).toBe(400);
+    expect((await addIncome(1, 1, { gold_ounces: '2' })).status).toBe(400);
+    expect((await addIncome(workspace!.id, branch!.id, { amount: '10', currency: 'XAU' })).status).toBe(400);
+    expect(await DB.prepare(`SELECT COUNT(*) AS n FROM income_entries WHERE voided_at IS NULL`).first('n')).toBe(0);
   });
 });

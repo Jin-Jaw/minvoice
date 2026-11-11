@@ -15,7 +15,8 @@ export function isClientRateCurrency(code: string): code is ClientRateCurrency {
 }
 
 export function isSupportedCurrency(code: string): boolean {
-  if (!/^[A-Z]{3}$/.test(code) || ZERO_DECIMAL.has(code)) return false;
+  // XAU is gold ounces, not money: only the gold income form may write it (lib/gold.ts).
+  if (!/^[A-Z]{3}$/.test(code) || ZERO_DECIMAL.has(code) || code === 'XAU') return false;
   try {
     new Intl.NumberFormat('en-US', { style: 'currency', currency: code });
     return true;

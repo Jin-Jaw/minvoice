@@ -134,8 +134,8 @@ Jin&Jaw Arabia sometimes buys gold ounces. A purchase is an expense in the
 `Gold` category, paid to `Gold purchase`, with the number of whole ounces in
 `expenses.gold_ounces` (migration `0022_gold_ounces.sql`). The expense lowers
 cash in reports like any other expense. The gold held is the sum of
-`gold_ounces` over expenses that are not voided, so voiding the expense
-removes the gold.
+`gold_ounces` over expenses that are not voided, plus gold received as income
+(below), so voiding the expense removes the gold.
 
 A purchase is always saved to the Arabia company (the first active company in
 the `jinjaw-arabia` workspace), in that company's currency unless another is
@@ -156,6 +156,14 @@ and the ounces held side by side. Gold is counted in ounces only, like a
 second currency: it has no price and is never added to a cash amount. Both
 tiles are hidden while a client filter is on, because gold belongs to the
 company and not to a client.
+
+Gold can also be received as income. In the Arabia workspace the "Add income"
+form on the Income page has an "Or gold ounces" field; fill it in place of the
+amount. The entry is an `income_entries` row with currency `XAU` (the ISO code
+for a troy ounce of gold) and `amount_cents` of 100 per ounce, so there is no
+extra column. Gold income adds to the gold held and is left out of every money
+total in Reports, because gold has no price. Voiding the entry removes the
+gold. `XAU` is refused everywhere else a currency is typed.
 
 There is no selling flow yet, and the gold is not valued at a market price.
 
