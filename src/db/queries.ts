@@ -1,3 +1,4 @@
+import { GOLD_CURRENCY, ouncesToGoldAmount } from '../lib/gold';
 import { computeTotals, itemAmountCents, type ClientRateCurrency, type ItemInput } from '../lib/money';
 import { newPublicToken } from '../lib/tokens';
 import { todayInTz } from '../lib/dates';
@@ -1248,10 +1249,16 @@ export async function listGoldPurchases(db: D1Database, branchId: number): Promi
   ).results;
 }
 
-/** Ounces of gold the company holds. */
+/** Ounces of gold the company holds: ounces bought plus ounces received as income, voided rows left out. */
 export async function goldOuncesHeld(db: D1Database, branchId: number): Promise<number> {
   const total = await db
-    .prepare('SELECT COALESCE(SUM(gold_ounces), 0) AS ounces FROM expenses WHERE branch_id = ? AND voided_at IS NULL')
+    .prepare(
+      `SELECT
+         (SELECT COALESCE(SUM(gold_ounces), 0) FROM expenses WHERE branch_id = ?1 AND voided_at IS NULL)
+         + (SELECT COALESCE(SUM(amount_cents), 0) FROM income_entries
+            WHERE branch_id = ?1 AND voided_at IS NULL AND currency = '${GOLD_CURRENCY}') / ${ouncesToGoldAmount(1)}
+         AS ounces`
+    )
     .bind(branchId)
     .first<number>('ounces');
   return total ?? 0;
@@ -1694,6 +1701,9 @@ export type ReportSummary = {
 };
 
 /**
+ * Gold received as income is left out of every money total here; it counts
+ * in goldOuncesHeld instead.
+ *
  * Per-month activity, newest first. "Invoiced" = non-draft, non-void invoices
  * by issue date; "received" = payment rows by receipt date. Rows are grouped
  * by (month, currency) — amounts in different currencies are never summed.
@@ -1733,6 +1743,7 @@ export async function monthlyReport(
               COALESCE(SUM(ie.amount_cents), 0) AS total
        FROM income_entries ie JOIN branches b ON b.id = ie.branch_id
        WHERE b.workspace_id = ?3 AND (?1 IS NULL OR ie.branch_id = ?1) AND ie.voided_at IS NULL
+         AND ie.currency <> '${GOLD_CURRENCY}'
          AND (?2 IS NULL OR ie.client_id = ?2)
        GROUP BY ym, ie.currency`
     ).bind(branchId, clientId, workspaceId),
@@ -1883,6 +1894,7 @@ export async function reportSummary(
         `SELECT ie.currency, COALESCE(SUM(ie.amount_cents), 0) AS cents
          FROM income_entries ie JOIN branches b ON b.id = ie.branch_id
          WHERE b.workspace_id = ?4 AND (?1 IS NULL OR ie.branch_id = ?1) AND ie.voided_at IS NULL
+           AND ie.currency <> '${GOLD_CURRENCY}'
            AND strftime('%Y', ie.income_date) = substr(?2, 1, 4)
            AND (?3 IS NULL OR ie.client_id = ?3) GROUP BY ie.currency`
       )

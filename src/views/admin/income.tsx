@@ -1,6 +1,7 @@
 import type { Branch, IncomeAttachmentMeta, IncomeListRow } from '../../db/queries';
 import { formatDateHuman } from '../../lib/dates';
 import { MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
+import { GOLD_CURRENCY, MAX_GOLD_OUNCES, goldAmountToOunces } from '../../lib/gold';
 import { currencyOptions, formatCents } from '../../lib/money';
 import { Icon } from '../icons';
 import { Layout } from '../layout';
@@ -10,6 +11,8 @@ export type IncomeFormValues = {
   branch_id: string;
   payer: string;
   amount: string;
+  /** Filled in place of an amount when the income is gold. */
+  gold_ounces: string;
   currency: string;
   income_date: string;
   reference: string;
@@ -22,11 +25,14 @@ export function IncomePage({
   branches,
   branchId,
   payers,
+  goldBranchName = null,
   values,
   error,
   saved,
   nonce,
 }: {
+  /** The company that can receive gold, when it is in this workspace. */
+  goldBranchName?: string | null;
   income: IncomeListRow[];
   attachments: IncomeAttachmentMeta[];
   branches: Branch[];
@@ -96,8 +102,15 @@ export function IncomePage({
           <div class="form-row">
             <div class="form-group">
               <label for="income_amount">Amount received</label>
-              <input id="income_amount" name="amount" inputmode="decimal" value={values.amount} required placeholder="0.00" />
+              <input id="income_amount" name="amount" inputmode="decimal" value={values.amount} required={!goldBranchName} placeholder="0.00" />
             </div>
+            {goldBranchName ? (
+              <div class="form-group">
+                <label for="income_gold">Or gold ounces</label>
+                <input id="income_gold" name="gold_ounces" type="number" min="1" max={MAX_GOLD_OUNCES} step="1" value={values.gold_ounces} />
+                <span class="muted">For gold received by {goldBranchName}. Leave the amount empty; gold has no price.</span>
+              </div>
+            ) : null}
             <div class="form-group">
               <label for="income_currency">Currency</label>
               <select id="income_currency" name="currency" required>
@@ -178,7 +191,11 @@ export function IncomePage({
                     </form>
                   </div>
                 </td>
-                <td class="text-right" data-label="Amount">{formatCents(entry.amount_cents, entry.currency)}</td>
+                <td class="text-right" data-label="Amount">
+                  {entry.currency === GOLD_CURRENCY
+                    ? `${goldAmountToOunces(entry.amount_cents)} oz gold`
+                    : formatCents(entry.amount_cents, entry.currency)}
+                </td>
                 <td class="row-actions">
                   <details class="row-menu">
                     <summary aria-label={`Actions for ${entry.payer}`}><Icon name="kebab" /></summary>

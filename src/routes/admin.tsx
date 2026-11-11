@@ -132,7 +132,7 @@ import { ClientEditPage, ClientNewPage, ClientsPage } from '../views/admin/clien
 import { PaymentsPage } from '../views/admin/payments';
 import { IncomePage, type IncomeFormValues } from '../views/admin/income';
 import { GoldPage, type GoldFormValues } from '../views/admin/gold';
-import { GOLD_CATEGORY, GOLD_PAYEE, goldSummary, parseOunces } from '../lib/gold';
+import { GOLD_CATEGORY, GOLD_CURRENCY, GOLD_PAYEE, goldSummary, ouncesToGoldAmount, parseOunces } from '../lib/gold';
 import { getSubmissionsBranch } from '../services/submissions/repository';
 import { ReportsPage } from '../views/admin/reports';
 import { SettingsPage } from '../views/admin/settings';
@@ -1646,13 +1646,18 @@ async function goldBranchFor(c: Context<AppEnv>): Promise<Branch | null> {
 }
 
 async function goldPage(c: Context<AppEnv>, branch: Branch | null, form: Partial<GoldFormValues>, error?: string) {
-  const [purchases, settings] = branch
-    ? await Promise.all([listGoldPurchases(c.env.DB, branch.id), getSettings(c.env.DB, branch.id)])
-    : [[], await getSettings(c.env.DB, c.get('branchId'))];
+  const [purchases, settings, held] = branch
+    ? await Promise.all([
+        listGoldPurchases(c.env.DB, branch.id),
+        getSettings(c.env.DB, branch.id),
+        goldOuncesHeld(c.env.DB, branch.id),
+      ])
+    : [[], await getSettings(c.env.DB, c.get('branchId')), 0];
   return c.html(
     <GoldPage
       branch={branch}
       purchases={purchases}
+      held={held}
       currency={settings.currency}
       values={{
         ounces: form.ounces ?? '1',
@@ -1710,11 +1715,12 @@ async function incomePage(c: Context<AppEnv>, form: Partial<IncomeFormValues> = 
   const requestedBranch = Number(c.req.query('company'));
   const branchId = branches.some((branch) => branch.id === requestedBranch) ? requestedBranch : null;
   const formBranch = branches.find((branch) => branch.id === (branchId ?? c.get('branchId'))) ?? branches[0];
-  const [income, attachments, clients, settings] = await Promise.all([
+  const [income, attachments, clients, settings, goldBranch] = await Promise.all([
     listIncome(c.env.DB, branchId, workspaceId),
     listWorkspaceIncomeAttachmentMeta(c.env.DB, workspaceId),
     listClients(c.env.DB, false, workspaceId),
     getSettings(c.env.DB, formBranch?.id ?? c.get('branchId')),
+    goldBranchFor(c),
   ]);
   return c.html(
     <IncomePage
@@ -1723,10 +1729,12 @@ async function incomePage(c: Context<AppEnv>, form: Partial<IncomeFormValues> = 
       branches={branches}
       branchId={branchId}
       payers={clients.map((client) => client.name)}
+      goldBranchName={goldBranch?.name ?? null}
       values={{
         branch_id: form.branch_id ?? String(formBranch?.id ?? ''),
         payer: form.payer ?? '',
         amount: form.amount ?? '',
+        gold_ounces: form.gold_ounces ?? '',
         currency: form.currency ?? settings.currency,
         income_date: form.income_date ?? todayInTz(settings.timezone),
         reference: form.reference ?? '',
@@ -1749,6 +1757,7 @@ admin.post('/income', async (c) => {
     branch_id: text('branch_id'),
     payer: text('payer'),
     amount: text('amount'),
+    gold_ounces: text('gold_ounces'),
     currency: text('currency').toUpperCase(),
     income_date: text('income_date'),
     reference: text('reference'),
@@ -1758,11 +1767,24 @@ admin.post('/income', async (c) => {
   if (form.payer.length < 2 || form.payer.length > 120) {
     return incomePage(c, form, 'Enter who paid, between 2 and 120 characters.');
   }
-  const amount = parseAmountToCents(form.amount);
-  if (!amount || amount <= 0 || amount > 10_000_000_000) {
-    return incomePage(c, form, 'Enter the amount received as an amount greater than zero.');
+  // Income is either money or gold ounces. Gold is saved in ounces, with no price.
+  let amount: number | null;
+  let currency = form.currency;
+  if (form.gold_ounces) {
+    const goldBranch = await goldBranchFor(c);
+    if (goldBranch?.id !== branch.id) return incomePage(c, form, 'Gold can only be received by Jin&Jaw Arabia.');
+    if (form.amount) return incomePage(c, form, 'Enter an amount or gold ounces, not both.');
+    const ounces = parseOunces(form.gold_ounces);
+    if (!ounces) return incomePage(c, form, 'Enter a whole number of ounces, from 1 to 1,000.');
+    amount = ouncesToGoldAmount(ounces);
+    currency = GOLD_CURRENCY;
+  } else {
+    amount = parseAmountToCents(form.amount);
+    if (!amount || amount <= 0 || amount > 10_000_000_000) {
+      return incomePage(c, form, 'Enter the amount received as an amount greater than zero.');
+    }
+    if (!isSupportedCurrency(currency)) return incomePage(c, form, 'Choose a supported three-letter currency.');
   }
-  if (!isSupportedCurrency(form.currency)) return incomePage(c, form, 'Choose a supported three-letter currency.');
   const settings = await getSettings(c.env.DB, branch.id);
   if (!isIsoDate(form.income_date) || form.income_date > todayInTz(settings.timezone)) {
     return incomePage(c, form, 'Enter a date received that is not in the future.');
@@ -1783,7 +1805,7 @@ admin.post('/income', async (c) => {
     payer: form.payer,
     income_date: form.income_date,
     amount_cents: amount,
-    currency: form.currency,
+    currency,
     reference: form.reference || null,
   });
   if (prepared?.file) await addIncomeAttachment(c.env.DB, incomeId, prepared.file);
