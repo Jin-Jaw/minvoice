@@ -49,6 +49,7 @@ import {
   getIncome,
   getIncomeAttachment,
   addIncomeAttachment,
+  createIncome,
   getInvoiceById,
   linkClientToBranch,
   getInvoiceEvents,
@@ -63,6 +64,7 @@ import {
   listBranches,
   listWorkspaces,
   listClients,
+  listClientsForBranch,
   listExpenseAttachments,
   listWorkspaceExpenseAttachmentMeta,
   listWorkspaceExpenseAttachments,
@@ -128,7 +130,7 @@ import { InvoiceFormPage } from '../views/admin/invoice-form';
 import { InvoiceDetailPage } from '../views/admin/invoice-detail';
 import { ClientEditPage, ClientNewPage, ClientsPage } from '../views/admin/clients';
 import { PaymentsPage } from '../views/admin/payments';
-import { IncomePage } from '../views/admin/income';
+import { IncomePage, type IncomeFormValues } from '../views/admin/income';
 import { GoldPage, type GoldFormValues } from '../views/admin/gold';
 import { GOLD_CATEGORY, GOLD_PAYEE, goldSummary, parseOunces } from '../lib/gold';
 import { getSubmissionsBranch } from '../services/submissions/repository';
@@ -1702,13 +1704,17 @@ admin.post('/gold', async (c) => {
 
 // ---------- Income (money received without an invoice) ----------
 
-admin.get('/income', async (c) => {
-  const branches = await listBranches(c.env.DB, c.get('workspaceId'));
+async function incomePage(c: Context<AppEnv>, form: Partial<IncomeFormValues> = {}, error?: string) {
+  const workspaceId = c.get('workspaceId');
+  const branches = await listBranches(c.env.DB, workspaceId);
   const requestedBranch = Number(c.req.query('company'));
   const branchId = branches.some((branch) => branch.id === requestedBranch) ? requestedBranch : null;
-  const [income, attachments] = await Promise.all([
-    listIncome(c.env.DB, branchId, c.get('workspaceId')),
-    listWorkspaceIncomeAttachmentMeta(c.env.DB, c.get('workspaceId')),
+  const formBranch = branches.find((branch) => branch.id === (branchId ?? c.get('branchId'))) ?? branches[0];
+  const [income, attachments, clients, settings] = await Promise.all([
+    listIncome(c.env.DB, branchId, workspaceId),
+    listWorkspaceIncomeAttachmentMeta(c.env.DB, workspaceId),
+    listClients(c.env.DB, false, workspaceId),
+    getSettings(c.env.DB, formBranch?.id ?? c.get('branchId')),
   ]);
   return c.html(
     <IncomePage
@@ -1716,9 +1722,72 @@ admin.get('/income', async (c) => {
       attachments={attachments}
       branches={branches}
       branchId={branchId}
+      payers={clients.map((client) => client.name)}
+      values={{
+        branch_id: form.branch_id ?? String(formBranch?.id ?? ''),
+        payer: form.payer ?? '',
+        amount: form.amount ?? '',
+        currency: form.currency ?? settings.currency,
+        income_date: form.income_date ?? todayInTz(settings.timezone),
+        reference: form.reference ?? '',
+      }}
+      error={error}
+      saved={c.req.query('saved') === '1'}
       nonce={c.get('secureHeadersNonce')}
-    />
+    />,
+    error ? 400 : 200
   );
+}
+
+admin.get('/income', (c) => incomePage(c));
+
+// Income typed on the web. The file is optional, as it is in the bots.
+admin.post('/income', async (c) => {
+  const raw = (await c.req.parseBody()) as Record<string, unknown>;
+  const text = (key: string) => (typeof raw[key] === 'string' ? (raw[key] as string).trim() : '');
+  const form: IncomeFormValues = {
+    branch_id: text('branch_id'),
+    payer: text('payer'),
+    amount: text('amount'),
+    currency: text('currency').toUpperCase(),
+    income_date: text('income_date'),
+    reference: text('reference'),
+  };
+  const branch = (await listBranches(c.env.DB, c.get('workspaceId'))).find((b) => String(b.id) === form.branch_id);
+  if (!branch) return incomePage(c, form, 'Choose a company in this workspace.');
+  if (form.payer.length < 2 || form.payer.length > 120) {
+    return incomePage(c, form, 'Enter who paid, between 2 and 120 characters.');
+  }
+  const amount = parseAmountToCents(form.amount);
+  if (!amount || amount <= 0 || amount > 10_000_000_000) {
+    return incomePage(c, form, 'Enter the amount received as an amount greater than zero.');
+  }
+  if (!isSupportedCurrency(form.currency)) return incomePage(c, form, 'Choose a supported three-letter currency.');
+  const settings = await getSettings(c.env.DB, branch.id);
+  if (!isIsoDate(form.income_date) || form.income_date > todayInTz(settings.timezone)) {
+    return incomePage(c, form, 'Enter a date received that is not in the future.');
+  }
+  if (form.reference.length > 300) return incomePage(c, form, 'Keep the reference to 300 characters or fewer.');
+
+  const evidence = raw.evidence instanceof File && raw.evidence.size > 0 ? raw.evidence : null;
+  const prepared = evidence ? await prepareExpenseAttachment(evidence) : null;
+  if (prepared && !prepared.file) return incomePage(c, form, prepared.error ?? 'Invalid invoice file.');
+
+  // A payer named like one of the company's clients is linked to it, so client reports include the income.
+  const client = (await listClientsForBranch(c.env.DB, branch.id, true)).find(
+    (candidate) => candidate.name.localeCompare(form.payer, undefined, { sensitivity: 'accent' }) === 0
+  );
+  const incomeId = await createIncome(c.env.DB, {
+    branch_id: branch.id,
+    client_id: client?.id ?? null,
+    payer: form.payer,
+    income_date: form.income_date,
+    amount_cents: amount,
+    currency: form.currency,
+    reference: form.reference || null,
+  });
+  if (prepared?.file) await addIncomeAttachment(c.env.DB, incomeId, prepared.file);
+  return c.redirect('/admin/income?saved=1');
 });
 
 admin.post('/income/:id/void', async (c) => {

@@ -1,22 +1,41 @@
 import type { Branch, IncomeAttachmentMeta, IncomeListRow } from '../../db/queries';
 import { formatDateHuman } from '../../lib/dates';
-import { formatCents } from '../../lib/money';
+import { MAX_EXPENSE_ATTACHMENT_BYTES } from '../../lib/expenses';
+import { currencyOptions, formatCents } from '../../lib/money';
 import { Icon } from '../icons';
 import { Layout } from '../layout';
 import { EvidenceLink, EvidenceViewer, incomeEvidenceFile } from './evidence-viewer';
 
-/** Money received outside invoicing, entered from the Telegram bots, with its files. */
+export type IncomeFormValues = {
+  branch_id: string;
+  payer: string;
+  amount: string;
+  currency: string;
+  income_date: string;
+  reference: string;
+};
+
+/** Money received outside invoicing, entered here or from the Telegram bots, with its files. */
 export function IncomePage({
   income,
   attachments,
   branches,
   branchId,
+  payers,
+  values,
+  error,
+  saved,
   nonce,
 }: {
   income: IncomeListRow[];
   attachments: IncomeAttachmentMeta[];
   branches: Branch[];
   branchId: number | null;
+  /** Client names offered while typing who paid. */
+  payers: string[];
+  values: IncomeFormValues;
+  error?: string;
+  saved?: boolean;
   nonce?: string;
 }) {
   const attachmentsByIncome = new Map<number, IncomeAttachmentMeta[]>();
@@ -44,6 +63,65 @@ export function IncomePage({
             </form>
           </div>
         ) : null}
+      </div>
+
+      {saved ? <div class="banner banner-success">Income saved.</div> : null}
+      {error ? <div class="banner banner-error">{error}</div> : null}
+
+      <div class="card">
+        <h2>Add income</h2>
+        <form method="post" action="/admin/income" enctype="multipart/form-data">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="income_branch">Company</label>
+              <select id="income_branch" name="branch_id" required>
+                {branches.map((branch) => (
+                  <option value={String(branch.id)} selected={String(branch.id) === values.branch_id}>{branch.name}</option>
+                ))}
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="income_payer">Received from</label>
+              <input id="income_payer" name="payer" value={values.payer} list="income-payers" minlength={2} maxlength={120} required placeholder="Client, tenant, or other payer" />
+              <datalist id="income-payers">
+                {payers.map((payer) => <option value={payer} />)}
+              </datalist>
+            </div>
+            <div class="form-group">
+              <label for="income_date">Date received</label>
+              <input id="income_date" name="income_date" type="date" value={values.income_date} required />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="income_amount">Amount received</label>
+              <input id="income_amount" name="amount" inputmode="decimal" value={values.amount} required placeholder="0.00" />
+            </div>
+            <div class="form-group">
+              <label for="income_currency">Currency</label>
+              <select id="income_currency" name="currency" required>
+                {currencyOptions().map((currency) => (
+                  <option value={currency.code} selected={currency.code === values.currency}>{currency.code} — {currency.name}</option>
+                ))}
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="income_reference">Reference or note <span class="muted">(optional)</span></label>
+              <input id="income_reference" name="reference" value={values.reference} maxlength={300} />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="income_evidence">Invoice or receipt <span class="muted">(optional)</span></label>
+            <input id="income_evidence" name="evidence" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" />
+            <span class="muted">PDF, JPG, PNG, or WebP · up to {MAX_EXPENSE_ATTACHMENT_BYTES / 1024 / 1024} MB. Income can be saved without a file.</span>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="btn btn-primary">Add income</button>
+          </div>
+        </form>
       </div>
 
       {income.length === 0 ? (
