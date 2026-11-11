@@ -34,7 +34,7 @@ export function GoldPage({
         <div>
           <h1 class="page-title">Gold</h1>
           <p class="muted">
-            Gold ounces bought{branch ? ` for ${branch.name}` : ''}. Each purchase is also an expense, so it lowers cash in reports.
+            Gold ounces bought{branch ? ` for ${branch.name}` : ''}. Each purchase is also an expense, so it lowers cash in reports. The gold held counts as an asset there, in ounces.
           </p>
         </div>
         <div class="actions">

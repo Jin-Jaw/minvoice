@@ -62,6 +62,7 @@ export function ReportsPage({
   currency,
   clients,
   clientId,
+  goldOunces = null,
   nonce,
 }: {
   currentPath: string;
@@ -70,6 +71,8 @@ export function ReportsPage({
   currency: string;
   clients: Client[];
   clientId: number | null;
+  /** Ounces of gold held; null when this workspace holds none or a client filter is on. */
+  goldOunces?: number | null;
   nonce?: string;
 }) {
   const years = groupByYear(months);
@@ -150,6 +153,26 @@ export function ReportsPage({
           ))}
           <span class="muted">received minus expenses</span>
         </div>
+        {goldOunces !== null ? (
+          <>
+            <div class="card stat">
+              <span class="stat-label">Gold held</span>
+              <span class="stat-value">{goldOunces} oz</span>
+              <span class="muted">
+                an asset, counted in ounces · <a href="/admin/gold">purchases</a>
+              </span>
+            </div>
+            {/* Gold is its own unit, like a second currency: listed beside cash, never added to it */}
+            <div class="card stat">
+              <span class="stat-label">Cash plus gold</span>
+              {sums.map((s) => (
+                <span class="stat-value">{formatCents(s.received_ytd_cents - s.expense_ytd_cents, s.currency)}</span>
+              ))}
+              <span class="stat-value">{goldOunces} oz gold</span>
+              <span class="muted">net cash this year and all gold held</span>
+            </div>
+          </>
+        ) : null}
       </div>
 
       {years.length === 0 ? (
