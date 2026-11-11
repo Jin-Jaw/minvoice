@@ -69,6 +69,7 @@ import {
   listIncome,
   listWorkspaceIncomeAttachmentMeta,
   listExpenses,
+  goldOuncesHeld,
   listGoldPurchases,
   listInvoices,
   getInvoiceSourcePdfMeta,
@@ -1939,11 +1940,14 @@ admin.get('/reports', async (c) => {
   const branchId = c.get('branchId');
   const settings = await getSettings(c.env.DB, branchId);
   const clientId = Number(c.req.query('client')) || null;
-  const [summary, months, clients] = await Promise.all([
+  const [summary, months, clients, goldBranch] = await Promise.all([
     reportSummary(c.env.DB, null, todayInTz(settings.timezone), clientId, c.get('workspaceId')),
     monthlyReport(c.env.DB, null, clientId, c.get('workspaceId')),
     listClients(c.env.DB, true, c.get('workspaceId')),
+    goldBranchFor(c),
   ]);
+  // Gold belongs to the company, not to a client, so a client filter hides it.
+  const goldOunces = goldBranch && !clientId ? await goldOuncesHeld(c.env.DB, goldBranch.id) : null;
   return c.html(
     <ReportsPage
       currentPath="/admin/reports"
@@ -1952,6 +1956,7 @@ admin.get('/reports', async (c) => {
       currency={settings.currency}
       clients={clients}
       clientId={clientId}
+      goldOunces={goldOunces}
       nonce={c.get('secureHeadersNonce')}
     />
   );

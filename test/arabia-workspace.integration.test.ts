@@ -139,4 +139,43 @@ describe('0019 Arabia workspace split', () => {
     expect(html).toContain('<option value="2">Property / Flats</option>');
     expect(html).toContain(`<option value="${workspace!.id}" selected="">Jin&amp;Jaw Arabia</option>`);
   });
+
+  it('counts gold held as an asset on the Arabia reports page only', async () => {
+    await DB.prepare(`INSERT INTO branches (name, workspace_id) VALUES ('Jin&Jaw Arabia S.A.R.L', 1)`).run();
+    await DB.prepare(`UPDATE settings SET setup_complete = 1 WHERE id = 1`).run();
+    await runArabiaSplit();
+    const workspace = await DB.prepare(`SELECT id FROM workspaces WHERE slug = 'jinjaw-arabia'`).first<{ id: number }>();
+    const branch = await DB.prepare(`SELECT id FROM branches WHERE workspace_id = ?`).bind(workspace!.id).first<{ id: number }>();
+    const gold = (ounces: number) =>
+      createExpense(DB, {
+        branch_id: branch!.id,
+        client_id: null,
+        expense_date: '2026-08-15',
+        payee: 'Gold purchase',
+        category: 'Gold',
+        description: null,
+        reference: null,
+        amount_cents: 400000 * ounces,
+        tax_cents: 0,
+        currency: 'USD',
+        gold_ounces: ounces,
+      });
+    await gold(3);
+    const voided = await gold(2);
+    await DB.prepare(`UPDATE expenses SET voided_at = datetime('now') WHERE id = ?`).bind(voided).run();
+
+    const cookie = await loginCookie();
+    const page = async (query: string) =>
+      (await exports.default.fetch(new Request(`https://invoice.test/admin/reports?${query}`, { headers: { cookie } }))).text();
+
+    const arabia = await page(`workspace=${workspace!.id}`);
+    expect(arabia).toContain('Gold held');
+    expect(arabia).toContain('Cash plus gold');
+    expect(arabia).toContain('3 oz gold');
+    expect(arabia).not.toContain('5 oz');
+
+    // Gold belongs to the company, so a client filter and other workspaces do not show it.
+    expect(await page(`workspace=${workspace!.id}&client=999`)).not.toContain('Gold held');
+    expect(await page('workspace=1')).not.toContain('Gold held');
+  });
 });

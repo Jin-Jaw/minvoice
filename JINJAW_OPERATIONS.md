@@ -146,6 +146,13 @@ typed. There are three ways to record one:
 - Web: `/admin/gold` in the Arabia workspace (the "Buy gold" button on the
   Expenses page) shows the gold held, the purchases, and a form.
 
+Gold held counts as an asset. The Reports page of the Arabia workspace shows
+a "Gold held" tile and a "Cash plus gold" tile, which lists net cash this year
+and the ounces held side by side. Gold is counted in ounces only, like a
+second currency: it has no price and is never added to a cash amount. Both
+tiles are hidden while a client filter is on, because gold belongs to the
+company and not to a client.
+
 There is no selling flow yet, and the gold is not valued at a market price.
 
 ## Workspaces
