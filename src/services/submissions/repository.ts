@@ -38,6 +38,8 @@ export type Submission = {
   tax_cents: number;
   currency: string | null;
   category: string | null;
+  /** Set on a gold purchase request: whole ounces bought. */
+  gold_ounces: number | null;
   reference: string | null;
   note: string | null;
   file_mime: string | null;
@@ -66,7 +68,8 @@ export type SubmissionFile = { bytes: Uint8Array; mime: string; filename: string
 export type DraftPatch = Partial<
   Pick<
     Submission,
-    'kind' | 'step' | 'party' | 'entry_date' | 'amount_cents' | 'tax_cents' | 'currency' | 'category' | 'reference' | 'note'
+    | 'kind' | 'step' | 'party' | 'entry_date' | 'amount_cents' | 'tax_cents' | 'currency' | 'category' | 'gold_ounces'
+    | 'reference' | 'note'
   >
 >;
 
@@ -79,6 +82,7 @@ const DRAFT_COLUMNS: readonly (keyof DraftPatch)[] = [
   'tax_cents',
   'currency',
   'category',
+  'gold_ounces',
   'reference',
   'note',
 ];
@@ -86,7 +90,7 @@ const DRAFT_COLUMNS: readonly (keyof DraftPatch)[] = [
 // Every column except the file bytes, which are only read when needed.
 const COLUMN_NAMES = [
   'id', 'submitter_id', 'branch_id', 'kind', 'status', 'step', 'party', 'entry_date', 'amount_cents', 'tax_cents',
-  'currency', 'category', 'reference', 'note', 'file_mime', 'file_name', 'file_size', 'file_sha256', 'created_at',
+  'currency', 'category', 'gold_ounces', 'reference', 'note', 'file_mime', 'file_name', 'file_size', 'file_sha256', 'created_at',
   'updated_at', 'submitted_at', 'decided_at', 'decided_by', 'decision_note', 'expense_id', 'income_id',
 ];
 const COLUMNS = COLUMN_NAMES.map((column) => `s.${column}`).join(', ');
@@ -433,9 +437,10 @@ export async function approveSubmission(
           db
             .prepare(
               `INSERT INTO expenses
-               (branch_id, client_id, expense_date, payee, category, description, reference, amount_cents, tax_cents, currency)
+               (branch_id, client_id, expense_date, payee, category, description, reference, amount_cents, tax_cents, currency,
+                gold_ounces)
                SELECT branch_id, NULL, entry_date, party, COALESCE(category, 'Other'), ?2, reference, amount_cents,
-                 MIN(tax_cents, amount_cents), currency
+                 MIN(tax_cents, amount_cents), currency, gold_ounces
                FROM submissions WHERE id = ?1 AND status = 'pending' AND kind = 'expense'`
             )
             .bind(id, text),

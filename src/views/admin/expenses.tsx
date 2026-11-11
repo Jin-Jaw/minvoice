@@ -24,12 +24,15 @@ export function ExpensesPage({
   attachments,
   branches,
   branchId,
+  goldEnabled,
   nonce,
 }: {
   expenses: ExpenseListRow[];
   attachments: ExpenseAttachmentMeta[];
   branches: Branch[];
   branchId: number | null;
+  /** The workspace holds gold (Jin&Jaw Arabia), so the Buy gold button is shown. */
+  goldEnabled?: boolean;
   nonce?: string;
 }) {
   const attachmentsByExpense = new Map<number, ExpenseAttachmentMeta[]>();
@@ -56,6 +59,7 @@ export function ExpensesPage({
               </select>
             </form>
           ) : null}
+          {goldEnabled ? <a class="btn btn-secondary" href="/admin/gold">Buy gold</a> : null}
           <a class="btn btn-secondary" href="/admin/expenses/import">
             <Icon name="upload" />
             Import invoice

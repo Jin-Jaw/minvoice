@@ -3,14 +3,15 @@
 // then sent back to the submitter through the submissions bot.
 
 import type { Bindings } from '../../env';
-import { getBranch, type Branch } from '../../db/queries';
+import { getBranch, goldOuncesHeld, type Branch } from '../../db/queries';
 import { adminUrl } from '../../lib/base-url';
 import { formatDateHuman } from '../../lib/dates';
 import { formatCents } from '../../lib/money';
 import { TelegramApi, telegramApi, type InlineKeyboard, type TelegramCallbackQuery } from '../telegram/api';
 import { clearSession, getSession, saveSession, type TelegramConnection } from '../telegram/repository';
 import { esc } from '../telegram/util';
-import { amountLabel, kindLabel, submissionLines, submissionsMenuKeyboard } from './format';
+import { goldSummary } from '../../lib/gold';
+import { amountLabel, isGold, kindLabel, submissionLines, submissionsMenuKeyboard } from './format';
 import {
   approveSubmission,
   deleteDraft,
@@ -49,7 +50,11 @@ function who(person: { display_name: string; telegram_username: string | null })
 }
 
 function cardText(submission: SubmissionWithSubmitter, branch: Branch | null): string {
-  const title = submission.kind === 'income' ? '📥 <b>Income request' : '🧾 <b>Expense request';
+  const title = isGold(submission)
+    ? '🥇 <b>Gold purchase request'
+    : submission.kind === 'income'
+      ? '📥 <b>Income request'
+      : '🧾 <b>Expense request';
   const status =
     submission.status === 'approved'
       ? '\n\n✅ Approved'
@@ -257,7 +262,11 @@ function ledgerText(submission: SubmissionWithSubmitter): string {
   if (submission.kind === 'income') {
     return [submission.reference, submission.note, origin].filter(Boolean).join(' · ').slice(0, 300);
   }
-  return [origin, submission.note].filter(Boolean).join('\n').slice(0, 1000);
+  const gold =
+    isGold(submission) && submission.gold_ounces && submission.amount_cents !== null && submission.currency
+      ? goldSummary(submission.gold_ounces, submission.amount_cents, submission.currency)
+      : null;
+  return [gold, origin, submission.note].filter(Boolean).join('\n').slice(0, 1000);
 }
 
 async function approve(
@@ -280,6 +289,25 @@ async function approve(
 
   const kind = kindLabel(submission.kind);
   const amount = formatCents(submission.amount_cents!, submission.currency!);
+  if (isGold(submission) && submission.gold_ounces) {
+    const bought = goldSummary(submission.gold_ounces, submission.amount_cents!, submission.currency!);
+    const held = await goldOuncesHeld(env.DB, branch.id);
+    await api.sendMessage(
+      chatId,
+      `✅ Approved request #${id}. Gold saved to <b>${esc(branch.name)}</b>: ${esc(bought)}, ${esc(amount)} in total.
+
+Gold held now: <b>${held} oz</b>.`,
+      [[{ text: 'View gold', url: adminUrl(env, '/admin/gold', branch) }]]
+    );
+    await tellSubmitter(
+      env,
+      submission.submitter_chat_id,
+      `✅ Your gold purchase request <b>#${id}</b> was approved: ${esc(bought)}, ${esc(amount)} in total.`,
+      submissionsMenuKeyboard()
+    );
+    console.log(JSON.stringify({ event: 'submission_approved', submissionId: id, kind: 'gold', entryId }));
+    return;
+  }
   const link =
     submission.kind === 'income'
       ? { text: 'View income', url: adminUrl(env, '/admin/income', branch) }

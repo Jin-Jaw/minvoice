@@ -69,6 +69,7 @@ import {
   listIncome,
   listWorkspaceIncomeAttachmentMeta,
   listExpenses,
+  listGoldPurchases,
   listInvoices,
   getInvoiceSourcePdfMeta,
   markInvoiceSourcePdfStale,
@@ -97,6 +98,7 @@ import {
   clearGmailConnection,
   updateEmailSettings,
   updateSettings,
+  type Branch,
   type ItemDraft,
   type ExpenseDraft,
   type ExpenseListRow,
@@ -126,6 +128,9 @@ import { InvoiceDetailPage } from '../views/admin/invoice-detail';
 import { ClientEditPage, ClientNewPage, ClientsPage } from '../views/admin/clients';
 import { PaymentsPage } from '../views/admin/payments';
 import { IncomePage } from '../views/admin/income';
+import { GoldPage, type GoldFormValues } from '../views/admin/gold';
+import { GOLD_CATEGORY, GOLD_PAYEE, goldSummary, parseOunces } from '../lib/gold';
+import { getSubmissionsBranch } from '../services/submissions/repository';
 import { ReportsPage } from '../views/admin/reports';
 import { SettingsPage } from '../views/admin/settings';
 import { SetupPage } from '../views/admin/setup';
@@ -1344,9 +1349,10 @@ admin.get('/expenses', async (c) => {
   const branches = await listBranches(c.env.DB, c.get('workspaceId'));
   const requestedBranch = Number(c.req.query('company'));
   const branchId = branches.some((branch) => branch.id === requestedBranch) ? requestedBranch : null;
-  const [expenses, attachments] = await Promise.all([
+  const [expenses, attachments, goldBranch] = await Promise.all([
     listExpenses(c.env.DB, branchId, null, c.get('workspaceId')),
     listWorkspaceExpenseAttachmentMeta(c.env.DB, c.get('workspaceId')),
+    getSubmissionsBranch(c.env.DB),
   ]);
   return c.html(
     <ExpensesPage
@@ -1354,6 +1360,7 @@ admin.get('/expenses', async (c) => {
       attachments={attachments}
       branches={branches}
       branchId={branchId}
+      goldEnabled={goldBranch?.workspace_id === c.get('workspaceId')}
       nonce={c.get('secureHeadersNonce')}
     />
   );
@@ -1625,6 +1632,71 @@ admin.post('/expenses/:id/attachments/:attachmentId/delete', async (c) => {
   }
   if (!(await deleteExpenseAttachment(c.env.DB, id, attachmentId))) return c.notFound();
   return c.redirect(`/admin/expenses/${id}?saved=1#evidence`);
+});
+
+// ---------- Gold (ounces bought for Jin&Jaw Arabia) ----------
+
+/** The company that holds gold, when it belongs to the open workspace. */
+async function goldBranchFor(c: Context<AppEnv>): Promise<Branch | null> {
+  const branch = await getSubmissionsBranch(c.env.DB);
+  return branch && branch.workspace_id === c.get('workspaceId') ? branch : null;
+}
+
+async function goldPage(c: Context<AppEnv>, branch: Branch | null, form: Partial<GoldFormValues>, error?: string) {
+  const [purchases, settings] = branch
+    ? await Promise.all([listGoldPurchases(c.env.DB, branch.id), getSettings(c.env.DB, branch.id)])
+    : [[], await getSettings(c.env.DB, c.get('branchId'))];
+  return c.html(
+    <GoldPage
+      branch={branch}
+      purchases={purchases}
+      currency={settings.currency}
+      values={{
+        ounces: form.ounces ?? '1',
+        price: form.price ?? '',
+        purchase_date: form.purchase_date ?? todayInTz(settings.timezone),
+      }}
+      error={error}
+      saved={c.req.query('saved') === '1'}
+      nonce={c.get('secureHeadersNonce')}
+    />,
+    error ? 400 : 200
+  );
+}
+
+admin.get('/gold', async (c) => goldPage(c, await goldBranchFor(c), {}));
+
+admin.post('/gold', async (c) => {
+  const branch = await goldBranchFor(c);
+  if (!branch) return c.notFound();
+  const raw = (await c.req.parseBody()) as Record<string, unknown>;
+  const text = (key: string) => (typeof raw[key] === 'string' ? (raw[key] as string).trim() : '');
+  const form = { ounces: text('ounces'), price: text('price'), purchase_date: text('purchase_date') };
+  const settings = await getSettings(c.env.DB, branch.id);
+  const ounces = parseOunces(form.ounces);
+  const unitCents = parseAmountToCents(form.price);
+  if (!ounces) return goldPage(c, branch, form, 'Enter a whole number of ounces, from 1 to 1,000.');
+  if (!unitCents || unitCents <= 0 || unitCents > 10_000_000_000) {
+    return goldPage(c, branch, form, 'Enter the price per ounce as an amount greater than zero.');
+  }
+  if (!isIsoDate(form.purchase_date) || form.purchase_date > todayInTz(settings.timezone)) {
+    return goldPage(c, branch, form, 'Enter a purchase date that is not in the future.');
+  }
+  const total = unitCents * ounces;
+  await createExpense(c.env.DB, {
+    branch_id: branch.id,
+    client_id: null,
+    expense_date: form.purchase_date,
+    payee: GOLD_PAYEE,
+    category: GOLD_CATEGORY,
+    description: goldSummary(ounces, total, settings.currency),
+    reference: null,
+    amount_cents: total,
+    tax_cents: 0,
+    currency: settings.currency,
+    gold_ounces: ounces,
+  });
+  return c.redirect('/admin/gold?saved=1');
 });
 
 // ---------- Income (money received without an invoice) ----------
