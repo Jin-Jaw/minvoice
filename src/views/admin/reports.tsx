@@ -1,6 +1,6 @@
 import { Layout } from '../layout';
 import { formatCents } from '../../lib/money';
-import type { Client, MonthlyReportRow, ReportSummary } from '../../db/queries';
+import type { Client, MonthlyReportRow, ReportSummary, SafeBalance } from '../../db/queries';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -63,6 +63,7 @@ export function ReportsPage({
   clients,
   clientId,
   goldOunces = null,
+  safe = null,
   nonce,
 }: {
   currentPath: string;
@@ -73,6 +74,8 @@ export function ReportsPage({
   clientId: number | null;
   /** Ounces of gold held; null when this workspace holds none or a client filter is on. */
   goldOunces?: number | null;
+  /** Money held now per counted currency; null under the same conditions as goldOunces. */
+  safe?: SafeBalance[] | null;
   nonce?: string;
 }) {
   const years = groupByYear(months);
@@ -172,6 +175,20 @@ export function ReportsPage({
               <span class="muted">net cash this year and all gold held</span>
             </div>
           </>
+        ) : null}
+        {safe !== null ? (
+          <div class="card stat">
+            <span class="stat-label">In the safe now</span>
+            {safe.map((balance) => (
+              <span class={`stat-value${balance.balance_cents < 0 ? ' stat-alert' : ''}`}>
+                {formatCents(balance.balance_cents, balance.currency)}
+              </span>
+            ))}
+            {goldOunces !== null && safe.length > 0 ? <span class="stat-value">{goldOunces} oz gold</span> : null}
+            <span class="muted">
+              {safe.length > 0 ? 'safe and bank, all years' : 'no count yet'} · <a href="/admin/safe">counts</a>
+            </span>
+          </div>
         ) : null}
       </div>
 

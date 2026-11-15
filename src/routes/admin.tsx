@@ -73,6 +73,10 @@ import {
   listExpenses,
   goldOuncesHeld,
   listGoldPurchases,
+  addSafeCount,
+  deleteSafeCount,
+  listSafeCounts,
+  safeBalances,
   listInvoices,
   getInvoiceSourcePdfMeta,
   markInvoiceSourcePdfStale,
@@ -132,6 +136,7 @@ import { ClientEditPage, ClientNewPage, ClientsPage } from '../views/admin/clien
 import { PaymentsPage } from '../views/admin/payments';
 import { IncomePage, type IncomeFormValues } from '../views/admin/income';
 import { GoldPage, type GoldFormValues } from '../views/admin/gold';
+import { SafePage, type SafeFormValues } from '../views/admin/safe';
 import { GOLD_CATEGORY, GOLD_CURRENCY, GOLD_PAYEE, goldSummary, ouncesToGoldAmount, parseOunces } from '../lib/gold';
 import { getSubmissionsBranch } from '../services/submissions/repository';
 import { ReportsPage } from '../views/admin/reports';
@@ -1707,6 +1712,76 @@ admin.post('/gold', async (c) => {
   return c.redirect('/admin/gold?saved=1');
 });
 
+// ---------- Safe (money Jin&Jaw Arabia holds right now) ----------
+
+async function safePage(c: Context<AppEnv>, branch: Branch | null, form: Partial<SafeFormValues>, error?: string) {
+  const settings = await getSettings(c.env.DB, branch?.id ?? c.get('branchId'));
+  const [balances, counts, goldOunces] = branch
+    ? await Promise.all([
+        safeBalances(c.env.DB, branch.id),
+        listSafeCounts(c.env.DB, branch.id),
+        goldOuncesHeld(c.env.DB, branch.id),
+      ])
+    : [[], [], 0];
+  return c.html(
+    <SafePage
+      branch={branch}
+      balances={balances}
+      counts={counts}
+      goldOunces={goldOunces}
+      values={{
+        amount: form.amount ?? '',
+        currency: form.currency ?? settings.currency,
+        counted_on: form.counted_on ?? todayInTz(settings.timezone),
+        note: form.note ?? '',
+      }}
+      error={error}
+      saved={c.req.query('saved') === '1'}
+      nonce={c.get('secureHeadersNonce')}
+    />,
+    error ? 400 : 200
+  );
+}
+
+admin.get('/safe', async (c) => safePage(c, await goldBranchFor(c), {}));
+
+admin.post('/safe', async (c) => {
+  const branch = await goldBranchFor(c);
+  if (!branch) return c.notFound();
+  const raw = (await c.req.parseBody()) as Record<string, unknown>;
+  const text = (key: string) => (typeof raw[key] === 'string' ? (raw[key] as string).trim() : '');
+  const form = {
+    amount: text('amount'),
+    currency: text('currency').toUpperCase(),
+    counted_on: text('counted_on'),
+    note: text('note'),
+  };
+  const settings = await getSettings(c.env.DB, branch.id);
+  const cents = parseAmountToCents(form.amount);
+  if (cents === null || cents < 0 || cents > 100_000_000_000) {
+    return safePage(c, branch, form, 'Enter the amount counted as zero or more.');
+  }
+  if (!isSupportedCurrency(form.currency)) return safePage(c, branch, form, 'Choose a supported three-letter currency.');
+  if (!isIsoDate(form.counted_on) || form.counted_on > todayInTz(settings.timezone)) {
+    return safePage(c, branch, form, 'Enter a count date that is not in the future.');
+  }
+  if (form.note.length > 200) return safePage(c, branch, form, 'Keep the note to 200 characters.');
+  await addSafeCount(c.env.DB, {
+    branch_id: branch.id,
+    currency: form.currency,
+    amount_cents: cents,
+    counted_on: form.counted_on,
+    note: form.note || null,
+  });
+  return c.redirect('/admin/safe?saved=1');
+});
+
+admin.post('/safe/counts/:id/delete', async (c) => {
+  const branch = await goldBranchFor(c);
+  if (!branch || !(await deleteSafeCount(c.env.DB, Number(c.req.param('id')), branch.id))) return c.notFound();
+  return c.redirect('/admin/safe?saved=1');
+});
+
 // ---------- Income (money received without an invoice) ----------
 
 async function incomePage(c: Context<AppEnv>, form: Partial<IncomeFormValues> = {}, error?: string) {
@@ -2038,7 +2113,11 @@ admin.get('/reports', async (c) => {
     goldBranchFor(c),
   ]);
   // Gold belongs to the company, not to a client, so a client filter hides it.
-  const goldOunces = goldBranch && !clientId ? await goldOuncesHeld(c.env.DB, goldBranch.id) : null;
+  // The safe is the company's too, so it hides with the gold.
+  const [goldOunces, safe] =
+    goldBranch && !clientId
+      ? await Promise.all([goldOuncesHeld(c.env.DB, goldBranch.id), safeBalances(c.env.DB, goldBranch.id)])
+      : [null, null];
   return c.html(
     <ReportsPage
       currentPath="/admin/reports"
@@ -2048,6 +2127,7 @@ admin.get('/reports', async (c) => {
       clients={clients}
       clientId={clientId}
       goldOunces={goldOunces}
+      safe={safe}
       nonce={c.get('secureHeadersNonce')}
     />
   );

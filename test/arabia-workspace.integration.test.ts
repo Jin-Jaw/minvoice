@@ -9,6 +9,7 @@ import {
   listClients,
   listClientsForBranch,
   reportSummary,
+  safeBalances,
 } from '../src/db/queries';
 
 const DB = env.DB;
@@ -37,6 +38,8 @@ const oneLine = (description: string) => [{ description, quantity: 1, unit_price
 
 afterEach(async () => {
   await DB.batch([
+    DB.prepare('DELETE FROM safe_counts'),
+    DB.prepare('DELETE FROM payments'),
     DB.prepare('DELETE FROM income_entries'),
     DB.prepare('DELETE FROM expenses'),
     DB.prepare('DELETE FROM invoice_items'),
@@ -214,5 +217,101 @@ describe('0019 Arabia workspace split', () => {
     expect((await addIncome(1, 1, { gold_ounces: '2' })).status).toBe(400);
     expect((await addIncome(workspace!.id, branch!.id, { amount: '10', currency: 'XAU' })).status).toBe(400);
     expect(await DB.prepare(`SELECT COUNT(*) AS n FROM income_entries WHERE voided_at IS NULL`).first('n')).toBe(0);
+  });
+
+  it('shows what Arabia holds now from the last count and everything after it', async () => {
+    await DB.prepare(`INSERT INTO branches (name, workspace_id) VALUES ('Jin&Jaw Arabia S.A.R.L', 1)`).run();
+    await DB.prepare(`UPDATE settings SET setup_complete = 1 WHERE id = 1`).run();
+    await runArabiaSplit();
+    const workspace = await DB.prepare(`SELECT id FROM workspaces WHERE slug = 'jinjaw-arabia'`).first<{ id: number }>();
+    const branch = await DB.prepare(`SELECT id FROM branches WHERE workspace_id = ?`).bind(workspace!.id).first<{ id: number }>();
+    const cookie = await loginCookie();
+    const get = async (path: string) =>
+      (await exports.default.fetch(new Request(`https://invoice.test/admin/${path}`, { headers: { cookie } }))).text();
+    const post = (path: string, fields: Record<string, string> = {}) =>
+      exports.default.fetch(
+        new Request(`https://invoice.test/admin/${path}`, {
+          method: 'POST',
+          headers: { cookie, 'sec-fetch-site': 'same-origin' },
+          body: new URLSearchParams(fields),
+          redirect: 'manual',
+        })
+      );
+    const count = (fields: Record<string, string>) =>
+      post(`safe?workspace=${workspace!.id}`, { amount: '76,000', currency: 'usd', counted_on: '2026-08-10', note: '', ...fields });
+
+    expect(await get(`safe?workspace=${workspace!.id}`)).toContain('No count yet');
+    expect((await count({ note: 'Counted by hand' })).status).toBe(302);
+    // Pin the time the count was saved, so rows on the count date fall clearly before or after it.
+    await DB.prepare(`UPDATE safe_counts SET created_at = '2026-08-10 12:00:00'`).run();
+
+    const spend = async (date: string, cents: number, currency = 'USD', savedAt = '2026-08-20 09:00:00') => {
+      const id = await createExpense(DB, {
+        branch_id: branch!.id, client_id: null, expense_date: date, payee: 'Supplier', category: 'Other',
+        description: null, reference: null, amount_cents: cents, tax_cents: 0, currency,
+      });
+      await DB.prepare('UPDATE expenses SET created_at = ? WHERE id = ?').bind(savedAt, id).run();
+      return id;
+    };
+    await spend('2026-08-01', 900000); // before the count: already in it
+    await spend('2026-08-10', 20000, 'USD', '2026-08-10 08:00:00'); // count date, saved before the count
+    await spend('2026-08-10', 30000, 'USD', '2026-08-10 15:00:00'); // count date, saved after the count
+    await spend('2026-08-12', 100000);
+    await spend('2026-08-12', 555500, 'GBP'); // no GBP count
+    const voided = await spend('2026-08-13', 444400);
+    await DB.prepare(`UPDATE expenses SET voided_at = datetime('now') WHERE id = ?`).bind(voided).run();
+    await DB.prepare(
+      `INSERT INTO income_entries (branch_id, payer, income_date, amount_cents, currency)
+       VALUES (?1, 'Payer', '2026-08-11', 50000, 'USD'), (?1, 'Gold Client', '2026-08-11', 200, 'XAU')`
+    ).bind(branch!.id).run();
+    const clientId = await createClient(DB, { ...clientFields, name: 'Safe Client' }, workspace!.id);
+    const invoiceId = await createInvoice(DB, branch!.id, {
+      issue_date: '2026-08-01', due_date: null, subject: null, notes: null, client_id: clientId, items: oneLine('Work'),
+    });
+    await DB.prepare(
+      `INSERT INTO payments (invoice_id, provider, provider_ref, amount_cents, currency, created_at, recorded_at)
+       VALUES (?1, 'manual', 'safe-after', 10000, 'USD', '2026-08-14 00:00:00', '2026-08-14 10:00:00'),
+              (?1, 'manual', 'safe-before', 77700, 'USD', '2026-08-05 00:00:00', '2026-08-05 10:00:00')`
+    ).bind(invoiceId).run();
+
+    // 76,000 counted + 500 income + 100 payment - 300 - 1,000 spent.
+    expect(await safeBalances(DB, branch!.id)).toEqual([
+      {
+        currency: 'USD', counted_cents: 7600000, counted_on: '2026-08-10',
+        received_cents: 60000, spent_cents: 130000, balance_cents: 7530000,
+      },
+    ]);
+    const page = await get(`safe?workspace=${workspace!.id}`);
+    expect(page).toContain('$75,300.00');
+    expect(page).toContain('2 oz');
+    expect(page).toContain('Counted by hand');
+    expect(page).not.toContain('£5,555.00');
+    const reports = await get(`reports?workspace=${workspace!.id}`);
+    expect(reports).toContain('In the safe now');
+    expect(reports).toContain('$75,300.00');
+
+    // The safe belongs to the company: hidden by a client filter and in other workspaces.
+    expect(await get(`reports?workspace=${workspace!.id}&client=${clientId}`)).not.toContain('In the safe now');
+    expect(await get('reports?workspace=1')).not.toContain('In the safe now');
+    expect(await get('safe?workspace=1')).toContain('Switch to that workspace');
+    expect((await post('safe?workspace=1', { amount: '1', currency: 'USD', counted_on: '2026-08-10' })).status).toBe(404);
+
+    // A newer count replaces the last one for that currency.
+    expect((await count({ amount: '50000.50', counted_on: '2026-08-13' })).status).toBe(302);
+    expect((await safeBalances(DB, branch!.id))[0]).toMatchObject({
+      counted_cents: 5000050, received_cents: 10000, spent_cents: 0, balance_cents: 5010050,
+    });
+
+    expect((await count({ amount: '-1' })).status).toBe(400);
+    expect((await count({ amount: 'lots' })).status).toBe(400);
+    expect((await count({ currency: 'XAU' })).status).toBe(400);
+    expect((await count({ counted_on: '2999-01-01' })).status).toBe(400);
+    expect(await DB.prepare('SELECT COUNT(*) AS n FROM safe_counts').first('n')).toBe(2);
+
+    // Removing the newer count brings the older one back.
+    const newest = await DB.prepare('SELECT id FROM safe_counts ORDER BY counted_on DESC LIMIT 1').first<{ id: number }>();
+    expect((await post(`safe/counts/${newest!.id}/delete?workspace=1`)).status).toBe(404);
+    expect((await post(`safe/counts/${newest!.id}/delete?workspace=${workspace!.id}`)).status).toBe(302);
+    expect((await safeBalances(DB, branch!.id))[0]?.balance_cents).toBe(7530000);
   });
 });

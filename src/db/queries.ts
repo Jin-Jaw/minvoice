@@ -1264,6 +1264,89 @@ export async function goldOuncesHeld(db: D1Database, branchId: number): Promise<
   return total ?? 0;
 }
 
+export type SafeCount = {
+  id: number;
+  branch_id: number;
+  currency: string;
+  amount_cents: number;
+  counted_on: string;
+  note: string | null;
+  created_at: string;
+};
+
+/** Money held in one currency: the newest count, moved by everything after it. */
+export type SafeBalance = {
+  currency: string;
+  counted_cents: number;
+  counted_on: string;
+  received_cents: number;
+  spent_cents: number;
+  balance_cents: number;
+};
+
+export async function addSafeCount(
+  db: D1Database,
+  count: Pick<SafeCount, 'branch_id' | 'currency' | 'amount_cents' | 'counted_on' | 'note'>
+): Promise<number> {
+  const result = await db
+    .prepare('INSERT INTO safe_counts (branch_id, currency, amount_cents, counted_on, note) VALUES (?, ?, ?, ?, ?)')
+    .bind(count.branch_id, count.currency, count.amount_cents, count.counted_on, count.note)
+    .run();
+  return result.meta.last_row_id;
+}
+
+export async function deleteSafeCount(db: D1Database, id: number, branchId: number): Promise<boolean> {
+  const result = await db.prepare('DELETE FROM safe_counts WHERE id = ? AND branch_id = ?').bind(id, branchId).run();
+  return result.meta.changes > 0;
+}
+
+/** Every count for the company, newest first. */
+export async function listSafeCounts(db: D1Database, branchId: number): Promise<SafeCount[]> {
+  return (
+    await db
+      .prepare('SELECT * FROM safe_counts WHERE branch_id = ? ORDER BY counted_on DESC, id DESC')
+      .bind(branchId)
+      .all<SafeCount>()
+  ).results;
+}
+
+/**
+ * What the company holds now, one row per counted currency. A row moves the
+ * count when it is dated after the count date, or on the count date and
+ * saved after the count was. Voided expenses, voided income and undone
+ * payments are left out. A currency with no count has no row, and gold
+ * income (XAU) can never match a count.
+ */
+export async function safeBalances(db: D1Database, branchId: number): Promise<SafeBalance[]> {
+  const after = (date: string, saved: string) =>
+    `(${date} > l.counted_on OR (${date} = l.counted_on AND datetime(${saved}) > datetime(l.created_at)))`;
+  const rows = (
+    await db
+      .prepare(
+        `WITH latest AS (
+           SELECT * FROM safe_counts sc
+           WHERE sc.branch_id = ?1 AND sc.id = (
+             SELECT id FROM safe_counts WHERE branch_id = sc.branch_id AND currency = sc.currency
+             ORDER BY counted_on DESC, id DESC LIMIT 1)
+         )
+         SELECT l.currency, l.amount_cents AS counted_cents, l.counted_on,
+           (SELECT COALESCE(SUM(p.amount_cents), 0) FROM payments p JOIN invoices i ON i.id = p.invoice_id
+             WHERE i.branch_id = ?1 AND p.undone_at IS NULL AND p.currency = l.currency
+               AND ${after('date(p.created_at)', 'p.recorded_at')})
+           + (SELECT COALESCE(SUM(ie.amount_cents), 0) FROM income_entries ie
+             WHERE ie.branch_id = ?1 AND ie.voided_at IS NULL AND ie.currency = l.currency
+               AND ${after('ie.income_date', 'ie.created_at')}) AS received_cents,
+           (SELECT COALESCE(SUM(e.amount_cents), 0) FROM expenses e
+             WHERE e.branch_id = ?1 AND e.voided_at IS NULL AND e.currency = l.currency
+               AND ${after('e.expense_date', 'e.created_at')}) AS spent_cents
+         FROM latest l ORDER BY l.currency`
+      )
+      .bind(branchId)
+      .all<Omit<SafeBalance, 'balance_cents'>>()
+  ).results;
+  return rows.map((row) => ({ ...row, balance_cents: row.counted_cents + row.received_cents - row.spent_cents }));
+}
+
 export async function updateExpense(db: D1Database, id: number, expense: ExpenseDraft): Promise<boolean> {
   const result = await db
     .prepare(
