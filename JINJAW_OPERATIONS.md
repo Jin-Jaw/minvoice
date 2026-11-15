@@ -167,6 +167,35 @@ gold. `XAU` is refused everywhere else a currency is typed.
 
 There is no selling flow yet, and the gold is not valued at a market price.
 
+## Safe
+
+The Safe page (`/admin/safe`, in the Arabia workspace only) shows what
+Jin&Jaw Arabia holds right now, in the safe and the bank. Reports cover one
+year at a time, so "Net cash this year" starts again every January. The Safe
+page does not: it starts from a count and follows the ledger from there.
+
+A count is the amount someone counted in one currency on one date
+(`safe_counts`, migration `0023_safe_counts.sql`). The amount held now is the
+newest count for that currency, plus payments and income received after it,
+minus expenses paid after it (`safeBalances` in `src/db/queries.ts`). A row
+moves the count when it is dated after the count date, or on the count date
+and saved after the count was. Voided expenses, voided income and undone
+payments are left out.
+
+- Record a count with the form on the page. A new count replaces the last one
+  for that currency; older counts stay in the list as history, and Remove
+  deletes one entered by mistake.
+- Each currency is counted on its own and amounts are never added across
+  currencies. Money in a currency with no count is not shown.
+- Gold is not counted here. The page shows the gold held in ounces beside the
+  money (see Gold).
+- When the safe is counted again and the amount differs from the page, find
+  the missing expense or income first. Record a new count only for a
+  difference that cannot be explained.
+
+The Reports page of the Arabia workspace shows the same amounts in an
+"In the safe now" tile. It is hidden while a client filter is on.
+
 ## Workspaces
 
 Use the selector at the top left to move between **Jin&Jaw Ltd**,
