@@ -336,6 +336,10 @@ production applied them in the order gmail, workspaces, telegram, and a new
 database applies them in filename order. Deploy only through CI from `main`,
 so production never again runs code that git does not have.
 
+### Call booking alerts
+
+When a visitor books a call on jin-jaw.co.uk, the bot sends each connected admin with notifications on a "Call booked" message: the visitor's name, studio and email, the time in London, and a button for the Google Meet link. The website Worker (`jinjawwebpage`) calls the `BookingAlerts` entrypoint in `src/index.tsx` through a service binding named `INVOICES_BOT`. The entrypoint has no route, so it cannot be reached from the internet. Each booking is logged in `telegram_notification_log` as `call:<booking id>`, so a repeated call sends nothing. Deploy this Worker before a website deploy that adds or changes the binding.
+
 ## Staff submissions bot
 
 People who are not admins, such as Arabia staff, send expenses and income
