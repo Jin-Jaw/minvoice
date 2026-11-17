@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import type { AppEnv, Bindings } from './env';
 import { sendOverdueReminders } from './services/reminders';
@@ -22,6 +23,7 @@ import { processEmailOutbox } from './services/outbox';
 import { scanGmailPayments } from './services/gmail-payments';
 import { handleTelegramUpdate, type TelegramUpdate } from './services/telegram/handler';
 import { notifyOverdueInvoices } from './services/telegram/notifications';
+import { notifyCallBooked, type CallBooking } from './services/telegram/booking-alerts';
 import { purgeTelegramData } from './services/telegram/repository';
 import { handleSubmissionsUpdate } from './services/submissions/handler';
 import { purgeSubmissionsData } from './services/submissions/repository';
@@ -325,6 +327,16 @@ app.onError((err, c) => {
 
 // Must match the hourly entry in wrangler.jsonc triggers.
 const GMAIL_SCAN_CRON = '0 * * * *';
+
+/**
+ * Called by the website Worker over a service binding when a visitor books a
+ * call. A named entrypoint has no route, so nothing on the internet can reach it.
+ */
+export class BookingAlerts extends WorkerEntrypoint<Bindings> {
+  async callBooked(booking: CallBooking): Promise<{ delivered: number }> {
+    return { delivered: await notifyCallBooked(this.env, booking) };
+  }
+}
 
 export default {
   fetch: app.fetch,
